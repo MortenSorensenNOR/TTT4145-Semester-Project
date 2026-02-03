@@ -1,5 +1,5 @@
 [project]
-name = "ttt4145-semester-project"
+name = "radiokommunikasjon"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -7,6 +7,13 @@ requires-python = ">=3.13"
 dependencies = [
     "matplotlib>=3.10.8",
     "pysdr>=1.2",
-    "pytest>=9.0.2",
     "scipy>=1.14",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
