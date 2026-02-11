@@ -61,6 +61,34 @@ def samples_to_delay_ns(delay_samples: float, sample_rate: float) -> float:
     return delay_samples / sample_rate * 1e9
 
 
+# Speed of light in meters per second
+SPEED_OF_LIGHT = 299_792_458.0
+
+
+def distance_to_delay(distance_m: float) -> float:
+    """
+    Calculate propagation delay given a distance.
+
+    Parameters
+    ----------
+    distance_m : float
+        Distance in meters
+
+    Returns
+    -------
+    float
+        Propagation delay in seconds
+
+    Examples
+    --------
+    >>> distance_to_delay(300)  # 300 meters
+    1.0006922855944561e-06
+    >>> distance_to_delay(1000)  # 1 km ~ 3.33 microseconds
+    3.335640951981521e-06
+    """
+    return distance_m / SPEED_OF_LIGHT
+
+
 # =============================================================================
 # Configuration Classes
 # =============================================================================
@@ -308,6 +336,8 @@ def apply_fractional_delay(
     Apply fractional sample delay using Lagrange interpolation.
 
     Uses 4th-order (5-tap) Lagrange interpolation for accurate fractional delay.
+    The output signal is shifted in time: zeros are inserted at the beginning
+    and the signal is truncated at the end to maintain the same length.
 
     Parameters
     ----------
@@ -321,54 +351,60 @@ def apply_fractional_delay(
     Returns
     -------
     y : ndarray
-        Delayed signal
+        Delayed signal (same length as input)
     new_buffer : ndarray
         Updated state buffer for next block
     """
     if delay_samples == 0.0:
         return x.copy(), buffer if buffer is not None else np.zeros(4, dtype=x.dtype)
 
-    # Split into integer and fractional parts
+    n_samples = len(x)
     int_delay = int(np.floor(delay_samples))
     frac_delay = delay_samples - int_delay
 
-    # Lagrange interpolation coefficients (4th order, 5 taps)
-    # Centered around the fractional delay point
-    order = 4
-    n_taps = order + 1
-    d = frac_delay
+    # Handle integer delay: shift signal and pad with zeros/buffer
+    y = np.zeros(n_samples, dtype=x.dtype)
 
-    # Calculate Lagrange coefficients
-    h = np.zeros(n_taps)
-    for k in range(n_taps):
-        h[k] = 1.0
-        for m in range(n_taps):
-            if m != k:
-                h[k] *= (d - (m - order // 2)) / (k - m)
+    if buffer is not None and len(buffer) > 0:
+        # Use samples from buffer for the delayed portion
+        buffer_samples_needed = min(int_delay, len(buffer), n_samples)
+        if buffer_samples_needed > 0:
+            y[:buffer_samples_needed] = buffer[-buffer_samples_needed:]
 
-    # Initialize or use existing buffer
-    buffer_size = max(int_delay + n_taps, n_taps)
-    if buffer is None:
-        buffer = np.zeros(buffer_size, dtype=x.dtype)
-    elif len(buffer) < buffer_size:
-        new_buffer = np.zeros(buffer_size, dtype=x.dtype)
-        new_buffer[: len(buffer)] = buffer
-        buffer = new_buffer
+    # Copy input signal shifted by int_delay
+    if int_delay < n_samples:
+        samples_to_copy = n_samples - int_delay
+        y[int_delay:] = x[:samples_to_copy]
 
-    # Prepend buffer to input
-    x_extended = np.concatenate([buffer[-int_delay - n_taps + 1 :], x])
+    # Apply fractional delay using Lagrange interpolation if needed
+    if frac_delay > 1e-9:
+        # Lagrange interpolation coefficients (4th order, 5 taps)
+        order = 4
+        n_taps = order + 1
 
-    # Apply fractional delay filter
-    y = signal.lfilter(h, 1.0, x_extended)[n_taps - 1 + int_delay :]
-    y = y[: len(x)]
+        # Calculate Lagrange coefficients for fractional delay
+        h = np.zeros(n_taps)
+        for k in range(n_taps):
+            h[k] = 1.0
+            for m in range(n_taps):
+                if m != k:
+                    h[k] *= (frac_delay - (m - order // 2)) / (k - m)
 
-    # Update buffer with end of input
+        # Apply fractional delay filter
+        # Pad to handle filter edge effects
+        y_padded = np.concatenate([np.zeros(n_taps - 1, dtype=x.dtype), y])
+        y_filtered = signal.lfilter(h, 1.0, y_padded)
+        y = y_filtered[n_taps - 1 : n_taps - 1 + n_samples]
+
+    # Update buffer with end of input for streaming continuity
+    buffer_size = max(int_delay + 5, 5)
     new_buffer = np.zeros(buffer_size, dtype=x.dtype)
-    if len(x) >= buffer_size:
+    if n_samples >= buffer_size:
         new_buffer[:] = x[-buffer_size:]
     else:
-        new_buffer[: buffer_size - len(x)] = buffer[len(x) :]
-        new_buffer[buffer_size - len(x) :] = x
+        if buffer is not None and len(buffer) >= buffer_size - n_samples:
+            new_buffer[: buffer_size - n_samples] = buffer[-(buffer_size - n_samples) :]
+        new_buffer[buffer_size - n_samples :] = x
 
     return y.astype(x.dtype), new_buffer
 

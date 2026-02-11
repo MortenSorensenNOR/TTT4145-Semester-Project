@@ -129,6 +129,114 @@ class TestQAM:
         assert set(decimal_values) == set(range(qam.qam_order))
 
 
+class TestQPSKSoftDecision:
+    @pytest.fixture
+    def qpsk(self):
+        return QPSK()
+
+    def test_soft_output_shape(self, qpsk):
+        """Test that soft output has correct shape (N, 2)"""
+        symbols = np.array([0.5+0.5j, -0.3+0.2j, 0.1-0.8j])
+        llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=0.1)
+        assert llrs.shape == (3, 2)
+
+    def test_soft_output_empty(self, qpsk):
+        """Test soft decision with empty input"""
+        llrs = qpsk.symbols2bits_soft(np.array([]), sigma_sq=0.1)
+        assert len(llrs) == 0
+
+    def test_llr_sign_matches_hard_decision(self, qpsk):
+        """Test that LLR sign agrees with hard decision"""
+        # Perfect constellation points
+        symbols = qpsk.symbols
+        llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=0.1)
+        hard_bits = qpsk.symbols2bits(symbols)
+
+        for i in range(len(symbols)):
+            # LLR > 0 means bit=0, LLR < 0 means bit=1
+            for bit_idx in range(2):
+                if hard_bits[i, bit_idx] == 0:
+                    assert llrs[i, bit_idx] > 0, f"Symbol {i}, bit {bit_idx}: expected positive LLR for bit=0"
+                else:
+                    assert llrs[i, bit_idx] < 0, f"Symbol {i}, bit {bit_idx}: expected negative LLR for bit=1"
+
+    def test_llr_magnitude_increases_away_from_boundary(self, qpsk):
+        """Test that |LLR| is larger for symbols farther from decision boundary"""
+        # Symbols at different distances from Re=0 boundary (bit 0)
+        close_to_boundary = np.array([0.1 + 0.5j])
+        far_from_boundary = np.array([0.7 + 0.5j])
+
+        llr_close = qpsk.symbols2bits_soft(close_to_boundary, sigma_sq=0.1)
+        llr_far = qpsk.symbols2bits_soft(far_from_boundary, sigma_sq=0.1)
+
+        # Bit 0 LLR magnitude should be larger when farther from Re=0
+        assert np.abs(llr_far[0, 0]) > np.abs(llr_close[0, 0])
+
+    def test_llr_symmetric_around_origin(self, qpsk):
+        """Test that LLR is antisymmetric: LLR(-y) = -LLR(y)"""
+        symbols = np.array([0.5 + 0.3j])
+        neg_symbols = -symbols
+
+        llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=0.1)
+        neg_llrs = qpsk.symbols2bits_soft(neg_symbols, sigma_sq=0.1)
+
+        np.testing.assert_array_almost_equal(llrs, -neg_llrs)
+
+    def test_llr_scales_with_noise_variance(self, qpsk):
+        """Test that |LLR| decreases with higher noise variance"""
+        symbols = np.array([0.5 + 0.5j])
+
+        llr_low_noise = qpsk.symbols2bits_soft(symbols, sigma_sq=0.05)
+        llr_high_noise = qpsk.symbols2bits_soft(symbols, sigma_sq=0.5)
+
+        # Higher noise = lower confidence = smaller |LLR|
+        assert np.abs(llr_low_noise[0, 0]) > np.abs(llr_high_noise[0, 0])
+        assert np.abs(llr_low_noise[0, 1]) > np.abs(llr_high_noise[0, 1])
+
+    def test_llr_on_decision_boundary_is_zero(self, qpsk):
+        """Test that LLR is zero on decision boundaries"""
+        # On Re=0 boundary (bit 0 uncertain)
+        on_i_boundary = np.array([0.0 + 0.5j])
+        llrs = qpsk.symbols2bits_soft(on_i_boundary, sigma_sq=0.1)
+        np.testing.assert_almost_equal(llrs[0, 0], 0.0)
+
+        # On Im=0 boundary (bit 1 uncertain)
+        on_q_boundary = np.array([0.5 + 0.0j])
+        llrs = qpsk.symbols2bits_soft(on_q_boundary, sigma_sq=0.1)
+        np.testing.assert_almost_equal(llrs[0, 1], 0.0)
+
+    def test_noise_variance_estimation(self, qpsk):
+        """Test that noise variance is estimated reasonably"""
+        # Generate noisy symbols
+        np.random.seed(42)
+        true_sigma_sq = 0.05
+        bits = np.array([0, 0, 0, 1, 1, 0, 1, 1] * 100)
+        symbols = qpsk.bits2symbols(bits)
+        noise = np.sqrt(true_sigma_sq / 2) * (np.random.randn(len(symbols)) + 1j * np.random.randn(len(symbols)))
+        noisy_symbols = symbols + noise
+
+        estimated_sigma_sq = qpsk.estimate_noise_variance(noisy_symbols)
+
+        # Should be within 50% of true value with enough samples
+        assert 0.5 * true_sigma_sq < estimated_sigma_sq < 1.5 * true_sigma_sq
+
+    def test_soft_roundtrip_improves_with_confidence(self, qpsk):
+        """Test that high-confidence LLRs give correct hard decisions"""
+        # Symbols close to constellation points (high confidence)
+        np.random.seed(123)
+        bits = np.array([0, 0, 0, 1, 1, 0, 1, 1])
+        symbols = qpsk.bits2symbols(bits)
+        noise = 0.05 * (np.random.randn(len(symbols)) + 1j * np.random.randn(len(symbols)))
+        noisy_symbols = symbols + noise
+
+        llrs = qpsk.symbols2bits_soft(noisy_symbols, sigma_sq=0.01)
+
+        # Hard decision from LLR: bit=0 if LLR>0, bit=1 if LLR<0
+        hard_from_llr = (llrs < 0).astype(int).flatten()
+
+        np.testing.assert_array_equal(hard_from_llr, bits)
+
+
 class TestEdgeCases:
     def test_empty_bitstream(self):
         """Test handling of empty bitstreams"""
@@ -136,7 +244,7 @@ class TestEdgeCases:
         bits = np.array([])
         symbols = bpsk.bits2symbols(bits)
         assert len(symbols) == 0
-    
+
     def test_bpsk_decision_boundary(self):
         """Test symbols exactly on decision boundary"""
         bpsk = BPSK()
