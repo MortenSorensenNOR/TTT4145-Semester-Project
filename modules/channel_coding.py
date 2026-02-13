@@ -1,6 +1,10 @@
-import numpy as np
+"""Channel coding enums and helpers."""
+
 from enum import Enum
 
+
 class CodeRates(Enum):
-    HALF_RATE   = 1
+    """Supported channel coding rates."""
+
+    HALF_RATE = 1
     QUATER_RATE = 2
