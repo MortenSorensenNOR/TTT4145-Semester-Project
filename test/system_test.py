@@ -15,7 +15,7 @@ sample_rate = symbol_rate * sps
 overlapping_factor = 6
 pulse_shaper = PulseShaper(sps, alpha, sps * overlapping_factor * 2 + 1)
 
-channel_profile = ChannelProfile.IDEAL
+channel_profile = ChannelProfile.URBAN_LOS
 snr = 15.0
 cfo = 100.0
 phase_offset = 0.25

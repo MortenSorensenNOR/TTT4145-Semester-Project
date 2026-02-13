@@ -8,9 +8,6 @@ import numpy as np
 from enum import Enum
 from channel_coding import CodeRates
 
-def int_to_bits(n, length):
-    return [(n >> (length - 1 - i)) & 1 for i in range(length)]
-
 class ModulationSchemes(Enum):
     BPSK  = 1
     QPSK  = 2
@@ -34,7 +31,7 @@ class FrameHeader:
         self.crc = crc
         self.crc_passed = crc_passed
 
-class FrameHeaderDecoder:
+class FrameHeaderGenerator:
     def __init__(
         self,
         length_bits: int,
@@ -129,7 +126,7 @@ class FrameConstructor:
         mod_scheme_bits: int = 3,
         crc_bits: int = 4,
     ):
-        self.frame_header_generator = FrameHeader(
+        self.frame_header_generator = FrameHeaderGenerator(
             payload_length_bits,
             src_bits,
             dst_bits,
@@ -142,3 +139,7 @@ class FrameConstructor:
 
     def decode(self, frame) -> np.ndarray:
         return np.array([], dtype=int)
+
+# Util
+def int_to_bits(n, length):
+    return [(n >> (length - 1 - i)) & 1 for i in range(length)]
