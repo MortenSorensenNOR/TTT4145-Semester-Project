@@ -1,5 +1,6 @@
 """Construct frames with header data, pilots, and error correction information."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -7,7 +8,8 @@ import numpy as np
 from channel_coding import CodeRates
 
 
-def int_to_bits(n, length):
+def int_to_bits(n: int, length: int) -> list[int]:
+    """Convert an integer to a fixed-width big-endian bit list."""
     return [(n >> (length - 1 - i)) & 1 for i in range(length)]
 
 
@@ -33,6 +35,8 @@ class FrameHeader:
 
 
 class FrameHeaderDecoder:
+    """Encode and decode frame header fields."""
+
     def __init__(
         self,
         length_bits: int,
@@ -40,7 +44,8 @@ class FrameHeaderDecoder:
         dst_bits: int,
         mod_scheme_bits: int,
         crc_bits: int,
-    ):
+    ) -> None:
+        """Initialize fixed bit widths for each frame header field."""
         self.length_bits = length_bits
         self.src_bits = src_bits
         self.dst_bits = dst_bits
@@ -48,11 +53,11 @@ class FrameHeaderDecoder:
         self.crc_bits = crc_bits
 
         self.header_length = (
-            config.length_bits
-            + config.src_bits
-            + config.dst_bits
-            + config.mod_scheme_bits
-            + config.crc_bits
+            self.length_bits
+            + self.src_bits
+            + self.dst_bits
+            + self.mod_scheme_bits
+            + self.crc_bits
         )
         self.header_length = 2 * int(np.ceil(self.header_length / 2))
 
@@ -74,7 +79,7 @@ class FrameHeaderDecoder:
         """Encode frame header."""
         length_bits = int_to_bits(length, self.length_bits)
         src_bits = int_to_bits(src, self.src_bits)
-        dst_bits = int_to_bits(dst, self.src_bits)
+        dst_bits = int_to_bits(dst, self.dst_bits)
         mod_scheme_bits = int_to_bits(mod_scheme.value, self.mod_scheme_bits)
 
         header_data_bits = length_bits + src_bits + dst_bits + mod_scheme_bits + [0]
@@ -149,24 +154,39 @@ class FrameHeaderDecoder:
         return crc.tolist() if isinstance(crc, np.ndarray) else crc
 
 
+@dataclass
+class FrameHeaderConfig:
+    """Bit-width configuration for frame header fields."""
+
+    payload_length_bits: int = 8
+    src_bits: int = 4
+    dst_bits: int = 4
+    mod_scheme_bits: int = 3
+    crc_bits: int = 4
+
+
 class FrameConstructor:
+    """Build and parse frames based on a configured header format."""
+
     def __init__(
         self,
         data_size: int,  # number of data bits per frame
         code_rate: CodeRates,
-        pilots,  # TODO: Figure out this
-        payload_length_bits: int = 8,
-        src_bits: int = 4,
-        dst_bits: int = 4,
-        mod_scheme_bits: int = 3,
-        crc_bits: int = 4,
-    ):
-        self.frame_header_generator = FrameHeader(
-            payload_length_bits,
-            src_bits,
-            dst_bits,
-            mod_scheme_bits,
-            crc_bits,
+        pilots: Sequence[int] | np.ndarray,
+        header_config: FrameHeaderConfig | None = None,
+    ) -> None:
+        """Initialize frame construction parameters."""
+        self.data_size = data_size
+        self.code_rate = code_rate
+        self.pilots = pilots
+        self.header_config = header_config or FrameHeaderConfig()
+
+        self.frame_header_decoder = FrameHeaderDecoder(
+            self.header_config.payload_length_bits,
+            self.header_config.src_bits,
+            self.header_config.dst_bits,
+            self.header_config.mod_scheme_bits,
+            self.header_config.crc_bits,
         )
 
     def encode(self, data: np.ndarray) -> np.ndarray:
@@ -176,8 +196,3 @@ class FrameConstructor:
     def decode(self, _frame: np.ndarray) -> np.ndarray:
         """Decode a frame to extract data bits."""
         return np.array([], dtype=int)
-
-
-# Util
-def int_to_bits(n, length):
-    return [(n >> (length - 1 - i)) & 1 for i in range(length)]

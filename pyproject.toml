@@ -17,3 +17,9 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.ruff.lint]
+ignore = [
+    "D203",
+    "D213",
+]

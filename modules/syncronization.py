@@ -1,4 +1,6 @@
-"""1. Coarse CFO estimation
+"""Synchronization algorithms for digital communication receivers.
+
+1. Coarse CFO estimation
     - Repeated sequence
 2. Frame detection and frame timing
     - Zadoff-Chu
@@ -10,13 +12,17 @@
 
 
 class ZadofChu:
-    def __init__(self) -> None:
-        pass
+    """Placeholder Zadoff-Chu sequence generator."""
 
-    def generate(self, N):
-        pass
+    def __init__(self) -> None:
+        """Initialize the Zadoff-Chu generator placeholder."""
+
+    def generate(self, n: int) -> None:
+        """Generate a sequence of length `n` (not implemented yet)."""
 
 
 class Syncronizer:
-    def __init__(self):
-        pass
+    """Placeholder synchronization pipeline."""
+
+    def __init__(self) -> None:
+        """Initialize the synchronizer placeholder."""

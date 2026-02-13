@@ -1,8 +1,4 @@
-"""Plotting utilities for signal visualization and analysis.
-
-This module provides functions for visualizing digital signals including
-time-domain signals, constellations, and frequency spectra.
-"""
+"""Plotting utilities for signal visualization and analysis."""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,30 +10,7 @@ def plot_iq(
     title: str | None = None,
     sample_rate: float | None = None,
 ) -> tuple[object, tuple[object, object]]:
-    """Plot I and Q components of complex signals.
-
-    Parameters
-    ----------
-    *signals : np.ndarray
-        Complex ndarrays to plot
-    labels : list[str] | None, optional
-        List of labels for each signal, by default None
-    title : str | None, optional
-        Plot title, by default None
-    sample_rate : float | None, optional
-        If provided, x-axis shows time in seconds, by default None
-
-    Returns
-    -------
-    tuple[object, tuple[object, object]]
-        Tuple of (figure, (ax_i, ax_q)) matplotlib objects
-
-    Examples
-    --------
-    >>> plot_iq(tx_signal, rx_signal, labels=['TX', 'RX'])
-    >>> plot_iq(signal1, signal2, signal3)  # auto-labeled
-
-    """
+    """Plot I and Q components of complex signals."""
     if labels is None:
         labels = [f"Signal {i + 1}" for i in range(len(signals))]
 
@@ -73,23 +46,7 @@ def plot_constellation(
     labels: list[str] | None = None,
     title: str | None = None,
 ) -> tuple[object, object]:
-    """Plot constellation diagram of complex signals.
-
-    Parameters
-    ----------
-    *signals : np.ndarray
-        Complex ndarrays to plot
-    labels : list[str] | None, optional
-        List of labels for each signal, by default None
-    title : str | None, optional
-        Plot title, by default None
-
-    Returns
-    -------
-    tuple[object, object]
-        Tuple of (figure, axes) matplotlib objects
-
-    """
+    """Plot constellation diagram of complex signals."""
     if labels is None:
         labels = [f"Signal {i + 1}" for i in range(len(signals))]
 
@@ -110,30 +67,7 @@ def plot_constellation_confidence(
     tx_symbols: np.ndarray | None = None,
     title: str | None = None,
 ) -> tuple[object, object]:
-    """Plot constellation with symbols colored by soft decision confidence.
-
-    Parameters
-    ----------
-    rx_symbols : np.ndarray
-        Received complex symbols
-    llrs : np.ndarray
-        LLR values from symbols2bits_soft, shape (N, bits_per_symbol)
-    tx_symbols : np.ndarray | None, optional
-        Ideal constellation points to overlay, by default None
-    title : str | None, optional
-        Plot title, by default None
-
-    Returns
-    -------
-    tuple[object, object]
-        Tuple of (figure, axes) matplotlib objects
-
-    Notes
-    -----
-    The confidence is computed as min(|LLR|) across bits for each symbol.
-    Low confidence (near decision boundaries) appears darker.
-
-    """
+    """Plot constellation with symbols colored by soft decision confidence."""
     # Confidence = minimum |LLR| across bits for each symbol
     confidence = np.min(np.abs(llrs), axis=1)
 

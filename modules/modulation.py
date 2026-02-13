@@ -2,6 +2,8 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.figure import Figure
+from numpy.typing import NDArray
 
 
 class BPSK:
@@ -133,7 +135,7 @@ class QPSK:
         self,
         sigma_sq: float = 0.1,
         grid_size: int = 100,
-    ) -> tuple[object, object]:
+    ) -> tuple[Figure, NDArray[np.object_]]:
         """Plot heatmaps showing LLR values across the complex plane."""
         # Create grid of possible received symbols
         extent = 1.5

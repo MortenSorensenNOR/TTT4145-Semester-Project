@@ -1,14 +1,4 @@
-"""Channel Model for Radio Communication Simulation.
-
-Implements a modular channel model for simulating indoor and urban outdoor
-short-range radio communications with:
-- Simple multipath (tapped delay line)
-- RF impairments: CFO, phase offset, time delay, phase noise, SCO
-- AWGN
-- Streaming/live simulation support for sync and frame detection testing
-
-Designed with realistic defaults for Pluto SDR (25 ppm oscillator).
-"""
+"""Channel Model for Radio Communication Simulation."""
 
 from dataclasses import dataclass, field
 from enum import Enum
@@ -24,28 +14,7 @@ from scipy import signal
 
 
 def pluto_max_cfo(carrier_hz: float = 433e6, num_devices: int = 2) -> float:
-    """Calculate maximum CFO for Pluto SDR (25 ppm oscillator).
-
-    Parameters
-    ----------
-    carrier_hz : float
-        Carrier frequency in Hz (default: 433 MHz ISM band)
-    num_devices : int
-        Number of devices (2 for TX+RX, each with its own oscillator)
-
-    Returns
-    -------
-    float
-        Maximum CFO in Hz
-
-    Examples
-    --------
-    >>> pluto_max_cfo(433e6, 2)  # Two Plutos at 433 MHz
-    21650.0
-    >>> pluto_max_cfo(915e6, 2)  # Two Plutos at 915 MHz
-    45750.0
-
-    """
+    """Calculate maximum CFO for Pluto SDR (25 ppm oscillator)."""
     ppm = 25e-6  # 25 ppm oscillator tolerance
     return ppm * carrier_hz * num_devices
 
@@ -65,26 +34,7 @@ SPEED_OF_LIGHT = 299_792_458.0
 
 
 def distance_to_delay(distance_m: float) -> float:
-    """Calculate propagation delay given a distance.
-
-    Parameters
-    ----------
-    distance_m : float
-        Distance in meters
-
-    Returns
-    -------
-    float
-        Propagation delay in seconds
-
-    Examples
-    --------
-    >>> distance_to_delay(300)  # 300 meters
-    1.0006922855944561e-06
-    >>> distance_to_delay(1000)  # 1 km ~ 3.33 microseconds
-    3.335640951981521e-06
-
-    """
+    """Calculate propagation delay given a distance."""
     return distance_m / SPEED_OF_LIGHT
 
 
@@ -110,10 +60,7 @@ class ChannelProfile(Enum):
 
 @dataclass
 class ChannelConfig:
-    """Configuration for the channel model.
-
-    All impairments can be individually enabled/disabled via enable_* flags.
-    """
+    """Configuration for the channel model."""
 
     # Basic parameters
     sample_rate: float = 1e6
@@ -168,11 +115,7 @@ class ChannelConfig:
 
 @dataclass
 class StreamState:
-    """Maintains state for streaming/block-by-block processing.
-
-    This allows continuous processing of signal blocks while maintaining
-    phase continuity and filter states across block boundaries.
-    """
+    """Maintains state for streaming/block-by-block processing."""
 
     sample_index: int = 0
     phase_accumulator: float = 0.0
@@ -248,21 +191,7 @@ def get_profile_config(
     profile: ChannelProfile,
     request: ProfileRequest,
 ) -> ChannelConfig:
-    """Create a ChannelConfig from a preset profile.
-
-    Parameters
-    ----------
-    profile : ChannelProfile
-        The preset profile to use
-    request : ProfileRequest
-        Common channel parameters and optional profile overrides
-
-    Returns
-    -------
-    ChannelConfig
-        Configuration object for the channel model
-
-    """
+    """Create a ChannelConfig from a preset profile."""
     # Get profile-specific configuration
     config_kwargs = _create_profile_config_kwargs(
         profile,
@@ -341,29 +270,7 @@ def apply_fractional_delay(
     delay_samples: float,
     buffer: NDArray[np.complex128] | None = None,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
-    """Apply fractional sample delay using Lagrange interpolation.
-
-    Uses 4th-order (5-tap) Lagrange interpolation for accurate fractional delay.
-    The output signal is shifted in time: zeros are inserted at the beginning
-    and the signal is truncated at the end to maintain the same length.
-
-    Parameters
-    ----------
-    x : ndarray
-        Input signal
-    delay_samples : float
-        Delay in samples (can be fractional)
-    buffer : ndarray, optional
-        State buffer from previous block (for streaming)
-
-    Returns
-    -------
-    y : ndarray
-        Delayed signal (same length as input)
-    new_buffer : ndarray
-        Updated state buffer for next block
-
-    """
+    """Apply fractional sample delay using Lagrange interpolation."""
     if delay_samples == 0.0:
         return x.copy(), buffer if buffer is not None else np.zeros(4, dtype=x.dtype)
 
@@ -380,7 +287,10 @@ def apply_fractional_delay(
         # Apply fractional delay filter
         # Pad to handle filter edge effects
         y_padded = np.concatenate([np.zeros(n_taps - 1, dtype=x.dtype), y])
-        y_filtered = signal.lfilter(h, 1.0, y_padded)
+        lfilter_result = signal.lfilter(h, 1.0, y_padded)
+        y_filtered = (
+            lfilter_result[0] if isinstance(lfilter_result, tuple) else lfilter_result
+        )
         y = y_filtered[n_taps - 1 : n_taps - 1 + len(x)]
 
     new_buffer = _build_delay_buffer(x, int_delay, buffer)
@@ -395,29 +305,7 @@ def apply_multipath(
     fading_gains: NDArray[np.complex128] | None = None,
     buffer: NDArray[np.complex128] | None = None,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
-    """Apply multipath channel using tapped delay line.
-
-    Parameters
-    ----------
-    x : ndarray
-        Input signal
-    delays_samples : tuple
-        Tap delays in samples
-    gains_linear : ndarray
-        Tap gains in linear scale
-    fading_gains : ndarray, optional
-        Time-varying fading gains per tap (shape: [n_taps, n_samples])
-    buffer : ndarray, optional
-        Delay line buffer from previous block
-
-    Returns
-    -------
-    y : ndarray
-        Output signal with multipath
-    new_buffer : ndarray
-        Updated delay line buffer
-
-    """
+    """Apply multipath channel using tapped delay line."""
     n_samples = len(x)
     max_delay = int(np.ceil(max(delays_samples))) + 1
 
@@ -469,25 +357,7 @@ def _create_profile_config_kwargs(
     phase_offset_rad: float | None = None,
     delay_samples: float | None = None,
 ) -> dict[str, Any]:
-    """Create profile-specific configuration kwargs.
-
-    Parameters
-    ----------
-    profile : ChannelProfile
-        The preset profile to use
-    cfo_hz : float, optional
-        Override CFO
-    phase_offset_rad : float, optional
-        Override initial phase offset
-    delay_samples : float, optional
-        Override propagation delay
-
-    Returns
-    -------
-    dict[str, Any]
-        Profile-specific configuration parameters
-
-    """
+    """Create profile-specific configuration kwargs."""
     profile_configs: dict[ChannelProfile, dict[str, Any]] = {
         ChannelProfile.IDEAL: {},
         ChannelProfile.INDOOR_SMALL: {
@@ -546,25 +416,7 @@ def generate_fading_gains(
     phases: NDArray[np.float64] | None = None,
     rng: np.random.Generator | None = None,
 ) -> tuple[NDArray[np.complex128], NDArray[np.float64]]:
-    """Generate time-varying fading gains using Clarke's sum-of-sinusoids model.
-
-    Parameters
-    ----------
-    params : FadingParams
-        Fading generation parameters
-    phases : ndarray, optional
-        Initial phases for each sinusoid (for streaming continuity)
-    rng : Generator, optional
-        Random number generator
-
-    Returns
-    -------
-    gains : ndarray
-        Complex fading gains, shape [n_taps, n_samples]
-    new_phases : ndarray
-        Updated phases for next block
-
-    """
+    """Generate time-varying fading gains using Clarke's sum-of-sinusoids model."""
     if rng is None:
         rng = np.random.default_rng()
 
@@ -625,23 +477,7 @@ def apply_cfo_and_phase(
     x: NDArray[np.complex128],
     params: CfoPhaseParams,
 ) -> tuple[NDArray[np.complex128], float]:
-    """Apply carrier frequency offset and phase offset.
-
-    Parameters
-    ----------
-    x : ndarray
-        Input signal
-    params : CfoPhaseParams
-        CFO and phase parameters
-
-    Returns
-    -------
-    y : ndarray
-        Signal with CFO and phase applied
-    final_phase : float
-        Phase at end of block (for streaming)
-
-    """
+    """Apply carrier frequency offset and phase offset."""
     n = len(x)
     t = (np.arange(params.sample_index, params.sample_index + n)) / params.sample_rate
 
@@ -667,29 +503,7 @@ def apply_phase_noise(
     state: float,
     rng: np.random.Generator,
 ) -> tuple[NDArray[np.complex128], float]:
-    """Apply phase noise using a filtered random walk model.
-
-    Parameters
-    ----------
-    x : ndarray
-        Input signal
-    psd_dbchz : float
-        Phase noise PSD in dBc/Hz at 1 kHz offset
-    sample_rate : float
-        Sample rate in Hz
-    state : float
-        Phase noise state from previous block
-    rng : Generator
-        Random number generator
-
-    Returns
-    -------
-    y : ndarray
-        Signal with phase noise
-    new_state : float
-        Updated phase noise state
-
-    """
+    """Apply phase noise using a filtered random walk model."""
     n = len(x)
 
     # Convert PSD to variance per sample
@@ -719,29 +533,7 @@ def apply_sco(
     phase: float,
     buffer: NDArray[np.complex128] | None = None,
 ) -> tuple[NDArray[np.complex128], float, NDArray[np.complex128]]:
-    """Apply sample clock offset via resampling.
-
-    Parameters
-    ----------
-    x : ndarray
-        Input signal
-    sco_ppm : float
-        Sample clock offset in ppm
-    phase : float
-        Resampling phase from previous block
-    buffer : ndarray, optional
-        Buffer for interpolation
-
-    Returns
-    -------
-    y : ndarray
-        Resampled signal
-    new_phase : float
-        Updated resampling phase
-    new_buffer : ndarray
-        Updated interpolation buffer
-
-    """
+    """Apply sample clock offset via resampling."""
     if abs(sco_ppm) < SCO_THRESHOLD:
         buffer_out = buffer if buffer is not None else np.zeros(4, dtype=x.dtype)
         return x.copy(), phase, buffer_out
@@ -798,23 +590,7 @@ def apply_awgn(
     snr_db: float,
     rng: np.random.Generator,
 ) -> NDArray[np.complex128]:
-    """Add AWGN to achieve specified SNR.
-
-    Parameters
-    ----------
-    x : ndarray
-        Input signal
-    snr_db : float
-        Desired SNR in dB
-    rng : Generator
-        Random number generator
-
-    Returns
-    -------
-    y : ndarray
-        Signal with added noise
-
-    """
+    """Add AWGN to achieve specified SNR."""
     # Calculate signal power
     signal_power = np.mean(np.abs(x) ** 2)
 
@@ -849,14 +625,7 @@ class ChannelModel:
     """
 
     def __init__(self, config: ChannelConfig) -> None:
-        """Initialize channel model.
-
-        Parameters
-        ----------
-        config : ChannelConfig
-            Channel configuration
-
-        """
+        """Initialize channel model."""
         self.config = config
         self._state: StreamState | None = None
 
@@ -872,21 +641,7 @@ class ChannelModel:
         profile: ChannelProfile,
         request: ProfileRequest,
     ) -> "ChannelModel":
-        """Create channel model from preset profile.
-
-        Parameters
-        ----------
-        profile : ChannelProfile
-            Preset profile to use
-        request : ProfileRequest
-            Common channel parameters and optional profile overrides
-
-        Returns
-        -------
-        ChannelModel
-            Configured channel model instance
-
-        """
+        """Create channel model from preset profile."""
         config = get_profile_config(
             profile=profile,
             request=request,
@@ -920,40 +675,12 @@ class ChannelModel:
         return self._state
 
     def apply(self, x: NDArray[np.complex128]) -> NDArray[np.complex128]:
-        """Apply channel model to entire signal (batch mode).
-
-        This resets the channel state before processing.
-
-        Parameters
-        ----------
-        x : ndarray
-            Input signal (complex baseband)
-
-        Returns
-        -------
-        y : ndarray
-            Output signal after channel effects
-
-        """
+        """Apply channel model to entire signal (batch mode)."""
         self.reset()
         return self.process_block(x)
 
     def process_block(self, x: NDArray[np.complex128]) -> NDArray[np.complex128]:
-        """Process a single block of samples (streaming mode).
-
-        Maintains state across calls for continuous streaming simulation.
-
-        Parameters
-        ----------
-        x : ndarray
-            Input signal block (complex baseband)
-
-        Returns
-        -------
-        y : ndarray
-            Output signal block after channel effects
-
-        """
+        """Process a single block of samples (streaming mode)."""
         state = self._get_state()
         y = x.astype(np.complex128)
         n_samples = len(x)
@@ -1045,21 +772,7 @@ class ChannelModel:
         self,
         _n_samples: int = 256,
     ) -> tuple[NDArray[np.float64], NDArray[np.complex128]]:
-        """Get the channel impulse response (multipath only, no noise).
-
-        Parameters
-        ----------
-        _n_samples : int
-            Length of impulse response
-
-        Returns
-        -------
-        delays : ndarray
-            Delay values in samples
-        gains : ndarray
-            Complex gains at each delay
-
-        """
+        """Get the channel impulse response (multipath only, no noise)."""
         delays = np.array(self.config.multipath_delays_samples)
         gains = self._multipath_gains_linear.astype(np.complex128)
         return delays, gains
