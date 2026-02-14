@@ -10,3 +10,6 @@ wheels/
 .venv
 .venv/
 pyrightconfig.json
+
+# Hypothesis test database
+.hypothesis/

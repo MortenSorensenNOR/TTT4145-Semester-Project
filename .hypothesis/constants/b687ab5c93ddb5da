@@ -1,4 +1,0 @@
-# file: /home/morten/dev/radiokommunikasjon/modules/modulation.py
-# hypothesis_version: 6.151.6
-
-[-1.5, 0.0, 1e-10, 0.02, 0.1, 0.3, 0.5, 1.5, 2.0, 100, ' bo', '--', '.', '00', '01', '10', '11', 'Decision boundary', 'F', 'Imaginary', 'Imaginary Part', 'LLR', 'RdBu', 'Real', 'Real Part', '[', ']', 'bo', 'center', 'equal', 'k', 'ko', 'lower', 'top', 'viridis', 'w', 'wo', '|LLR|']

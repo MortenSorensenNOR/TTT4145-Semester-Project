@@ -1,4 +1,0 @@
-# file: /home/morten/dev/radiokommunikasjon/modules/channel.py
-# hypothesis_version: 6.151.6
-
-[-100.0, -20.0, -15.0, -10.0, -8.0, -5.0, -3.0, 0.0, 1e-09, 1e-06, 2.5e-05, 0.5, 1.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 25.0, 30.0, 50.0, 1000.0, 1000000.0, 299792458.0, 433000000.0, 1000000000.0, 256, ')', ', ', 'ChannelModel', 'cfo_hz', 'delay_samples', 'doppler_hz', 'enable_cfo', 'enable_delay', 'enable_fading', 'enable_multipath', 'enable_phase_offset', 'fading_type', 'ideal', 'indoor_medium', 'indoor_small', 'initial_phase_rad', 'multipath_gains_db', 'rayleigh', 'rician', 'rician_k_db', 'sample_rate', 'seed', 'snr_db', 'urban_los', 'urban_nlos']
