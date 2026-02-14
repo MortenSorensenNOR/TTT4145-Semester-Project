@@ -5,17 +5,15 @@ from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
-from channel_coding import CodeRates
+from .channel_coding import CodeRates
 
 
 def int_to_bits(n: int, length: int) -> list[int]:
     """Convert an integer to a fixed-width big-endian bit list."""
     return [(n >> (length - 1 - i)) & 1 for i in range(length)]
 
-
 class ModulationSchemes(Enum):
     """Supported modulation schemes."""
-
     BPSK = 1
     QPSK = 2
     QAM16 = 3
@@ -25,7 +23,6 @@ class ModulationSchemes(Enum):
 @dataclass
 class FrameHeader:
     """Frame header with metadata."""
-
     length: int
     src: int
     dst: int
@@ -33,10 +30,8 @@ class FrameHeader:
     crc: int
     crc_passed: bool = True
 
-
-class FrameHeaderDecoder:
+class FrameHeaderConstructor:
     """Encode and decode frame header fields."""
-
     def __init__(
         self,
         length_bits: int,
@@ -96,6 +91,7 @@ class FrameHeaderDecoder:
         src_bits = self._get_src_dst_bits(header)
         dst_bits = self._get_src_dst_bits(header)
         mod_scheme_bits = self._get_mod_scheme_bits(header)
+        self.idx += 1  # skip padding bit
         crc_bits = self._get_crc_bits(header)
 
         # Convert bit lists to integers
@@ -157,7 +153,6 @@ class FrameHeaderDecoder:
 @dataclass
 class FrameHeaderConfig:
     """Bit-width configuration for frame header fields."""
-
     payload_length_bits: int = 8
     src_bits: int = 4
     dst_bits: int = 4
@@ -181,7 +176,7 @@ class FrameConstructor:
         self.pilots = pilots
         self.header_config = header_config or FrameHeaderConfig()
 
-        self.frame_header_decoder = FrameHeaderDecoder(
+        self.frame_header_constructor = FrameHeaderConstructor(
             self.header_config.payload_length_bits,
             self.header_config.src_bits,
             self.header_config.dst_bits,
