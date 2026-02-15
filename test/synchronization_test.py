@@ -79,6 +79,7 @@ def run_detection_trial(
     seed: int,
     sample_rate: float = 1e6,
     padding: int = 10000,
+    cfo_hz: float = 0.0,
 ) -> tuple[int, bool]:
     """Run a single frame detection trial.
 
@@ -89,6 +90,7 @@ def run_detection_trial(
         seed: Random seed for noise
         sample_rate: Sample rate in Hz
         padding: Zero padding after sequence
+        cfo_hz: Carrier frequency offset in Hz
 
     Returns:
         Tuple of (detected_delay, is_correct)
@@ -96,12 +98,16 @@ def run_detection_trial(
     tx_signal = np.concatenate([zc_seq, np.zeros(padding, dtype=complex)])
     ref_power = calculate_reference_power(zc_seq)
 
+    overrides = ProfileOverrides(delay_samples=float(true_delay))
+    if cfo_hz != 0.0:
+        overrides = ProfileOverrides(delay_samples=float(true_delay), cfo_hz=cfo_hz)
+
     channel_conf = ProfileRequest(
         sample_rate=sample_rate,
         snr_db=snr_db,
         seed=seed,
         reference_power=ref_power,
-        overrides=ProfileOverrides(delay_samples=float(true_delay)),
+        overrides=overrides,
     )
     channel = ChannelModel.from_profile(profile=ChannelProfile.IDEAL, request=channel_conf)
 
@@ -120,6 +126,7 @@ def measure_detection_probability(
     true_delay: int,
     n_trials: int = 100,
     sample_rate: float = 1e6,
+    cfo_hz: float = 0.0,
 ) -> float:
     """Measure detection probability over multiple noise realizations.
 
@@ -129,6 +136,7 @@ def measure_detection_probability(
         true_delay: True delay in samples
         n_trials: Number of trials to run
         sample_rate: Sample rate in Hz
+        cfo_hz: Carrier frequency offset in Hz
 
     Returns:
         Detection probability (0.0 to 1.0)
@@ -136,7 +144,7 @@ def measure_detection_probability(
     n_correct = 0
     for seed in range(n_trials):
         _, is_correct = run_detection_trial(
-            zc_seq, snr_db, true_delay, seed, sample_rate
+            zc_seq, snr_db, true_delay, seed, sample_rate, cfo_hz=cfo_hz
         )
         if is_correct:
             n_correct += 1
@@ -203,6 +211,67 @@ class TestFrameDetection:
         # Log result but don't fail - this shows variability
         status = "PASS" if is_correct else f"FAIL (got {detected})"
         print(f"Seed {seed}: {status}")
+
+
+class TestFrameDetectionWithCFO:
+    """Tests for frame detection with carrier frequency offset."""
+
+    @pytest.fixture
+    def zc_sequence_61(self):
+        """Generate a length-61 Zadoff-Chu sequence."""
+        return ZadofChu().generate(u=7, N_ZC=61)
+
+    def test_detection_small_cfo(self, zc_sequence_61, sample_rate):
+        """Frame detection should work with small CFO."""
+        true_delay = 4444
+        cfo_hz = 1000.0  # 1 kHz CFO
+
+        detected, is_correct = run_detection_trial(
+            zc_sequence_61, snr_db=10.0, true_delay=true_delay,
+            seed=42, sample_rate=sample_rate, cfo_hz=cfo_hz
+        )
+        assert is_correct, f"Failed with {cfo_hz} Hz CFO: expected {true_delay}, got {detected}"
+
+    @pytest.mark.parametrize("cfo_hz", [0.0, 1000.0, 2000.0, 4000.0])
+    def test_detection_various_cfo(self, zc_sequence_61, sample_rate, cfo_hz):
+        """Frame detection should work at moderate CFO values."""
+        true_delay = 4444
+
+        detected, is_correct = run_detection_trial(
+            zc_sequence_61, snr_db=10.0, true_delay=true_delay,
+            seed=42, sample_rate=sample_rate, cfo_hz=cfo_hz
+        )
+        assert is_correct, f"Failed with {cfo_hz} Hz CFO: expected {true_delay}, got {detected}"
+
+    def test_detection_degrades_with_large_cfo(self, zc_sequence_61, sample_rate):
+        """Detection probability should degrade with large CFO.
+
+        For length-61 ZC at 1 MHz sample rate:
+        - Phase rotation = 360 * cfo * N / fs degrees
+        - At 4 kHz: 360 * 4000 * 61 / 1e6 = 87.8 degrees (near limit)
+        - At 8 kHz: 360 * 8000 * 61 / 1e6 = 175.7 degrees (beyond limit)
+        """
+        true_delay = 4444
+        n_trials = 30
+
+        # Should work well with small CFO
+        prob_small_cfo = measure_detection_probability(
+            zc_sequence_61, snr_db=5.0, true_delay=true_delay,
+            n_trials=n_trials, sample_rate=sample_rate, cfo_hz=1000.0
+        )
+
+        # Should degrade with large CFO
+        prob_large_cfo = measure_detection_probability(
+            zc_sequence_61, snr_db=5.0, true_delay=true_delay,
+            n_trials=n_trials, sample_rate=sample_rate, cfo_hz=8000.0
+        )
+
+        print(f"Small CFO (1 kHz): {prob_small_cfo:.1%}")
+        print(f"Large CFO (8 kHz): {prob_large_cfo:.1%}")
+
+        # Large CFO should have noticeably worse performance
+        assert prob_small_cfo > prob_large_cfo, \
+            f"Expected degradation with large CFO, got {prob_small_cfo:.1%} vs {prob_large_cfo:.1%}"
 
 
 # =============================================================================
@@ -405,6 +474,88 @@ def plot_detection_probability_vs_zc_length(
     return fig
 
 
+def plot_detection_probability_vs_cfo(
+    zc_length: int = 61,
+    cfo_values_hz: list[float] | None = None,
+    snr_range: tuple[float, float] = (-15.0, 10.0),
+    snr_step: float = 2.0,
+    n_trials: int = 50,
+    true_delay: int = 4444,
+    sample_rate: float = 1e6,
+    save_path: str | None = None,
+):
+    """Compare detection probability curves for different CFO values.
+
+    Args:
+        zc_length: Length of ZC sequence (must be prime)
+        cfo_values_hz: List of CFO values in Hz to test
+        snr_range: (min_snr, max_snr) in dB
+        snr_step: SNR step size in dB
+        n_trials: Number of trials per SNR point
+        true_delay: True delay in samples
+        sample_rate: Sample rate in Hz
+        save_path: Path to save figure (optional)
+    """
+    if cfo_values_hz is None:
+        cfo_values_hz = [0.0, 1000.0, 5000.0, 10000.0, 20000.0]
+
+    zc_seq = ZadofChu().generate(u=7, N_ZC=zc_length)
+    snr_values = np.arange(snr_range[0], snr_range[1] + snr_step, snr_step)
+
+    # Calculate the CFO tolerance limit
+    # Phase rotation over N samples: phi = 2*pi*cfo*N/fs
+    # Correlation degrades significantly when phi > pi/2 (90 degrees)
+    # So rough limit: cfo_max ~ fs / (4*N)
+    cfo_limit = sample_rate / (4 * zc_length)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    colors = ['blue', 'green', 'orange', 'red', 'purple', 'brown']
+
+    print(f"ZC sequence length: {zc_length}")
+    print(f"Sample rate: {sample_rate/1e6:.1f} MHz")
+    print(f"Theoretical CFO limit (90° rotation): {cfo_limit:.0f} Hz")
+    print(f"Running {n_trials} trials per point...")
+
+    for i, cfo_hz in enumerate(cfo_values_hz):
+        probabilities = []
+        phase_rotation_deg = 360 * cfo_hz * zc_length / sample_rate
+
+        print(f"\nCFO = {cfo_hz:.0f} Hz (phase rotation over sequence: {phase_rotation_deg:.1f}°)")
+
+        for snr_db in snr_values:
+            prob = measure_detection_probability(
+                zc_seq, float(snr_db), true_delay, n_trials, sample_rate, cfo_hz
+            )
+            probabilities.append(prob)
+            print(f"  SNR = {snr_db:+5.1f} dB: {prob:6.1%}")
+
+        label = f'CFO={cfo_hz/1000:.1f} kHz ({phase_rotation_deg:.0f}°)'
+        ax.plot(snr_values, np.array(probabilities) * 100,
+                '-o', color=colors[i % len(colors)], linewidth=2, markersize=5, label=label)
+
+    ax.axhline(y=50, color='gray', linestyle='--', alpha=0.5)
+    ax.axhline(y=90, color='gray', linestyle='--', alpha=0.5)
+
+    ax.set_xlabel('SNR (dB)', fontsize=12)
+    ax.set_ylabel('Detection Probability (%)', fontsize=12)
+    ax.set_title(
+        f'Frame Detection with CFO (ZC length={zc_length})\n'
+        f'Theoretical CFO limit: {cfo_limit/1000:.1f} kHz (90° rotation)',
+        fontsize=12
+    )
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='lower right')
+    ax.set_ylim(-5, 105)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150)
+        print(f"\nSaved figure to {save_path}")
+
+    return fig
+
+
 # =============================================================================
 # Main (for running analysis directly)
 # =============================================================================
@@ -431,6 +582,19 @@ if __name__ == "__main__":
     fig2 = plot_detection_probability_vs_zc_length(
         zc_lengths=[61, 139, 251],
         snr_range=(-20.0, 5.0),
+        snr_step=2.0,
+        n_trials=50,
+    )
+
+    print("\n" + "=" * 60)
+    print("CFO Impact Analysis (ZC length=61)")
+    print("=" * 60)
+
+    # CFO impact analysis with length-61 ZC sequence
+    fig3 = plot_detection_probability_vs_cfo(
+        zc_length=61,
+        cfo_values_hz=[0.0, 1000.0, 2000.0, 4000.0, 8000.0],
+        snr_range=(-10.0, 10.0),
         snr_step=2.0,
         n_trials=50,
     )
