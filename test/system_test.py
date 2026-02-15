@@ -70,3 +70,6 @@ def test_end_to_end_signal_chain_shapes_and_outputs() -> None:
     np.testing.assert_equal(len(rx_symbols), NUM_SYMBOLS)
     np.testing.assert_array_less(-1e-12, ber)
     np.testing.assert_array_less(ber, 1.0 + 1e-12)
+
+if __name__ == "__main__":
+    test_end_to_end_signal_chain_shapes_and_outputs()

@@ -65,6 +65,7 @@ class ChannelConfig:
     # Basic parameters
     sample_rate: float = 1e6
     snr_db: float = 20.0
+    reference_power: float = 1.0  # Reference signal power for SNR calculation
 
     # Multipath configuration
     enable_multipath: bool = False
@@ -156,6 +157,7 @@ class ProfileRequest:
     sample_rate: float
     snr_db: float
     seed: int | None = None
+    reference_power: float = 1.0  # Reference signal power for SNR calculation
     overrides: ProfileOverrides = field(default_factory=ProfileOverrides)
 
 
@@ -204,6 +206,7 @@ def get_profile_config(
     config_kwargs["sample_rate"] = request.sample_rate
     config_kwargs["snr_db"] = request.snr_db
     config_kwargs["seed"] = request.seed
+    config_kwargs["reference_power"] = request.reference_power
 
     return ChannelConfig(**config_kwargs)
 
@@ -589,14 +592,25 @@ def apply_awgn(
     x: NDArray[np.complex128],
     snr_db: float,
     rng: np.random.Generator,
+    reference_power: float = 1.0,
 ) -> NDArray[np.complex128]:
-    """Add AWGN to achieve specified SNR."""
-    # Calculate signal power
-    signal_power = np.mean(np.abs(x) ** 2)
+    """Add AWGN to achieve specified SNR.
 
-    # Calculate noise power for desired SNR
+    Args:
+        x: Input signal.
+        snr_db: Desired SNR in dB.
+        rng: Random number generator.
+        reference_power: Reference signal power for SNR calculation.
+            Use calculate_reference_power() from util.py to compute this
+            from a representative signal (e.g., pulse-shaped symbols).
+            Defaults to 1.0 (unit power).
+
+    Returns:
+        Signal with added AWGN.
+    """
+    # Calculate noise power for desired SNR using reference power
     snr_linear = 10 ** (snr_db / 10)
-    noise_power = signal_power / snr_linear
+    noise_power = reference_power / snr_linear
 
     # Generate complex AWGN
     noise_std = np.sqrt(noise_power / 2)  # /2 for complex noise (I and Q)
@@ -752,7 +766,7 @@ class ChannelModel:
         # 5. AWGN
         if state.rng is None:
             state.rng = np.random.default_rng(self.config.seed)
-        y = apply_awgn(y, self.config.snr_db, state.rng)
+        y = apply_awgn(y, self.config.snr_db, state.rng, self.config.reference_power)
 
         # 6. SCO
         if self.config.enable_sco and abs(self.config.sco_ppm) > SCO_THRESHOLD:

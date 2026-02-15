@@ -70,7 +70,7 @@ class CoarseCFOSequence:
         return cfo
 
 
-class Syncronizer:
+class Synchronizer:
     """Placeholder synchronization pipeline."""
 
     def __init__(self) -> None:
