@@ -30,14 +30,7 @@ class ZadofChu:
 
 
 class CoarseCFOSequence:
-    """Sequence generator to estimate the coarse frequency offset for the synchronization process.
-    based on sending a repeated known sequence. The coarse frequency offset can be found as
-        Δf = 1/(2pi * N * T_S) * ∠ (∑ s∗[n] * s[n + N])
-    This gives frequency ambiguity of < 1/(2 * N * T_S). 
-    For Pluto max CFO @2.4 GHz is around 60 khz per radio. Assuming 1 MHz bandwidth and alpha = 0.25, 
-    we have Ts = 1.25 us, so N = 3 to encompase the possible frequency offset. This kinda sucks.
-    """
-
+    """"""
     def __init__(self, N: int, M: int, modulation: str = 'qpsk') -> None:
         self.N = N
         self.M = M
