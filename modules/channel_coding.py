@@ -11,21 +11,43 @@ class CodeRates(Enum):
     THREE_QUARTER_RATE = 3
     FIVE_SIXTH_RATE = 4
 
-class Golay_GeneratorMatrix:
-    matrix = np.array([
-        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1],
-        [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 0],
-        [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1],
-        [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,   1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0],
-        [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,   1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1],
-        [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,   1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0],
-        [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,   1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1],
-        [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,   1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,   0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,   0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0,   0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,   1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1],
-    ])
+"""
+Golay channel coding for frame header
+"""
+
+class Golay:
+    """Golay channel coding for the farme header. Since frame header is 24 bits, the header will be encoded in two blocks."""
+
+    def __init__(self) -> None:
+        self.block_length = 24
+        self.message_length = 12
+        self.matrix = np.array([
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1],
+            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 0],
+            [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1],
+            [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,   1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,   1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1],
+            [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,   1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,   1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1],
+            [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,   1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,   0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,   0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0,   0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,   1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1],
+        ])
+
+    def encode(self, message: np.ndarray) -> np.ndarray:
+        assert message.shape[0] % self.message_length == 0, "Message must have a length that is a multiple of 12"
+        return np.array([])
+
+    def decode(self, llr_channel: np.ndarray) -> np.ndarray:
+        assert llr_channel.shape[0] % self.message_length == 0, "Recieved signal must have a length that is a multiple of 12"
+
+        return np.array([])
+
+"""
+LDPC channel coding for payload
+"""
 
 class LDPC_BaseMatrix:
     """Base matrices for 802.11 LDPC codes (Tables F-1, F-2, F-3)"""
