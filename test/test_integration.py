@@ -13,6 +13,7 @@ from modules.channel_coding import LDPC, LDPCConfig, CodeRates
 from modules.modulation import QPSK
 from modules.pulseshaping import PulseShaper, rrc_filter
 from modules.channel import ChannelModel, ChannelConfig
+from modules.util import ebn0_to_snr
 
 
 class TestFullChain:
@@ -62,7 +63,10 @@ class TestFullChain:
         symbols = qpsk.bits2symbols(codeword)
 
         # Channel (AWGN only)
-        snr_db = 5.0
+        # Use Eb/N0 for accurate channel coding performance measurement
+        ebn0_db = 5.0
+        code_rate = CodeRates.HALF_RATE.value_float
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=2)
         channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=123))
         rx_symbols = channel.apply(symbols)
 
@@ -91,7 +95,10 @@ class TestFullChain:
         tx_signal = pulse_shaper.shape(upsampled)
 
         # Channel (AWGN)
-        snr_db = 6.0
+        # Use Eb/N0 for accurate channel coding performance measurement
+        ebn0_db = 6.0
+        code_rate = CodeRates.HALF_RATE.value_float
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=2)
         channel = ChannelModel(ChannelConfig(
             snr_db=snr_db,
             sample_rate=1e6,
@@ -116,9 +123,14 @@ class TestFullChain:
 
         assert bit_errors < 10, f"Too many bit errors: {bit_errors}"
 
-    @pytest.mark.parametrize("snr_db", [3.0, 4.0, 5.0, 6.0, 8.0])
-    def test_ber_vs_snr(self, ldpc, qpsk, snr_db):
-        """Test BER performance across different SNR values."""
+    @pytest.mark.parametrize("ebn0_db", [3.0, 4.0, 5.0, 6.0, 8.0])
+    def test_ber_vs_ebn0(self, ldpc, qpsk, ebn0_db):
+        """Test BER performance across different Eb/N0 values.
+
+        Uses Eb/N0 (energy per info bit / noise PSD) for accurate performance
+        comparison. This properly accounts for the coding rate when measuring
+        channel coding efficiency.
+        """
         np.random.seed(789)
         message = np.random.randint(0, 2, 324)
 
@@ -126,8 +138,10 @@ class TestFullChain:
         codeword = ldpc.encode(message)
         symbols = qpsk.bits2symbols(codeword)
 
-        # Channel
-        channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=int(snr_db * 100)))
+        # Channel - convert Eb/N0 to SNR per symbol
+        code_rate = CodeRates.HALF_RATE.value_float
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=2)
+        channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=int(ebn0_db * 100)))
         rx_symbols = channel.apply(symbols)
 
         # RX
@@ -136,19 +150,20 @@ class TestFullChain:
         decoded = ldpc.decode(llrs.flatten(), max_iterations=50)
 
         bit_errors = np.sum(decoded != message)
-        ber = bit_errors / len(message)
 
-        # Expected: BER should decrease with increasing SNR
-        # At 3 dB, some errors are acceptable; at 8 dB, should be near-zero
-        if snr_db >= 5.0:
-            assert bit_errors < 10, f"Too many errors ({bit_errors}) at {snr_db} dB"
-        # Just verify it runs at lower SNR (BER may be higher)
+        # Expected: BER should decrease with increasing Eb/N0
+        # At Eb/N0 >= 5 dB, rate 1/2 LDPC should have very few errors
+        if ebn0_db >= 5.0:
+            assert bit_errors < 10, f"Too many errors ({bit_errors}) at Eb/N0={ebn0_db} dB"
+        # Just verify it runs at lower Eb/N0 (BER may be higher)
 
     def test_multiple_frames(self, ldpc, qpsk):
         """Test decoding multiple frames in sequence."""
         np.random.seed(999)
         n_frames = 5
-        snr_db = 6.0
+        ebn0_db = 6.0
+        code_rate = CodeRates.HALF_RATE.value_float
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=2)
 
         total_errors = 0
         total_bits = 0

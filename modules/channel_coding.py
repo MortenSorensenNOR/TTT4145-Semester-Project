@@ -11,6 +11,21 @@ class CodeRates(Enum):
     THREE_QUARTER_RATE = 3
     FIVE_SIXTH_RATE = 4
 
+    @property
+    def value_float(self) -> float:
+        """Return the numeric code rate value (k/n ratio).
+
+        Returns:
+            The code rate as a float (e.g., 0.5 for HALF_RATE, 0.833... for FIVE_SIXTH_RATE).
+        """
+        rate_values = {
+            CodeRates.HALF_RATE: 1 / 2,
+            CodeRates.TWO_THIRDS_RATE: 2 / 3,
+            CodeRates.THREE_QUARTER_RATE: 3 / 4,
+            CodeRates.FIVE_SIXTH_RATE: 5 / 6,
+        }
+        return rate_values[self]
+
 """
 Golay channel coding for frame header
 """
@@ -296,8 +311,18 @@ class LDPC:
         codeword = np.concatenate([s_blocks.flatten(), p_blocks.flatten()])
         return codeword
 
-    def decode(self, llr_channel: np.ndarray, max_iterations: int = 50) -> np.ndarray:
-        """Decode using min-sum belief propagation"""
+    def decode(self, llr_channel: np.ndarray, max_iterations: int = 50, alpha: float = 0.75) -> np.ndarray:
+        """Decode using min-sum belief propagation.
+
+        Args:
+            llr_channel: Channel LLRs (log-likelihood ratios) for each codeword bit.
+            max_iterations: Maximum number of belief propagation iterations.
+            alpha: Normalization factor for min-sum (0.75 = normalized, 1.0 = standard).
+                   Normalized min-sum typically performs ~0.2 dB better.
+
+        Returns:
+            Decoded message bits (k bits).
+        """
         assert len(llr_channel) == self.n
         hard_decision = np.zeros(self.n, dtype=int)
 
@@ -342,7 +367,7 @@ class LDPC:
                         mag = abs(msg)
                         min_mag = mag if mag < min_mag else min_mag
 
-                    L_c2v[(i, j)] = sign * min_mag
+                    L_c2v[(i, j)] = alpha * sign * min_mag
 
             # variable node update
             for j in range(num_vars):

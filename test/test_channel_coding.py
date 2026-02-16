@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 from modules.channel_coding import LDPC, LDPCConfig, CodeRates, LDPC_BaseMatrix
+from modules.util import ebn0_to_snr
 
 
 # LDPC configuration parameters for all supported codes
@@ -85,28 +86,37 @@ class TestLDPCDecoding:
         decoded = ldpc.decode(llr, max_iterations=20)
         assert np.array_equal(decoded, random_message)
 
-    @pytest.mark.parametrize("snr_db", [4.0, 5.0, 6.0])
-    def test_decode_with_noise(self, ldpc, random_message, snr_db):
-        """Should decode with few/no errors at reasonable SNR."""
+    @pytest.mark.parametrize("ebn0_db", [4.0, 5.0, 6.0])
+    def test_decode_with_noise(self, ldpc, random_message, ebn0_db):
+        """Should decode with few/no errors at reasonable Eb/N0.
+
+        Uses Eb/N0 (energy per info bit / noise PSD) for accurate performance
+        comparison across different code rates. For rate 1/2 BPSK, Eb/N0 = Es/N0.
+        """
         codeword = ldpc.encode(random_message)
-        
-        # BPSK modulation
+        code_rate = CodeRates.HALF_RATE.value_float  # 0.5
+
+        # BPSK modulation (1 bit per symbol)
         tx = 1 - 2 * codeword
-        
+
+        # Convert Eb/N0 to Es/N0 (SNR per symbol)
+        # For BPSK: bits_per_symbol = 1, so Es/N0 = Eb/N0 * code_rate
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=1)
+
         # AWGN channel
         snr_linear = 10 ** (snr_db / 10)
         noise_std = 1 / np.sqrt(2 * snr_linear)
         np.random.seed(123)
         rx = tx + np.random.randn(648) * noise_std
-        
+
         # Channel LLRs
         llr = 2 * rx / (noise_std ** 2)
-        
+
         decoded = ldpc.decode(llr, max_iterations=50)
         bit_errors = np.sum(random_message != decoded)
-        
-        # At 4+ dB, rate 1/2 LDPC should correct most/all errors
-        assert bit_errors < 10, f"Too many errors ({bit_errors}) at {snr_db} dB"
+
+        # At Eb/N0 >= 4 dB, rate 1/2 LDPC should correct most/all errors
+        assert bit_errors < 10, f"Too many errors ({bit_errors}) at Eb/N0={ebn0_db} dB"
 
     def test_decode_returns_k_bits(self, ldpc, random_message):
         """Decoded message should be k bits."""
