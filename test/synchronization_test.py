@@ -146,7 +146,7 @@ def plot_results(results: list[dict]):
     ax.axhline(0, color='r', linestyle='--', alpha=0.5)
 
     plt.tight_layout()
-    plt.savefig("sync_test_results.png", dpi=150)
+    plt.savefig("examples/sync_test_results.png", dpi=150)
     plt.show()
 
 
