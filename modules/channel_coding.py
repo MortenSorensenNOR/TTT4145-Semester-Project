@@ -6,10 +6,10 @@ import numpy as np
 
 class CodeRates(Enum):
     """Supported channel coding rates."""
-    HALF_RATE = 1
-    TWO_THIRDS_RATE = 2
-    THREE_QUARTER_RATE = 3
-    FIVE_SIXTH_RATE = 4
+    HALF_RATE = 0
+    TWO_THIRDS_RATE = 1
+    THREE_QUARTER_RATE = 2
+    FIVE_SIXTH_RATE = 3
 
     @property
     def value_float(self) -> float:

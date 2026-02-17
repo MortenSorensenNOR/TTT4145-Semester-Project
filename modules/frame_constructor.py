@@ -27,6 +27,7 @@ class FrameHeader:
     src: int
     dst: int
     mod_scheme: ModulationSchemes
+    coding_rate: CodeRates
     crc: int
     crc_passed: bool = True
 
@@ -34,13 +35,13 @@ class FrameHeader:
 @dataclass
 class FrameHeaderConfig:
     """Bit-width configuration for frame header fields."""
-    payload_length_bits: int = 8
-    src_bits: int = 4
-    dst_bits: int = 4
+    payload_length_bits: int = 10
+    src_bits: int = 2
+    dst_bits: int = 2
     mod_scheme_bits: int = 3
+    coding_rate_bits: int = 2
     reserved_bits: int = 1
     crc_bits: int = 4
-    # TODO: Add coding rate field and reduce src and dst bit lengths, and increase payload length
     header_total_size: int = field(init=False)
 
     def __post_init__(self):
@@ -49,6 +50,7 @@ class FrameHeaderConfig:
             self.src_bits +
             self.dst_bits +
             self.mod_scheme_bits +
+            self.coding_rate_bits +
             self.reserved_bits +
             self.crc_bits
         )
@@ -62,6 +64,7 @@ class FrameHeaderConstructor:
         src_bits: int,
         dst_bits: int,
         mod_scheme_bits: int,
+        coding_rate_bits: int,
         crc_bits: int,
     ) -> None:
         """Initialize fixed bit widths for each frame header field."""
@@ -69,6 +72,7 @@ class FrameHeaderConstructor:
         self.src_bits = src_bits
         self.dst_bits = dst_bits
         self.mod_scheme_bits = mod_scheme_bits
+        self.coding_rate_bits = coding_rate_bits
         self.crc_bits = crc_bits
 
         self.header_length = (
@@ -76,9 +80,13 @@ class FrameHeaderConstructor:
             + self.src_bits
             + self.dst_bits
             + self.mod_scheme_bits
+            + self.coding_rate_bits
             + self.crc_bits
         )
+        raw_length = self.header_length
+
         self.header_length = 2 * int(np.ceil(self.header_length / 2))
+        self.reserved_bits = self.header_length - raw_length
 
     def _crc_calc(self, data_bits: str, poly: int = 0b10011) -> int:
         """Calculate CRC checksum."""
@@ -97,8 +105,9 @@ class FrameHeaderConstructor:
         src_bits = int_to_bits(header.src, self.src_bits)
         dst_bits = int_to_bits(header.dst, self.dst_bits)
         mod_scheme_bits = int_to_bits(header.mod_scheme.value, self.mod_scheme_bits)
+        coding_rate_bits = int_to_bits(header.coding_rate.value, self.coding_rate_bits)
 
-        header_data_bits = length_bits + src_bits + dst_bits + mod_scheme_bits + [0]
+        header_data_bits = length_bits + src_bits + dst_bits + mod_scheme_bits + coding_rate_bits + [0] * self.reserved_bits
         data_bits = "".join([str(bit) for bit in header_data_bits])
         crc_bits = self._crc_calc(data_bits)
         header_data_bits += int_to_bits(crc_bits, self.crc_bits)
@@ -112,7 +121,8 @@ class FrameHeaderConstructor:
         src_bits = self._get_src_dst_bits(header)
         dst_bits = self._get_src_dst_bits(header)
         mod_scheme_bits = self._get_mod_scheme_bits(header)
-        self.idx += 1  # skip padding bit
+        coding_rate_bits = self._get_coding_rate_bits(header)
+        self.idx += self.reserved_bits  # skip padding bit
         crc_bits = self._get_crc_bits(header)
 
         # Convert bit lists to integers
@@ -122,13 +132,16 @@ class FrameHeaderConstructor:
         mod_scheme = ModulationSchemes(
             int("".join(str(b) for b in mod_scheme_bits), 2),
         )
+        coding_rate = CodeRates(
+            int("".join(str(b) for b in coding_rate_bits), 2),
+        )
         crc = int("".join(str(b) for b in crc_bits), 2)
 
         # check crc
         header_data_bits = "".join(
             [
                 str(bit)
-                for bit in (length_bits + src_bits + dst_bits + mod_scheme_bits + [0])
+                for bit in (length_bits + src_bits + dst_bits + mod_scheme_bits + coding_rate_bits + [0] * self.reserved_bits)
             ],
         )
         calculated_crc = self._crc_calc(header_data_bits)
@@ -139,6 +152,7 @@ class FrameHeaderConstructor:
             src,
             dst,
             mod_scheme,
+            coding_rate,
             crc,
             crc_passed=(crc_bits == calculated_crc_bits),
         )
@@ -163,6 +177,12 @@ class FrameHeaderConstructor:
         scheme = header[self.idx : self.idx + self.mod_scheme_bits]
         self.idx += self.mod_scheme_bits
         return scheme.tolist() if isinstance(scheme, np.ndarray) else scheme
+
+    def _get_coding_rate_bits(self, header: np.ndarray) -> list[int]:
+        """Extract modulation scheme field from header."""
+        rate = header[self.idx : self.idx + self.coding_rate_bits]
+        self.idx += self.coding_rate_bits
+        return rate.tolist() if isinstance(rate, np.ndarray) else rate
 
     def _get_crc_bits(self, header: np.ndarray) -> list[int]:
         """Extract CRC field from header."""
@@ -192,6 +212,7 @@ class FrameConstructor:
             self.header_config.src_bits,
             self.header_config.dst_bits,
             self.header_config.mod_scheme_bits,
+            self.header_config.coding_rate_bits,
             self.header_config.crc_bits,
         )
 
