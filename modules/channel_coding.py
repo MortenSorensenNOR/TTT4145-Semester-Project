@@ -77,28 +77,34 @@ class Golay:
             return int(np.sum(v))
 
         def unit(i, n):
-            return np.concatenate([np.array([1]), np.zeros(n-1, dtype=int)])
+            e = np.zeros(n, dtype=int)
+            e[i] = 1
+            return e
 
         s = (block @ self.H.T) % 2
         if weight(s) <= 3:
-            e = np.concatenate([s, np.zeros(12, dtype=int)])
+            # Errors in parity bits (last 12 positions)
+            e = np.concatenate([np.zeros(12, dtype=int), s])
             return (block + e) % 2
 
         for i in range(12):
-            candidate = (2 + self.P.T[:, i]) % 2
+            candidate = (s + self.P.T[:, i]) % 2
             if weight(candidate) <= 2:
-                e = np.concatenate([candidate, unit(i, 12)])
+                # Error in systematic bit i, plus errors in parity bits
+                e = np.concatenate([unit(i, 12), candidate])
                 return (block + e) % 2
         sP = (s @ self.P) % 2
 
         if weight(sP) <= 3:
-            e = np.concatenate([np.zeros(12, dtype=int), sP])
+            # Errors in systematic bits (first 12 positions)
+            e = np.concatenate([sP, np.zeros(12, dtype=int)])
             return (block + e) % 2
 
         for i in range(12):
             candidate = (sP + self.P[i]) % 2
             if weight(candidate) <= 2:
-                e = np.concatenate([unit(i, 12), candidate])
+                # Error in parity bit i, plus errors in systematic bits
+                e = np.concatenate([candidate, unit(i, 12)])
                 return (block + e) % 2
 
         raise ValueError("More than 3 bit erros in block")

@@ -237,12 +237,34 @@ class FrameConstructor:
         return np.concatenate([header_encoded, payload_encoded]) 
 
     def decode(self, _frame: np.ndarray) -> tuple[FrameHeader, np.ndarray]:
-        """Decode a frame to extract data bits."""
-        header_bits_encoded = _frame[:self.header_config.header_total_size]
-        payload_bits_encoded = _frame[self.header_config.header_total_size:]
+        """Decode a frame to extract data bits.
 
-        header_bits = self.golay.decode(header_bits_encoded)
+        Args:
+            _frame: Input frame, either as hard decision bits (0/1) or LLR values.
+                    LLR convention: positive = more likely 0, negative = more likely 1.
+        """
+        header_encoded = _frame[:self.header_config.header_total_size * 2]
+        payload_encoded = _frame[self.header_config.header_total_size * 2:]
+
+        # Detect if input is LLR (floats outside [0,1]) or hard bits
+        is_llr = not np.all((np.abs(_frame) <= 1) | (np.isclose(_frame, 0)) | (np.isclose(_frame, 1)))
+
+        # Golay uses hard decision - convert LLR to bits if needed
+        if is_llr:
+            header_hard = (header_encoded < 0).astype(int)
+        else:
+            header_hard = header_encoded.astype(int)
+
+        header_bits = self.golay.decode(header_hard)
         header = self.frame_header_constructor.decode(header_bits)
-        payload_bits = self.LDPC.decode(payload_bits_encoded)
+
+        # LDPC uses soft decision - convert bits to LLR if needed
+        if is_llr:
+            payload_llr = payload_encoded
+        else:
+            # Convert hard bits to high-confidence LLRs (0 -> +10, 1 -> -10)
+            payload_llr = 10.0 * (1 - 2 * payload_encoded.astype(np.float64))
+
+        payload_bits = self.LDPC.decode(payload_llr)
 
         return (header, payload_bits)
