@@ -4,6 +4,14 @@ set -e
 echo "==> Initializing submodules..."
 git submodule update --init --recursive
 
+echo "==> Ensuring /usr/local/lib is in library path..."
+if [ ! -f /etc/ld.so.conf.d/local.conf ]; then
+    echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/local.conf
+fi
+
+echo "==> Removing any conflicting libiio v1.x libraries..."
+sudo rm -f /usr/lib/libiio.so.1* /usr/local/lib/libiio.so.1*
+
 echo "==> Building libiio v0.25..."
 cd vendor/libiio
 git checkout v0.25
