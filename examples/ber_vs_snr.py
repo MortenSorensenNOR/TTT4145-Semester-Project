@@ -86,13 +86,10 @@ def simulate_ldpc_coded_qpsk(
     """
     # LDPC config based on code rate
     rate_float = code_rate.value_float
-    n = 648
-    k = int(n * rate_float)
-    Z = 27
-    config = LDPCConfig(n=n, k=k, Z=Z, code_rate=code_rate)
-    ldpc = LDPC(config)
+    k = int(648 * rate_float)  # message length for n=648
+    config = LDPCConfig(k=k, code_rate=code_rate)
+    ldpc = LDPC()
     qpsk = QPSK()
-
 
     ber = np.zeros(len(ebn0_db_range))
 
@@ -105,10 +102,10 @@ def simulate_ldpc_coded_qpsk(
 
         for trial in range(n_trials):
             # Generate random message bits
-            message = np.random.randint(0, 2, ldpc.k)
+            message = np.random.randint(0, 2, config.k)
 
             # LDPC encode
-            codeword = ldpc.encode(message)
+            codeword = ldpc.encode(message, config)
 
             # QPSK modulate
             symbols = qpsk.bits2symbols(codeword)
@@ -125,11 +122,11 @@ def simulate_ldpc_coded_qpsk(
             llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
 
             # LDPC decode
-            decoded = ldpc.decode(llrs.flatten(), max_iterations=50, alpha=alpha)
+            decoded = ldpc.decode(llrs.flatten(), config, max_iterations=50, alpha=alpha)
 
             # Count errors (on message bits, not codeword)
             total_errors += np.sum(message != decoded)
-            total_bits += ldpc.k
+            total_bits += config.k
 
         ber[i] = total_errors / total_bits if total_bits > 0 else 0
 
@@ -168,17 +165,16 @@ def measure_coding_gain_at_target_ber(target_ber: float = 1e-6, n_trials: int = 
     print(f"\nUncoded QPSK @ BER={target_ber:.0e}: Eb/N0 = {ebn0_uncoded_db:.2f} dB (theoretical)")
 
     # For LDPC, simulate around expected waterfall region
-    config = LDPCConfig(n=648, k=324, Z=27, code_rate=CodeRates.HALF_RATE)
-    ldpc = LDPC(config)
+    config = LDPCConfig(k=324, code_rate=CodeRates.HALF_RATE)
+    ldpc = LDPC()
     qpsk = QPSK()
     code_rate = CodeRates.HALF_RATE.value_float
-
 
     # Fine Eb/N0 sweep in waterfall region
     ebn0_test = np.arange(1.5, 3.5, 0.1)
 
     print(f"\nSimulating LDPC rate 1/2 (α=0.75) with {n_trials} trials per Eb/N0 point...")
-    print(f"Total bits per Eb/N0 point: {n_trials * 324:,}")
+    print(f"Total bits per Eb/N0 point: {n_trials * config.k:,}")
     print()
 
     results = []
@@ -191,8 +187,8 @@ def measure_coding_gain_at_target_ber(target_ber: float = 1e-6, n_trials: int = 
         snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=2)
 
         for trial in range(n_trials):
-            message = np.random.randint(0, 2, ldpc.k)
-            codeword = ldpc.encode(message)
+            message = np.random.randint(0, 2, config.k)
+            codeword = ldpc.encode(message, config)
             symbols = qpsk.bits2symbols(codeword)
 
             channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=trial))
@@ -200,10 +196,10 @@ def measure_coding_gain_at_target_ber(target_ber: float = 1e-6, n_trials: int = 
 
             sigma_sq = qpsk.estimate_noise_variance(rx_symbols)
             llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
-            decoded = ldpc.decode(llrs.flatten(), max_iterations=50, alpha=0.75)
+            decoded = ldpc.decode(llrs.flatten(), config, max_iterations=50, alpha=0.75)
 
             total_errors += np.sum(message != decoded)
-            total_bits += ldpc.k
+            total_bits += config.k
 
         ber = total_errors / total_bits if total_bits > 0 else 0
         results.append((ebn0_db, ber, total_errors, total_bits))

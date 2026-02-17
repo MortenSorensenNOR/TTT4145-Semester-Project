@@ -25,8 +25,13 @@ LDPC_CONFIGS = [
 @pytest.fixture
 def ldpc():
     """Create LDPC codec instance."""
-    config = LDPCConfig(n=648, k=324, Z=27, code_rate=CodeRates.HALF_RATE)
-    return LDPC(config)
+    return LDPC()
+
+
+@pytest.fixture
+def ldpc_config():
+    """Create default LDPC configuration."""
+    return LDPCConfig(k=324, code_rate=CodeRates.HALF_RATE)
 
 
 @pytest.fixture
@@ -45,55 +50,56 @@ def random_message():
 class TestLDPCEncoding:
     """Tests for LDPC encoder."""
 
-    def test_codeword_length(self, ldpc, random_message):
+    def test_codeword_length(self, ldpc, ldpc_config, random_message):
         """Encoded codeword should be n bits."""
-        codeword = ldpc.encode(random_message)
+        codeword = ldpc.encode(random_message, ldpc_config)
         assert len(codeword) == 648
 
-    def test_systematic_bits_preserved(self, ldpc, random_message):
+    def test_systematic_bits_preserved(self, ldpc, ldpc_config, random_message):
         """First k bits of codeword should be the original message."""
-        codeword = ldpc.encode(random_message)
+        codeword = ldpc.encode(random_message, ldpc_config)
         assert np.array_equal(codeword[:324], random_message)
 
-    def test_valid_codeword(self, ldpc, random_message):
+    def test_valid_codeword(self, ldpc, ldpc_config, random_message):
         """H @ codeword should be zero (mod 2)."""
-        codeword = ldpc.encode(random_message)
-        syndrome = ldpc.H @ codeword % 2
+        codeword = ldpc.encode(random_message, ldpc_config)
+        H, _, _ = ldpc.get_structures(ldpc_config)
+        syndrome = H @ codeword % 2
         assert np.all(syndrome == 0)
 
-    def test_different_messages_different_codewords(self, ldpc):
+    def test_different_messages_different_codewords(self, ldpc, ldpc_config):
         """Different messages should produce different codewords."""
         msg1 = np.zeros(324, dtype=int)
         msg2 = np.ones(324, dtype=int)
-        cw1 = ldpc.encode(msg1)
-        cw2 = ldpc.encode(msg2)
+        cw1 = ldpc.encode(msg1, ldpc_config)
+        cw2 = ldpc.encode(msg2, ldpc_config)
         assert not np.array_equal(cw1, cw2)
 
 
 class TestLDPCDecoding:
     """Tests for LDPC decoder."""
 
-    def test_decode_no_noise(self, ldpc, random_message):
+    def test_decode_no_noise(self, ldpc, ldpc_config, random_message):
         """Perfect channel should decode perfectly."""
-        codeword = ldpc.encode(random_message)
-        
+        codeword = ldpc.encode(random_message, ldpc_config)
+
         # BPSK: 0 -> +1, 1 -> -1
         tx = 1 - 2 * codeword
-        
+
         # Large LLRs (no noise, high confidence)
         llr = 10 * tx  # positive for 0, negative for 1
-        
-        decoded = ldpc.decode(llr, max_iterations=20)
+
+        decoded = ldpc.decode(llr, ldpc_config, max_iterations=20)
         assert np.array_equal(decoded, random_message)
 
     @pytest.mark.parametrize("ebn0_db", [4.0, 5.0, 6.0])
-    def test_decode_with_noise(self, ldpc, random_message, ebn0_db):
+    def test_decode_with_noise(self, ldpc, ldpc_config, random_message, ebn0_db):
         """Should decode with few/no errors at reasonable Eb/N0.
 
         Uses Eb/N0 (energy per info bit / noise PSD) for accurate performance
         comparison across different code rates. For rate 1/2 BPSK, Eb/N0 = Es/N0.
         """
-        codeword = ldpc.encode(random_message)
+        codeword = ldpc.encode(random_message, ldpc_config)
         code_rate = CodeRates.HALF_RATE.value_float  # 0.5
 
         # BPSK modulation (1 bit per symbol)
@@ -112,43 +118,47 @@ class TestLDPCDecoding:
         # Channel LLRs
         llr = 2 * rx / (noise_std ** 2)
 
-        decoded = ldpc.decode(llr, max_iterations=50)
+        decoded = ldpc.decode(llr, ldpc_config, max_iterations=50)
         bit_errors = np.sum(random_message != decoded)
 
         # At Eb/N0 >= 4 dB, rate 1/2 LDPC should correct most/all errors
         assert bit_errors < 10, f"Too many errors ({bit_errors}) at Eb/N0={ebn0_db} dB"
 
-    def test_decode_returns_k_bits(self, ldpc, random_message):
+    def test_decode_returns_k_bits(self, ldpc, ldpc_config, random_message):
         """Decoded message should be k bits."""
-        codeword = ldpc.encode(random_message)
+        codeword = ldpc.encode(random_message, ldpc_config)
         tx = 1 - 2 * codeword
         llr = 10 * tx
-        
-        decoded = ldpc.decode(llr)
+
+        decoded = ldpc.decode(llr, ldpc_config)
         assert len(decoded) == 324
 
 
 class TestLDPCStructure:
     """Tests for LDPC matrix structure."""
 
-    def test_h_matrix_dimensions(self, ldpc):
+    def test_h_matrix_dimensions(self, ldpc, ldpc_config):
         """H matrix should be (n-k) x n."""
-        assert ldpc.H.shape == (324, 648)
+        H, _, _ = ldpc.get_structures(ldpc_config)
+        assert H.shape == (324, 648)
 
-    def test_h_matrix_sparse(self, ldpc):
+    def test_h_matrix_sparse(self, ldpc, ldpc_config):
         """H matrix should be sparse (low density)."""
-        density = np.sum(ldpc.H) / (324 * 648)
+        H, _, _ = ldpc.get_structures(ldpc_config)
+        density = np.sum(H) / (324 * 648)
         assert density < 0.05  # less than 5% ones
 
-    def test_adjacency_lists_consistent(self, ldpc):
+    def test_adjacency_lists_consistent(self, ldpc, ldpc_config):
         """Adjacency lists should match H matrix."""
-        for i, neighbors in enumerate(ldpc.check_neighbors):
-            for j in neighbors:
-                assert ldpc.H[i, j] == 1
+        H, check_neighbors, var_neighbors = ldpc.get_structures(ldpc_config)
 
-        for j, neighbors in enumerate(ldpc.var_neighbors):
+        for i, neighbors in enumerate(check_neighbors):
+            for j in neighbors:
+                assert H[i, j] == 1
+
+        for j, neighbors in enumerate(var_neighbors):
             for i in neighbors:
-                assert ldpc.H[i, j] == 1
+                assert H[i, j] == 1
 
 
 class TestLDPCBaseMatrix:

@@ -273,99 +273,181 @@ class LDPC_BaseMatrix:
             raise ValueError(f"Unsupported code rate {code_rate} for N={N}.")
         return matrices[N][code_rate]
 
-@dataclass
+@dataclass(frozen=True)
 class LDPCConfig:
-    n: int # codeword length
-    k: int # message length
-    Z: int # circulant size (27 for n=648)
+    """Configuration for LDPC encoding/decoding.
+
+    Only k (message length) and code_rate are required - n and Z are derived.
+    Made frozen (immutable) so it can be used as a cache key.
+    """
+    k: int  # message length (payload bits)
     code_rate: CodeRates
 
+    @property
+    def n(self) -> int:
+        """Codeword length derived from k and code_rate."""
+        rate_fractions = {
+            CodeRates.HALF_RATE: (1, 2),
+            CodeRates.TWO_THIRDS_RATE: (2, 3),
+            CodeRates.THREE_QUARTER_RATE: (3, 4),
+            CodeRates.FIVE_SIXTH_RATE: (5, 6),
+        }
+        num, denom = rate_fractions[self.code_rate]
+        n = (self.k * denom) // num
+        if n not in (648, 1296, 1944):
+            raise ValueError(
+                f"Invalid k={self.k} for {self.code_rate}: computed n={n} "
+                f"is not a valid block length (648, 1296, or 1944)."
+            )
+        return n
+
+    @property
+    def Z(self) -> int:
+        """Circulant size derived from n."""
+        params = {648: 27, 1296: 54, 1944: 81}
+        return params[self.n]
+
+
 class LDPC:
-    """Placeholder LDPC codec implementation."""
+    """LDPC codec with dynamic configuration support and memoization.
 
-    def __init__(self, config: LDPCConfig) -> None:
-        """Initialize the LDPC codec placeholder."""
-        self.config = config
-        self.n = config.n
-        self.k = config.k
-        self.Z = config.Z
-        self.code_rate = config.code_rate
-        if self.code_rate == CodeRates.HALF_RATE:
-            assert(2 * self.k == self.n)
-        elif self.code_rate == CodeRates.THREE_QUARTER_RATE:
-            assert(self.k / self.n == 0.75)
+    Supports dynamic selection of code rate and block length at encode/decode time.
+    H matrices and adjacency lists are cached to avoid recomputation.
+    """
 
-        assert self.n == 648 and self.Z == 27 and self.code_rate == CodeRates.HALF_RATE, \
-            "Only n = 648 with Z=27 with half rate coding is implemented for now"
+    # Class-level cache: LDPCConfig -> (H, check_neighbors, var_neighbors)
+    _cache: dict = {}
+    _base_matrix_generator = LDPC_BaseMatrix()
 
-        self.base_matrix_generator = LDPC_BaseMatrix()
-        self.H = self._expand_h()
-        self.check_neighbors, self.var_neighbors = self._build_adj_list(self.H)
+    def __init__(self) -> None:
+        """Initialize the LDPC codec."""
+        pass
 
-    def circulant_multiply(self, vector, shift):
+    def get_supported_payload_lengths(self, code_rate: CodeRates = CodeRates.HALF_RATE) -> np.ndarray:
+        """Return supported message lengths (k) for LDPC.
+
+        If code_rate is specified, returns k values valid for that rate.
+        If None, returns all valid k values across all rates.
+        """
+        valid_n = [648, 1296, 1944]
+        rate_fractions = {
+            CodeRates.HALF_RATE: (1, 2),
+            CodeRates.TWO_THIRDS_RATE: (2, 3),
+            CodeRates.THREE_QUARTER_RATE: (3, 4),
+            CodeRates.FIVE_SIXTH_RATE: (5, 6),
+        }
+
+        if code_rate is not None:
+            num, denom = rate_fractions[code_rate]
+            return np.array([n * num // denom for n in valid_n])
+
+    @classmethod
+    def _get_cached_structures(cls, config: LDPCConfig):
+        """Get or compute H matrix and adjacency lists for the given configuration.
+
+        Returns:
+            Tuple of (H, check_neighbors, var_neighbors)
+        """
+        if config not in cls._cache:
+            H = cls._expand_h(config)
+            check_neighbors, var_neighbors = cls._build_adj_list(H)
+            cls._cache[config] = (H, check_neighbors, var_neighbors)
+
+        return cls._cache[config]
+
+    @classmethod
+    def clear_cache(cls):
+        """Clear the cached H matrices and adjacency lists."""
+        cls._cache.clear()
+
+    @classmethod
+    def get_structures(cls, config: LDPCConfig):
+        """Get the H matrix and adjacency lists for the given configuration."""
+        return cls._get_cached_structures(config)
+
+    @staticmethod
+    def _circulant_multiply(vector, shift, Z):
         """Multiply a Z-length vector by a cyclically shifted identity matrix."""
         if shift == -1:
-            return np.zeros(self.Z, dtype=int)
+            return np.zeros(Z, dtype=int)
         return np.roll(vector, -shift)
 
-    def encode(self, message):
-        """Encode k-bit message to a n-bit codeword
+    def encode(self, message: np.ndarray, config: LDPCConfig) -> np.ndarray:
+        """Encode k-bit message to a n-bit codeword.
 
-        message: length k (324) bit array
-        returns: length n (648) codeword [systemic | parity]
+        Args:
+            message: length k bit array
+            config: LDPC configuration specifying n and code_rate
+
+        Returns:
+            length n codeword [systematic | parity]
         """
-        assert len(message) == self.k
-        assert self.n == 648
-        assert self.Z == 27
+        n, k, Z = config.n, config.k, config.Z
 
-        H_base = self.base_matrix_generator.get_matrix(self.code_rate, self.n)
+        assert len(message) == k, f"Message length {len(message)} != expected {k} ({n}, {k}, {Z}, {config.code_rate})"
+
+        H_base = self._base_matrix_generator.get_matrix(config.code_rate, n)
         num_parity_blocks = H_base.shape[0]
-        num_systemic_blocks = H_base.shape[1] - num_parity_blocks
+        num_systematic_blocks = H_base.shape[1] - num_parity_blocks
 
-        s_blocks = message.reshape(num_systemic_blocks, self.Z)
-        p_blocks = np.zeros((num_parity_blocks, self.Z), dtype=int)
+        s_blocks = message.reshape(num_systematic_blocks, Z)
+        p_blocks = np.zeros((num_parity_blocks, Z), dtype=int)
 
-        # compute partial sum of A[i, j] * s[j] for each row i
-        lambda_sums = np.zeros((num_parity_blocks, self.Z), dtype=int)
+        # Extract parity submatrix B (rightmost columns of H_base)
+        B = H_base[:, num_systematic_blocks:]
+
+        # Compute λ_i = sum of H[i,j] * s[j] for systematic columns
+        lambda_sums = np.zeros((num_parity_blocks, Z), dtype=int)
         for i in range(num_parity_blocks):
-            for j in range(num_systemic_blocks):
+            for j in range(num_systematic_blocks):
                 shift = H_base[i, j]
                 if shift != -1:
-                    lambda_sums[i] ^= self.circulant_multiply(s_blocks[j], shift)
+                    lambda_sums[i] ^= self._circulant_multiply(s_blocks[j], shift, Z)
 
-        # compute first parity block p[0]
-        # 802.11 structure needs to accumulate all lambda_sums
-        p0_sum = np.zeros(self.Z, dtype=int)
+        # 802.11 LDPC encoding using the dual-diagonal structure of B
+        # Step 1: Compute p[0] by XORing all λ values
+        # This works because the first parity column has entries that sum to identity
+        p0_sum = np.zeros(Z, dtype=int)
         for i in range(num_parity_blocks):
             p0_sum ^= lambda_sums[i]
         p_blocks[0] = p0_sum
 
-        # compute remaining parity blocks using back-substitutions
-        # p[1] from row 0: lambda[0] + P^1 * p[0] + P^0 * p[1] = 0
-        # The shift for p[0] in row 0 is 1 (from base_matrix[0, 12] = 1)
-        p_blocks[1] = lambda_sums[0] ^ self.circulant_multiply(p_blocks[0], 1)
+        # Step 2: Solve remaining parity blocks using back-substitution
+        # For each row i, solve for the unknown parity block using known values
+        for i in range(num_parity_blocks):
+            # Find which parity blocks appear in this row
+            parity_entries = [(col, B[i, col]) for col in range(num_parity_blocks) if B[i, col] != -1]
 
-        # p[2] to p[6] from rows 1-5 (standard staircase)
-        for i in range(2, 7):
-            p_blocks[i] = lambda_sums[i-1] ^ p_blocks[i-1]
+            # Start with λ[i]
+            result = lambda_sums[i].copy()
 
-        # p[7] from row 6: row 6 has p[0] (col 12), p[6] (col 18), p[7] (col 19)
-        # lambda[6] + p[0] + p[6] + p[7] = 0 => p[7] = lambda[6] + p[0] + p[6]
-        p_blocks[7] = lambda_sums[6] ^ p_blocks[0] ^ p_blocks[6]
+            # XOR all known parity contributions
+            unknown_col = -1
+            for col, shift in parity_entries:
+                if col <= i:
+                    # This parity block is already computed
+                    result ^= self._circulant_multiply(p_blocks[col], shift, Z)
+                else:
+                    # This is the unknown we're solving for (should be col = i+1 for staircase)
+                    unknown_col = col
 
-        # p[8] to p[11] from rows 7-10 (standard staircase)
-        for i in range(8, num_parity_blocks):
-            p_blocks[i] = lambda_sums[i-1] ^ p_blocks[i-1]
+            # If we found an unknown parity block, store the result
+            if unknown_col != -1 and unknown_col < num_parity_blocks:
+                # The unknown parity block appears with some shift in the matrix
+                # For 802.11 codes, the diagonal entries are always 0 (identity shift)
+                p_blocks[unknown_col] = result
 
-        # combine systematic and parity
+        # Combine systematic and parity
         codeword = np.concatenate([s_blocks.flatten(), p_blocks.flatten()])
         return codeword
 
-    def decode(self, llr_channel: np.ndarray, max_iterations: int = 50, alpha: float = 0.75) -> np.ndarray:
+    def decode(self, llr_channel: np.ndarray, config: LDPCConfig,
+               max_iterations: int = 50, alpha: float = 0.75) -> np.ndarray:
         """Decode using min-sum belief propagation.
 
         Args:
             llr_channel: Channel LLRs (log-likelihood ratios) for each codeword bit.
+            config: LDPC configuration specifying n and code_rate.
             max_iterations: Maximum number of belief propagation iterations.
             alpha: Normalization factor for min-sum (0.75 = normalized, 1.0 = standard).
                    Normalized min-sum typically performs ~0.2 dB better.
@@ -373,11 +455,14 @@ class LDPC:
         Returns:
             Decoded message bits (k bits).
         """
-        assert len(llr_channel) == self.n
-        hard_decision = np.zeros(self.n, dtype=int)
+        n, k = config.n, config.k
+        H, check_neighbors, var_neighbors = self._get_cached_structures(config)
 
-        num_checks = self.H.shape[0]
-        num_vars   = self.H.shape[1]
+        assert len(llr_channel) == n
+        hard_decision = np.zeros(n, dtype=int)
+
+        num_checks = H.shape[0]
+        num_vars = H.shape[1]
 
         # initialize messages
         # L_v2c[i][j] = message from variable j to check i
@@ -387,27 +472,27 @@ class LDPC:
 
         # initialize variable-to-check messages with channel LLRs
         for j in range(num_vars):
-            for i in self.var_neighbors[j]:
+            for i in var_neighbors[j]:
                 L_v2c[(i, j)] = llr_channel[j]
 
         # initialize check-to-variable messages to zero
         for i in range(num_checks):
-            for j in self.check_neighbors[i]:
+            for j in check_neighbors[i]:
                 L_c2v[(i, j)] = 0.0
 
         # belief propagation iterations
         for iteration in range(max_iterations):
             # check node update (min-sum)
             for i in range(num_checks):
-                neighbors = self.check_neighbors[i]
-                
+                neighbors = check_neighbors[i]
+
                 for j in neighbors:
                     # compute message to j using all other neighbors
                     other_neighbors = [jj for jj in neighbors if jj != j]
                     if len(other_neighbors) == 0:
                         L_c2v[(i, j)] = 0.0
                         continue
-                    
+
                     # min-sum - product of signs * mimimum magnitude
                     sign = 1
                     min_mag = float('inf')
@@ -421,7 +506,7 @@ class LDPC:
 
             # variable node update
             for j in range(num_vars):
-                neighbors = self.var_neighbors[j]
+                neighbors = var_neighbors[j]
                 for i in neighbors:
                     # sum channel llr and all other incoming check messages
                     total = llr_channel[j]
@@ -434,43 +519,46 @@ class LDPC:
             L_total = np.zeros(num_vars)
             for j in range(num_vars):
                 L_total[j] = llr_channel[j]
-                for i in self.var_neighbors[j]:
+                for i in var_neighbors[j]:
                     L_total[j] += L_c2v[(i, j)]
 
             hard_decision = (L_total < 0).astype(int)
 
             # check if valid codeword
-            syndrome = self.H @ hard_decision % 2
+            syndrome = H @ hard_decision % 2
             if np.all(syndrome == 0):
-                return hard_decision[:self.k] # valid codeword -> extract systemic bits
+                return hard_decision[:k]  # valid codeword -> extract systematic bits
 
         # max iterations reached - return best guess
-        return hard_decision[:self.k]
+        return hard_decision[:k]
 
-    def _expand_h(self) -> np.ndarray:
-        """Expand base matrix to full H matrix"""
-        H_base = self.base_matrix_generator.get_matrix(self.code_rate, self.n)
+    @classmethod
+    def _expand_h(cls, config: LDPCConfig) -> np.ndarray:
+        """Expand base matrix to full H matrix."""
+        n, Z = config.n, config.Z
+        H_base = cls._base_matrix_generator.get_matrix(config.code_rate, n)
         num_block_rows = H_base.shape[0]
         num_block_cols = H_base.shape[1]
 
-        H = np.zeros((num_block_rows * self.Z, num_block_cols * self.Z), dtype=int)
+        H = np.zeros((num_block_rows * Z, num_block_cols * Z), dtype=int)
 
         for i in range(num_block_rows):
             for j in range(num_block_cols):
                 shift = H_base[i, j]
                 if shift != -1:
-                    for k in range(self.Z):
-                        H[i * self.Z + k, j * self.Z + (k + shift) % self.Z] = 1
+                    for k in range(Z):
+                        H[i * Z + k, j * Z + (k + shift) % Z] = 1
 
         return H
 
-    def _build_adj_list(self, H: np.ndarray):
-        """Build adjecency list from H matrix"""
-        num_chekcs, num_vars = H.shape
+    @staticmethod
+    def _build_adj_list(H: np.ndarray):
+        """Build adjacency list from H matrix."""
+        num_checks, num_vars = H.shape
 
-        check_neighbors = [[] for _ in range(num_chekcs)] # list of vars
-        var_neighbors   = [[] for _ in range(num_vars)]   # list of checks
-        for i in range(num_chekcs):
+        check_neighbors = [[] for _ in range(num_checks)]  # list of vars
+        var_neighbors = [[] for _ in range(num_vars)]      # list of checks
+        for i in range(num_checks):
             for j in range(num_vars):
                 if H[i, j] == 1:
                     check_neighbors[i].append(j)

@@ -216,14 +216,8 @@ class FrameConstructor:
             self.header_config.crc_bits,
         )
 
-        # TODO: Make config not fixed to one length, in order to facilitate multiple header lengths and coding rates
-        self.ldpc_config = LDPCConfig(
-            n=648,
-            k=324,
-            Z=27,
-            code_rate=CodeRates.HALF_RATE
-        )
-        self.LDPC = LDPC(self.ldpc_config)
+        # Default LDPC config - can be overridden at encode/decode time
+        self.ldpc = LDPC()
         self.golay = Golay()
 
     def encode(self, header: FrameHeader, payload: np.ndarray) -> np.ndarray:
@@ -231,8 +225,15 @@ class FrameConstructor:
         header_bits = self.frame_header_constructor.encode(header)
         header_encoded = self.golay.encode(header_bits)
 
-        assert payload.shape[0] == self.ldpc_config.k # TODO: make this dynamic
-        payload_encoded = self.LDPC.encode(payload)
+        # find closest packet size to header.length for this coding rate
+        payload_lengths = self.ldpc.get_supported_payload_lengths(header.coding_rate)
+        closest_payload_length = next((l for l in sorted(payload_lengths) if l >= header.length), None)
+        if closest_payload_length is None:
+            raise ValueError(f"Unsupported payload length {header.length}. Greater than max length {payload_lengths[-1]}")
+        payload_padded = np.concatenate([payload, np.zeros(closest_payload_length - header.length, dtype=int)])
+
+        ldpc_config = LDPCConfig(k=closest_payload_length, code_rate=header.coding_rate)
+        payload_encoded = self.ldpc.encode(payload_padded, ldpc_config)
 
         return np.concatenate([header_encoded, payload_encoded]) 
 
@@ -257,6 +258,8 @@ class FrameConstructor:
 
         header_bits = self.golay.decode(header_hard)
         header = self.frame_header_constructor.decode(header_bits)
+        if header.crc_passed != True:
+            raise ValueError("Header did not yield valid crc")
 
         # LDPC uses soft decision - convert bits to LLR if needed
         if is_llr:
@@ -265,6 +268,14 @@ class FrameConstructor:
             # Convert hard bits to high-confidence LLRs (0 -> +10, 1 -> -10)
             payload_llr = 10.0 * (1 - 2 * payload_encoded.astype(np.float64))
 
-        payload_bits = self.LDPC.decode(payload_llr)
+        # get closest payload length to header payload length for this coding rate
+        payload_lengths = self.ldpc.get_supported_payload_lengths(header.coding_rate)
+        closest_payload_length = next((l for l in sorted(payload_lengths) if l >= header.length), None)
+        if closest_payload_length is None:
+            raise ValueError(f"Unsupported payload length {header.length}. Greater than max length {payload_lengths[-1]}")
+
+        ldpc_config = LDPCConfig(k=closest_payload_length, code_rate=header.coding_rate)
+        payload_bits = self.ldpc.decode(payload_llr, ldpc_config)
+        payload_bits = payload_bits[:header.length]
 
         return (header, payload_bits)

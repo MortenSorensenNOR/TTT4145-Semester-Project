@@ -22,8 +22,12 @@ class TestFullChain:
     @pytest.fixture
     def ldpc(self):
         """Create LDPC codec."""
-        config = LDPCConfig(n=648, k=324, Z=27, code_rate=CodeRates.HALF_RATE)
-        return LDPC(config)
+        return LDPC()
+
+    @pytest.fixture
+    def ldpc_config(self):
+        """Create default LDPC configuration."""
+        return LDPCConfig(k=324, code_rate=CodeRates.HALF_RATE)
 
     @pytest.fixture
     def qpsk(self):
@@ -41,10 +45,10 @@ class TestFullChain:
         np.random.seed(42)
         return np.random.randint(0, 2, 324)
 
-    def test_chain_no_channel(self, ldpc, qpsk, random_message):
+    def test_chain_no_channel(self, ldpc, ldpc_config, qpsk, random_message):
         """Test TX/RX chain without channel impairments (sanity check)."""
         # TX
-        codeword = ldpc.encode(random_message)
+        codeword = ldpc.encode(random_message, ldpc_config)
         symbols = qpsk.bits2symbols(codeword)
 
         # RX (no channel, just demodulate)
@@ -52,14 +56,14 @@ class TestFullChain:
         llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=1e-6)
         llr_flat = llrs.flatten()
 
-        decoded = ldpc.decode(llr_flat, max_iterations=20)
+        decoded = ldpc.decode(llr_flat, ldpc_config, max_iterations=20)
 
         assert np.array_equal(decoded, random_message)
 
-    def test_chain_awgn_only(self, ldpc, qpsk, random_message):
+    def test_chain_awgn_only(self, ldpc, ldpc_config, qpsk, random_message):
         """Test TX/RX chain with AWGN channel (no pulse shaping)."""
         # TX
-        codeword = ldpc.encode(random_message)
+        codeword = ldpc.encode(random_message, ldpc_config)
         symbols = qpsk.bits2symbols(codeword)
 
         # Channel (AWGN only)
@@ -76,17 +80,17 @@ class TestFullChain:
         llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
         llr_flat = llrs.flatten()
 
-        decoded = ldpc.decode(llr_flat, max_iterations=50)
+        decoded = ldpc.decode(llr_flat, ldpc_config, max_iterations=50)
         bit_errors = np.sum(decoded != random_message)
 
         assert bit_errors < 5, f"Too many bit errors: {bit_errors}"
 
-    def test_chain_with_pulse_shaping(self, ldpc, qpsk, pulse_shaper, random_message):
+    def test_chain_with_pulse_shaping(self, ldpc, ldpc_config, qpsk, pulse_shaper, random_message):
         """Test full chain with pulse shaping and matched filtering."""
         sps = pulse_shaper.sps
 
         # TX
-        codeword = ldpc.encode(random_message)
+        codeword = ldpc.encode(random_message, ldpc_config)
         symbols = qpsk.bits2symbols(codeword)
 
         # Upsample and pulse shape
@@ -118,13 +122,13 @@ class TestFullChain:
         llr_flat = llrs.flatten()
 
         # LDPC decode
-        decoded = ldpc.decode(llr_flat, max_iterations=50)
+        decoded = ldpc.decode(llr_flat, ldpc_config, max_iterations=50)
         bit_errors = np.sum(decoded != random_message)
 
         assert bit_errors < 10, f"Too many bit errors: {bit_errors}"
 
     @pytest.mark.parametrize("ebn0_db", [3.0, 4.0, 5.0, 6.0, 8.0])
-    def test_ber_vs_ebn0(self, ldpc, qpsk, ebn0_db):
+    def test_ber_vs_ebn0(self, ldpc, ldpc_config, qpsk, ebn0_db):
         """Test BER performance across different Eb/N0 values.
 
         Uses Eb/N0 (energy per info bit / noise PSD) for accurate performance
@@ -135,7 +139,7 @@ class TestFullChain:
         message = np.random.randint(0, 2, 324)
 
         # TX
-        codeword = ldpc.encode(message)
+        codeword = ldpc.encode(message, ldpc_config)
         symbols = qpsk.bits2symbols(codeword)
 
         # Channel - convert Eb/N0 to SNR per symbol
@@ -147,7 +151,7 @@ class TestFullChain:
         # RX
         sigma_sq = qpsk.estimate_noise_variance(rx_symbols)
         llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
-        decoded = ldpc.decode(llrs.flatten(), max_iterations=50)
+        decoded = ldpc.decode(llrs.flatten(), ldpc_config, max_iterations=50)
 
         bit_errors = np.sum(decoded != message)
 
@@ -157,7 +161,7 @@ class TestFullChain:
             assert bit_errors < 10, f"Too many errors ({bit_errors}) at Eb/N0={ebn0_db} dB"
         # Just verify it runs at lower Eb/N0 (BER may be higher)
 
-    def test_multiple_frames(self, ldpc, qpsk):
+    def test_multiple_frames(self, ldpc, ldpc_config, qpsk):
         """Test decoding multiple frames in sequence."""
         np.random.seed(999)
         n_frames = 5
@@ -172,7 +176,7 @@ class TestFullChain:
             message = np.random.randint(0, 2, 324)
 
             # TX
-            codeword = ldpc.encode(message)
+            codeword = ldpc.encode(message, ldpc_config)
             symbols = qpsk.bits2symbols(codeword)
 
             # Channel (different seed per frame)
@@ -182,7 +186,7 @@ class TestFullChain:
             # RX
             sigma_sq = qpsk.estimate_noise_variance(rx_symbols)
             llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
-            decoded = ldpc.decode(llrs.flatten(), max_iterations=50)
+            decoded = ldpc.decode(llrs.flatten(), ldpc_config, max_iterations=50)
 
             total_errors += np.sum(decoded != message)
             total_bits += len(message)
@@ -196,24 +200,22 @@ class TestComponentInterfaces:
 
     def test_ldpc_output_matches_qpsk_input(self):
         """LDPC codeword length should be even for QPSK (2 bits/symbol)."""
-        config = LDPCConfig(n=648, k=324, Z=27, code_rate=CodeRates.HALF_RATE)
-        ldpc = LDPC(config)
-        assert ldpc.n % 2 == 0, "Codeword length must be even for QPSK"
+        config = LDPCConfig(k=324, code_rate=CodeRates.HALF_RATE)
+        assert config.n % 2 == 0, "Codeword length must be even for QPSK"
 
     def test_qpsk_llr_shape_matches_ldpc_input(self):
         """QPSK soft output shape should match LDPC decoder input."""
         qpsk = QPSK()
-        config = LDPCConfig(n=648, k=324, Z=27, code_rate=CodeRates.HALF_RATE)
-        ldpc = LDPC(config)
+        config = LDPCConfig(k=324, code_rate=CodeRates.HALF_RATE)
 
         # 648 bits = 324 QPSK symbols
-        n_symbols = ldpc.n // 2
+        n_symbols = config.n // 2
         symbols = np.random.randn(n_symbols) + 1j * np.random.randn(n_symbols)
 
         llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=0.1)
 
         assert llrs.shape == (n_symbols, 2)
-        assert llrs.flatten().shape[0] == ldpc.n
+        assert llrs.flatten().shape[0] == config.n
 
     def test_pulse_shaper_preserves_symbol_count(self):
         """Pulse shaper should preserve symbol timing."""
