@@ -1,12 +1,11 @@
-import numpy as np
 import adi
 
 sample_rate = 1e6 # Hz
 center_freq = 915e6 # Hz (PlutoSDR range: 325 MHz - 3.8 GHz)
 num_samps = 10000 # number of samples returned per call to rx()
 
-sdr = adi.Pluto('ip:192.168.2.1')
-sdr.gain_control_mode_chan0 = 'manual'
+sdr = adi.Pluto("ip:192.168.2.1")
+sdr.gain_control_mode_chan0 = "manual"
 sdr.rx_hardwaregain_chan0 = 70.0 # dB
 sdr.rx_lo = int(center_freq)
 sdr.sample_rate = int(sample_rate)
