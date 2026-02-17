@@ -1,11 +1,11 @@
 """Construct frames with header data, pilots, and error correction information."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 import numpy as np
-from .channel_coding import CodeRates
+from .channel_coding import CodeRates, LDPC, LDPCConfig
 
 
 def int_to_bits(n: int, length: int) -> list[int]:
@@ -29,6 +29,30 @@ class FrameHeader:
     mod_scheme: ModulationSchemes
     crc: int
     crc_passed: bool = True
+
+
+@dataclass
+class FrameHeaderConfig:
+    """Bit-width configuration for frame header fields."""
+    payload_length_bits: int = 8
+    src_bits: int = 4
+    dst_bits: int = 4
+    mod_scheme_bits: int = 3
+    reserved_bits: int = 1
+    crc_bits: int = 4
+    # TODO: Add coding rate field and reduce src and dst bit lengths, and increase payload length
+    header_total_size: int = field(init=False)
+
+    def __post_init__(self):
+        self.header_total_size = (
+            self.payload_length_bits +
+            self.src_bits +
+            self.dst_bits +
+            self.mod_scheme_bits +
+            self.reserved_bits +
+            self.crc_bits
+        )
+
 
 class FrameHeaderConstructor:
     """Encode and decode frame header fields."""
@@ -66,16 +90,13 @@ class FrameHeaderConstructor:
 
     def encode(
         self,
-        length: int,
-        src: int,
-        dst: int,
-        mod_scheme: ModulationSchemes,
+        header: FrameHeader
     ) -> list[int]:
         """Encode frame header."""
-        length_bits = int_to_bits(length, self.length_bits)
-        src_bits = int_to_bits(src, self.src_bits)
-        dst_bits = int_to_bits(dst, self.dst_bits)
-        mod_scheme_bits = int_to_bits(mod_scheme.value, self.mod_scheme_bits)
+        length_bits = int_to_bits(header.length, self.length_bits)
+        src_bits = int_to_bits(header.src, self.src_bits)
+        dst_bits = int_to_bits(header.dst, self.dst_bits)
+        mod_scheme_bits = int_to_bits(header.mod_scheme.value, self.mod_scheme_bits)
 
         header_data_bits = length_bits + src_bits + dst_bits + mod_scheme_bits + [0]
         data_bits = "".join([str(bit) for bit in header_data_bits])
@@ -150,16 +171,6 @@ class FrameHeaderConstructor:
         return crc.tolist() if isinstance(crc, np.ndarray) else crc
 
 
-@dataclass
-class FrameHeaderConfig:
-    """Bit-width configuration for frame header fields."""
-    payload_length_bits: int = 8
-    src_bits: int = 4
-    dst_bits: int = 4
-    mod_scheme_bits: int = 3
-    crc_bits: int = 4
-
-
 class FrameConstructor:
     """Build and parse frames based on a configured header format."""
 
@@ -184,10 +195,33 @@ class FrameConstructor:
             self.header_config.crc_bits,
         )
 
-    def encode(self, data: np.ndarray) -> np.ndarray:
-        """Encode data into a frame."""
-        raise NotImplementedError
+        # TODO: Make config not fixed to one length, in order to facilitate multiple header lengths and coding rates
+        self.ldpc_config = LDPCConfig(
+            n=648,
+            k=324,
+            Z=27,
+            code_rate=CodeRates.HALF_RATE
+        )
+        self.LDPC = LDPC(self.ldpc_config)
 
-    def decode(self, _frame: np.ndarray) -> np.ndarray:
+    def encode(self, header: FrameHeader, payload: np.ndarray) -> np.ndarray:
+        """Encode data into a frame."""
+        header_bits = self.frame_header_constructor.encode(header)
+        header_encoded = header_bits # TODO: Add header specific channel coding
+
+        assert payload.shape[0] == self.ldpc_config.k # TODO: make this dynamic
+        payload_encoded = self.LDPC.encode(payload)
+
+        return np.concatenate([header_encoded, payload_encoded]) 
+
+    def decode(self, _frame: np.ndarray) -> tuple[FrameHeader, np.ndarray]:
         """Decode a frame to extract data bits."""
-        return np.array([], dtype=int)
+        header_bits_encoded = _frame[:self.header_config.header_total_size]
+        payload_bits_encoded = _frame[self.header_config.header_total_size:]
+
+        # TODO: header specific channel decoding
+        header_bits = header_bits_encoded
+        header = self.frame_header_constructor.decode(header_bits)
+        payload_bits = self.LDPC.decode(payload_bits_encoded)
+
+        return (header, payload_bits)
