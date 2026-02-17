@@ -11,126 +11,14 @@ from modules.channel import (
     ProfileOverrides,
     ProfileRequest,
 )
-from modules.synchronization import ZadofChu
+from modules.synchronization import Synchronizer, SyncrhonizerConfig
 
 # Fixed system parameters
 SAMPLE_RATE = 1e6
-N_SHORT = 19
-N_LONG = 139
-ZC_ROOT = 7
-N_SHORT_REPS = 8  # Number of short ZC repetitions for CFO averaging
 DELAY_PADDING = 10000
 
-zc = ZadofChu()
-zc_short = zc.generate(ZC_ROOT, N_SHORT)
-zc_long = zc.generate(ZC_ROOT, N_LONG)
-
-
-def matched_filter(rx: np.ndarray, template: np.ndarray) -> np.ndarray:
-    """Cross-correlation based matched filter. Returns correlation magnitude."""
-    # Use scipy-style 'valid' correlation via FFT for efficiency
-    n_fft = len(rx)
-    template_padded = np.zeros(n_fft, dtype=complex)
-    template_padded[:len(template)] = template
-
-    corr = np.fft.ifft(np.fft.fft(rx) * np.conj(np.fft.fft(template_padded)))
-    return corr
-
-
-def detect_preamble(rx: np.ndarray, zc_short: np.ndarray, zc_long: np.ndarray,
-                    n_short: int, n_short_reps: int, sample_rate: float) -> dict:
-    """
-    Matched-filter based preamble detection with multiple short ZC repetitions.
-
-    1. Cross-correlate with zc_short to find all repetition peaks
-    2. Estimate CFO from phase differences between adjacent peaks (averaged)
-    3. Correct CFO
-    4. Cross-correlate with zc_long for fine timing
-
-    Returns dict with timing and CFO estimates.
-    """
-    # Stage 1: Matched filter with short ZC
-    corr_short = matched_filter(rx, zc_short)
-    corr_mag = np.abs(corr_short)
-
-    # Find the global maximum - this is robust even at low SNR
-    global_max_idx = np.argmax(corr_mag)
-
-    # Find which repetition the global max belongs to, then locate all peaks
-    # Work backwards to find the first peak
-    peak_indices = []
-
-    # Start from global max and search backwards for earlier peaks
-    current_idx = global_max_idx
-    while current_idx >= n_short:
-        search_start = current_idx - n_short - 2
-        search_end = current_idx - n_short + 3
-        if search_start < 0:
-            break
-        prev_region = corr_mag[search_start:search_end]
-        if len(prev_region) > 0 and np.max(prev_region) > 0.5 * corr_mag[global_max_idx]:
-            current_idx = search_start + np.argmax(prev_region)
-        else:
-            break
-
-    # current_idx is now at (or near) the first peak
-    first_peak_idx = current_idx
-
-    # Now find all n_short_reps peaks going forward
-    peak_indices = [first_peak_idx]
-    for i in range(1, n_short_reps):
-        search_start = peak_indices[-1] + n_short - 2
-        search_end = min(len(corr_mag), peak_indices[-1] + n_short + 3)
-        if search_end <= search_start:
-            break
-        region = corr_mag[search_start:search_end]
-        next_peak = search_start + np.argmax(region)
-        peak_indices.append(next_peak)
-
-    if len(peak_indices) < 2:
-        return {"success": False, "reason": "couldn't find enough ZC peaks"}
-
-    # CFO estimation: average phase differences between adjacent peaks
-    phase_diffs = []
-    for i in range(len(peak_indices) - 1):
-        p1 = corr_short[peak_indices[i]]
-        p2 = corr_short[peak_indices[i + 1]]
-        phase_diffs.append(np.angle(p2 * np.conj(p1)))
-
-    # Average the phase differences
-    avg_phase_diff = np.mean(phase_diffs)
-    cfo_hat_hz = avg_phase_diff / (2 * np.pi * n_short) * sample_rate
-
-    # Coarse timing estimate (first peak)
-    d_hat = peak_indices[0]
-
-    # Stage 2: CFO correction
-    n_full = np.arange(len(rx))
-    cfo_hat_norm = avg_phase_diff / (2 * np.pi * n_short)
-    rx_corr = rx * np.exp(-1j * 2 * np.pi * cfo_hat_norm * n_full)
-
-    # Stage 3: Fine timing with long ZC matched filter
-    corr_long = matched_filter(rx_corr, zc_long)
-    corr_long_mag = np.abs(corr_long)
-
-    # Search for long ZC peak starting after all short ZCs
-    search_start = d_hat + n_short_reps * n_short - 5
-    search_end = min(len(corr_long_mag), d_hat + n_short_reps * n_short + 10)
-
-    if search_start < 0:
-        search_start = 0
-
-    fine_region = corr_long_mag[search_start:search_end]
-    timing_hat = search_start + np.argmax(fine_region)
-
-    return {
-        "success": True,
-        "d_hat": d_hat,
-        "cfo_hat_hz": cfo_hat_hz,
-        "timing_hat": timing_hat,
-        "peak_indices": peak_indices,
-        "n_phase_diffs": len(phase_diffs),
-    }
+config = SyncrhonizerConfig()
+sync = Synchronizer(config)
 
 
 def run_sync(actual_delay: float, actual_cfo: float,
@@ -148,34 +36,27 @@ def run_sync(actual_delay: float, actual_cfo: float,
     )
     channel = ChannelModel.from_profile(profile=ChannelProfile.IDEAL, request=request)
 
-    # Build preamble: N_SHORT_REPS copies of zc_short, then zc_long
-    preamble_short = np.tile(zc_short, N_SHORT_REPS)
-    tx = np.concatenate([preamble_short, zc_long, np.zeros(DELAY_PADDING, dtype=complex)])
+    tx = np.concatenate([sync.preamble, np.zeros(DELAY_PADDING, dtype=complex)])
     rx = channel.apply(tx)
 
-    # Run matched-filter based detection
-    result = detect_preamble(rx, zc_short, zc_long, N_SHORT, N_SHORT_REPS, SAMPLE_RATE)
+    result = sync.detect_preamble(rx, SAMPLE_RATE)
 
-    if not result["success"]:
-        return {"success": False, "reason": result["reason"]}
+    if not result.success:
+        return {"success": False, "reason": result.reason}
 
-    d_hat = result["d_hat"]
-    cfo_hat_hz = result["cfo_hat_hz"]
-    timing_hat = result["timing_hat"]
-
-    true_zc_long_start = actual_delay + N_SHORT_REPS * N_SHORT
+    true_zc_long_start = actual_delay + config.N_SHORT_REPS * config.N_SHORT
 
     return {
         "success": True,
         "delay_true": actual_delay,
-        "delay_hat": d_hat,
-        "delay_error": d_hat - actual_delay,
+        "delay_hat": result.d_hat,
+        "delay_error": result.d_hat - actual_delay,
         "cfo_true_hz": actual_cfo,
-        "cfo_hat_hz": cfo_hat_hz,
-        "cfo_error_hz": cfo_hat_hz - actual_cfo,
+        "cfo_hat_hz": result.cfo_hat_hz,
+        "cfo_error_hz": result.cfo_hat_hz - actual_cfo,
         "timing_true": true_zc_long_start,
-        "timing_hat": timing_hat,
-        "timing_error": timing_hat - true_zc_long_start,
+        "timing_hat": result.timing_hat,
+        "timing_error": result.timing_hat - true_zc_long_start,
         "snr": snr,
         "seed": seed,
     }
