@@ -26,7 +26,9 @@ libiio:
 
 libad9361:
 	cd vendor/libad9361-iio && mkdir -p build && cd build && \
-		cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 .. && make -j$$(nproc) ad9361 && \
+		cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+			-DLIBIIO_INCLUDEDIR=$$(pkg-config --variable=includedir libiio)/iio \
+			.. && make -j$$(nproc) ad9361 && \
 		sudo cp -P libad9361.so* /usr/local/lib/ && \
 		sudo cp ../ad9361.h /usr/local/include/ && \
 		sudo ldconfig

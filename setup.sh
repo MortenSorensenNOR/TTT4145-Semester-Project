@@ -16,7 +16,8 @@ cd ../../..
 echo "==> Building libad9361-iio..."
 cd vendor/libad9361-iio
 mkdir -p build && cd build
-cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ..
+LIBIIO_INCLUDE=$(pkg-config --variable=includedir libiio)/iio
+cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DLIBIIO_INCLUDEDIR=$LIBIIO_INCLUDE ..
 make -j$(nproc) ad9361
 sudo cp -P libad9361.so* /usr/local/lib/
 sudo cp ../ad9361.h /usr/local/include/
