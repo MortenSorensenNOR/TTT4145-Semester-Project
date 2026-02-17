@@ -1,0 +1,6 @@
+[submodule "vendor/libad9361-iio"]
+	path = vendor/libad9361-iio
+	url = https://github.com/analogdevicesinc/libad9361-iio.git
+[submodule "vendor/libiio"]
+	path = vendor/libiio
+	url = https://github.com/analogdevicesinc/libiio.git
