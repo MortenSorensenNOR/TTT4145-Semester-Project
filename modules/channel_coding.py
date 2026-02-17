@@ -51,14 +51,58 @@ class Golay:
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,   1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1],
         ])
 
+        self.P = self.matrix[:, 12:]
+        self.H = np.hstack([self.P.T, np.eye(12, dtype=int)])
+
     def encode(self, message: np.ndarray) -> np.ndarray:
         assert message.shape[0] % self.message_length == 0, "Message must have a length that is a multiple of 12"
-        return np.array([])
+        assert np.all((message == 0) | (message == 1)), "Message must be binary"
+        blocks = message.reshape(-1, 12)          # shape (num_blocks, 12)
+        encoded = (blocks @ self.matrix) % 2      # shape (num_blocks, 24)
+        return encoded.flatten()
 
-    def decode(self, llr_channel: np.ndarray) -> np.ndarray:
-        assert llr_channel.shape[0] % self.message_length == 0, "Recieved signal must have a length that is a multiple of 12"
+    def decode(self, recieved: np.ndarray) -> np.ndarray:
+        assert recieved.shape[0] % self.message_length == 0, "Recieved signal must have a length that is a multiple of 12"
 
-        return np.array([])
+        decoded = []
+        for block_idx in range(recieved.shape[0] // self.block_length):
+            r = recieved[block_idx*24:(block_idx+1)*24]
+            corrected = self._decode_block(r)
+            decoded.append(corrected[:12])
+
+        return np.concatenate(decoded)
+
+    def _decode_block(self, block):
+        def weight(v):
+            return int(np.sum(v))
+
+        def unit(i, n):
+            return np.concatenate([np.array([1]), np.zeros(n-1, dtype=int)])
+
+        s = (block @ self.H.T) % 2
+        if weight(s) <= 3:
+            e = np.concatenate([s, np.zeros(12, dtype=int)])
+            return (block + e) % 2
+
+        for i in range(12):
+            candidate = (2 + self.P.T[:, i]) % 2
+            if weight(candidate) <= 2:
+                e = np.concatenate([candidate, unit(i, 12)])
+                return (block + e) % 2
+        sP = (s @ self.P) % 2
+
+        if weight(sP) <= 3:
+            e = np.concatenate([np.zeros(12, dtype=int), sP])
+            return (block + e) % 2
+
+        for i in range(12):
+            candidate = (sP + self.P[i]) % 2
+            if weight(candidate) <= 2:
+                e = np.concatenate([unit(i, 12), candidate])
+                return (block + e) % 2
+
+        raise ValueError("More than 3 bit erros in block")
+        
 
 """
 LDPC channel coding for payload

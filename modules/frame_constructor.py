@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 import numpy as np
-from .channel_coding import CodeRates, LDPC, LDPCConfig
+from .channel_coding import CodeRates, LDPC, LDPCConfig, Golay
 
 
 def int_to_bits(n: int, length: int) -> list[int]:
@@ -99,7 +99,7 @@ class FrameHeaderConstructor:
     def encode(
         self,
         header: FrameHeader
-    ) -> list[int]:
+    ) -> np.ndarray:
         """Encode frame header."""
         length_bits = int_to_bits(header.length, self.length_bits)
         src_bits = int_to_bits(header.src, self.src_bits)
@@ -112,7 +112,7 @@ class FrameHeaderConstructor:
         crc_bits = self._crc_calc(data_bits)
         header_data_bits += int_to_bits(crc_bits, self.crc_bits)
 
-        return header_data_bits
+        return np.array(header_data_bits, dtype=int)
 
     def decode(self, header: np.ndarray) -> FrameHeader:
         """Decode frame header."""
@@ -224,11 +224,12 @@ class FrameConstructor:
             code_rate=CodeRates.HALF_RATE
         )
         self.LDPC = LDPC(self.ldpc_config)
+        self.golay = Golay()
 
     def encode(self, header: FrameHeader, payload: np.ndarray) -> np.ndarray:
         """Encode data into a frame."""
         header_bits = self.frame_header_constructor.encode(header)
-        header_encoded = header_bits # TODO: Add header specific channel coding
+        header_encoded = self.golay.encode(header_bits)
 
         assert payload.shape[0] == self.ldpc_config.k # TODO: make this dynamic
         payload_encoded = self.LDPC.encode(payload)
@@ -241,7 +242,7 @@ class FrameConstructor:
         payload_bits_encoded = _frame[self.header_config.header_total_size:]
 
         # TODO: header specific channel decoding
-        header_bits = header_bits_encoded
+        header_bits = self.golay.decode(header_bits_encoded)
         header = self.frame_header_constructor.decode(header_bits)
         payload_bits = self.LDPC.decode(payload_bits_encoded)
 
