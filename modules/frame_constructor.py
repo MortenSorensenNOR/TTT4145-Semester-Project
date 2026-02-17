@@ -241,7 +241,6 @@ class FrameConstructor:
         header_bits_encoded = _frame[:self.header_config.header_total_size]
         payload_bits_encoded = _frame[self.header_config.header_total_size:]
 
-        # TODO: header specific channel decoding
         header_bits = self.golay.decode(header_bits_encoded)
         header = self.frame_header_constructor.decode(header_bits)
         payload_bits = self.LDPC.decode(payload_bits_encoded)
