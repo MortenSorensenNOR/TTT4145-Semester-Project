@@ -12,13 +12,9 @@
 
 from dataclasses import dataclass, field
 import numpy as np
-import matplotlib.pyplot as plt
 from sympy import isprime
 
-from modules.modulation import QPSK
-from modules.plotting import plot_iq
-
-class ZadofChu:
+class ZadoffChu:
     """Zadoff-Chu sequence generator."""
     def generate(self, u: int = 7, N_ZC: int = 61) -> np.ndarray:
         """Generate a sequence of length `N_ZC` of root u."""
@@ -30,14 +26,14 @@ class ZadofChu:
         return x
 
 @dataclass
-class SyncrhonizerConfig:
+class SynchronizerConfig:
     N_SHORT: int = 19
     N_LONG: int = 139
     ZC_ROOT: int = 7
     N_SHORT_REPS: int = 8
 
 @dataclass
-class SyncrhonizationResult:
+class SynchronizationResult:
     success: bool = True
     reason: str = ""
     d_hat: int = 0
@@ -49,7 +45,7 @@ class SyncrhonizationResult:
 class Synchronizer:
     """Placeholder synchronization pipeline."""
 
-    def __init__(self, config: SyncrhonizerConfig) -> None:
+    def __init__(self, config: SynchronizerConfig) -> None:
         """Initialize the synchronizer placeholder."""
         self.config = config
         self.N_SHORT = config.N_SHORT
@@ -57,7 +53,7 @@ class Synchronizer:
         self.ZC_ROOT = config.ZC_ROOT
         self.N_SHORT_REPS = config.N_SHORT_REPS
 
-        self.zc = ZadofChu()
+        self.zc = ZadoffChu()
         self.zc_short = self.zc.generate(self.ZC_ROOT, self.N_SHORT)
         self.zc_long = self.zc.generate(self.ZC_ROOT, self.N_LONG)
         self.preamble = self.build_preamble()
@@ -67,13 +63,13 @@ class Synchronizer:
         preamble = np.concatenate([preamble_short, self.zc_long])
         return preamble
 
-    def detect_preamble(self, rx: np.ndarray, sample_rate: float) -> SyncrhonizationResult:
-        """Matched filter based preamble detection with multiple short ZC repititions"""
+    def detect_preamble(self, rx: np.ndarray, sample_rate: float) -> SynchronizationResult:
+        """Matched filter based preamble detection with multiple short ZC repetitions."""
         corr_short = self._matched_filter(rx, self.zc_short)
         corr_mag = np.abs(corr_short)
         global_max_idx = np.argmax(corr_mag)
 
-        # find the peaks of all the repotiions of zc_short
+        # find the peaks of all the repetitions of zc_short
         peak_indices = []
         current_idx = global_max_idx
         while current_idx >= self.N_SHORT:
@@ -100,7 +96,7 @@ class Synchronizer:
             peak_indices.append(next_peak)
 
         if len(peak_indices) < 2:
-            return SyncrhonizationResult(
+            return SynchronizationResult(
                 success=False,
                 reason = "Couldn't find enough ZC peaks"
             )
@@ -137,7 +133,7 @@ class Synchronizer:
         fine_region = corr_long_mag[search_start:search_end]
         timing_hat = search_start + np.argmax(fine_region)
 
-        return SyncrhonizationResult(
+        return SynchronizationResult(
             success = True,
             d_hat = d_hat,
             cfo_hat_hz = cfo_hat,
@@ -147,11 +143,11 @@ class Synchronizer:
         )
 
     def _matched_filter(self, rx: np.ndarray, signal: np.ndarray) -> np.ndarray:
-       """Cross-correlation mached filter"""
-       n_fft = len(rx)
-       signal_padded = np.zeros(n_fft, dtype=complex)
-       signal_padded[:len(signal)] = signal
+        """Cross-correlation matched filter."""
+        n_fft = len(rx)
+        signal_padded = np.zeros(n_fft, dtype=complex)
+        signal_padded[:len(signal)] = signal
 
-       corr = np.fft.ifft(np.fft.fft(rx) * np.conj(np.fft.fft(signal_padded)))
-       return corr
+        corr = np.fft.ifft(np.fft.fft(rx) * np.conj(np.fft.fft(signal_padded)))
+        return corr
 

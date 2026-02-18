@@ -13,7 +13,7 @@ from modules.frame_constructor import (
 from modules.channel_coding import CodeRates, Golay
 from modules.channel import ChannelConfig, ChannelModel
 from modules.modulation import QPSK
-from modules.pulseshaping import PulseShaper
+from modules.pulse_shaping import PulseShaper
 
 # --- FIXTURES ---
 

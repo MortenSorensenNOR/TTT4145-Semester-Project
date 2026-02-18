@@ -27,13 +27,13 @@ class BPSK:
 
     def plot_constellation(self) -> None:
         """Plot BPSK constellation diagram."""
-        for i in range(len(self.symbols)):
-            plt.plot(np.real(self.symbols), np.imag(self.symbols), "bo")
-            plt.xlabel("Real Part")
-            plt.ylabel("Imaginary Part")
+        plt.plot(np.real(self.symbols), np.imag(self.symbols), "bo")
+        plt.xlabel("Real Part")
+        plt.ylabel("Imaginary Part")
+        for i, symbol in enumerate(self.symbols):
             plt.text(
-                np.real(self.symbols[i]),
-                np.imag(self.symbols[i]) - 0.1,
+                np.real(symbol),
+                np.imag(symbol) - 0.1,
                 str(i),
                 horizontalalignment="center",
                 verticalalignment="top",
@@ -285,20 +285,17 @@ class QAM:
 
     def plot_constellation(self) -> None:
         """Plot QAM constellation diagram."""
-        for i in range(np.size(self.symbol_mapping)):
-            plt.plot(np.real(self.symbol_mapping), np.imag(self.symbol_mapping), " bo")
-            plt.xlabel("Real Part")
-            plt.ylabel("Imaginary Part")
+        plt.plot(np.real(self.symbol_mapping), np.imag(self.symbol_mapping), "bo")
+        plt.xlabel("Real Part")
+        plt.ylabel("Imaginary Part")
+        for i, symbol in enumerate(self.symbol_mapping):
+            label = "".join(str(int(b)) for b in self.bit_mapping[i, :])
             plt.text(
-                np.real(self.symbol_mapping[i]),
-                np.imag(self.symbol_mapping[i]) - 0.02,
-                np.array2string(self.bit_mapping[i, :])
-                .replace("[", "")
-                .replace("]", "")
-                .replace(".", "")
-                .replace(" ", ""),
+                np.real(symbol),
+                np.imag(symbol) - 0.02,
+                label,
                 horizontalalignment="center",
                 verticalalignment="top",
             )
-            plt.plot([0, 0], [-1, 1], color=(0, 0, 0), linewidth=0.5)
-            plt.plot([-1, 1], [0, 0], color=(0, 0, 0), linewidth=0.5)
+        plt.plot([0, 0], [-1, 1], color=(0, 0, 0), linewidth=0.5)
+        plt.plot([-1, 1], [0, 0], color=(0, 0, 0), linewidth=0.5)

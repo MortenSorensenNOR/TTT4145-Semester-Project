@@ -4,6 +4,7 @@ Uses matched-filter (cross-correlation) based detection for robust performance
 at low SNR. This is the standard approach used in WiFi, LTE, and 5G systems.
 """
 import numpy as np
+import pytest
 import matplotlib.pyplot as plt
 from modules.channel import (
     ChannelModel,
@@ -11,13 +12,13 @@ from modules.channel import (
     ProfileOverrides,
     ProfileRequest,
 )
-from modules.synchronization import Synchronizer, SyncrhonizerConfig
+from modules.synchronization import Synchronizer, SynchronizerConfig, ZadoffChu
 
 # Fixed system parameters
 SAMPLE_RATE = 1e6
 DELAY_PADDING = 10000
 
-config = SyncrhonizerConfig()
+config = SynchronizerConfig()
 sync = Synchronizer(config)
 
 
@@ -60,6 +61,77 @@ def run_sync(actual_delay: float, actual_cfo: float,
         "snr": snr,
         "seed": seed,
     }
+
+
+# =============================================================================
+# Pytest-discoverable tests
+# =============================================================================
+
+
+class TestZadoffChu:
+    """Tests for Zadoff-Chu sequence generation."""
+
+    def test_sequence_length(self):
+        """Generated sequence should have the requested length."""
+        zc = ZadoffChu()
+        seq = zc.generate(u=7, N_ZC=61)
+        assert len(seq) == 61
+
+    def test_constant_amplitude(self):
+        """Zadoff-Chu sequences have constant amplitude."""
+        zc = ZadoffChu()
+        seq = zc.generate(u=7, N_ZC=61)
+        np.testing.assert_allclose(np.abs(seq), 1.0, atol=1e-10)
+
+    def test_different_roots_are_different(self):
+        """Different root indices should produce different sequences."""
+        zc = ZadoffChu()
+        seq1 = zc.generate(u=7, N_ZC=61)
+        seq2 = zc.generate(u=11, N_ZC=61)
+        assert not np.allclose(seq1, seq2)
+
+
+class TestSynchronizer:
+    """Tests for preamble detection and CFO estimation."""
+
+    def test_preamble_length(self):
+        """Preamble should be N_SHORT_REPS * N_SHORT + N_LONG samples."""
+        expected = config.N_SHORT_REPS * config.N_SHORT + config.N_LONG
+        assert len(sync.preamble) == expected
+
+    def test_detection_no_impairments(self):
+        """Detection should succeed with no channel impairments."""
+        result = run_sync(actual_delay=0, actual_cfo=0, snr=30.0, seed=42)
+        assert result["success"]
+
+    def test_detection_with_delay(self):
+        """Detection should succeed and estimate delay correctly."""
+        result = run_sync(actual_delay=500, actual_cfo=0, snr=30.0, seed=42)
+        assert result["success"]
+        assert abs(result["delay_error"]) <= 2
+
+    def test_cfo_estimation_high_snr(self):
+        """CFO estimate should be accurate at high SNR."""
+        result = run_sync(actual_delay=100, actual_cfo=5000.0, snr=20.0, seed=42)
+        assert result["success"]
+        assert abs(result["cfo_error_hz"]) < 200
+
+    @pytest.mark.parametrize("snr", [5.0, 10.0, 20.0])
+    def test_detection_at_various_snr(self, snr):
+        """Detection should succeed at moderate-to-high SNR."""
+        result = run_sync(actual_delay=1000, actual_cfo=1000.0, snr=snr, seed=123)
+        assert result["success"]
+
+    def test_fine_timing_accuracy(self):
+        """Fine timing (long ZC) should be within a few samples."""
+        result = run_sync(actual_delay=200, actual_cfo=0, snr=20.0, seed=42)
+        assert result["success"]
+        assert abs(result["timing_error"]) <= 3
+
+
+# =============================================================================
+# Sweep helpers (used by __main__ for detailed analysis)
+# =============================================================================
 
 
 def run_sweep(cfo_values, snr_values, delays, n_seeds=10) -> list[dict]:

@@ -11,7 +11,7 @@ from scipy import signal
 
 from modules.channel_coding import LDPC, LDPCConfig, CodeRates
 from modules.modulation import QPSK
-from modules.pulseshaping import PulseShaper, rrc_filter
+from modules.pulse_shaping import PulseShaper, rrc_filter
 from modules.channel import ChannelModel, ChannelConfig
 from modules.util import ebn0_to_snr
 

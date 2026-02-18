@@ -9,7 +9,7 @@ from modules.channel import (
     ProfileRequest,
 )
 from modules.modulation import QPSK
-from modules.pulseshaping import PulseShaper
+from modules.pulse_shaping import PulseShaper
 
 BANDWIDTH_HZ = 1e6
 ROLL_OFF = 0.25

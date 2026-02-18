@@ -31,7 +31,7 @@ Golay channel coding for frame header
 """
 
 class Golay:
-    """Golay channel coding for the farme header. Since frame header is 24 bits, the header will be encoded in two blocks."""
+    """Golay channel coding for the frame header. Since frame header is 24 bits, the header will be encoded in two blocks."""
 
     def __init__(self) -> None:
         self.block_length = 24
@@ -61,12 +61,12 @@ class Golay:
         encoded = (blocks @ self.matrix) % 2      # shape (num_blocks, 24)
         return encoded.flatten()
 
-    def decode(self, recieved: np.ndarray) -> np.ndarray:
-        assert recieved.shape[0] % self.message_length == 0, "Recieved signal must have a length that is a multiple of 12"
+    def decode(self, received: np.ndarray) -> np.ndarray:
+        assert received.shape[0] % self.message_length == 0, "Received signal must have a length that is a multiple of 12"
 
         decoded = []
-        for block_idx in range(recieved.shape[0] // self.block_length):
-            r = recieved[block_idx*24:(block_idx+1)*24]
+        for block_idx in range(received.shape[0] // self.block_length):
+            r = received[block_idx*24:(block_idx+1)*24]
             corrected = self._decode_block(r)
             decoded.append(corrected[:12])
 
@@ -107,7 +107,7 @@ class Golay:
                 e = np.concatenate([candidate, unit(i, 12)])
                 return (block + e) % 2
 
-        raise ValueError("More than 3 bit erros in block")
+        raise ValueError("More than 3 bit errors in block")
         
 
 """
@@ -318,10 +318,6 @@ class LDPC:
     # Class-level cache: LDPCConfig -> (H, check_neighbors, var_neighbors)
     _cache: dict = {}
     _base_matrix_generator = LDPC_BaseMatrix()
-
-    def __init__(self) -> None:
-        """Initialize the LDPC codec."""
-        pass
 
     def get_supported_payload_lengths(self, code_rate: CodeRates = CodeRates.HALF_RATE) -> np.ndarray:
         """Return supported message lengths (k) for LDPC.

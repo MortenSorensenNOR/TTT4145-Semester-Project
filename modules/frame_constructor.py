@@ -56,6 +56,23 @@ class FrameHeaderConfig:
         )
 
 
+def _bits_to_int(bits: list[int]) -> int:
+    """Convert a bit list to an integer."""
+    return int("".join(str(b) for b in bits), 2)
+
+
+def _closest_payload_length(ldpc: LDPC, length: int, code_rate: CodeRates) -> int:
+    """Find the smallest supported LDPC payload length >= length."""
+    payload_lengths = ldpc.get_supported_payload_lengths(code_rate)
+    result = next((k for k in sorted(payload_lengths) if k >= length), None)
+    if result is None:
+        raise ValueError(
+            f"Unsupported payload length {length}. "
+            f"Greater than max length {payload_lengths[-1]}"
+        )
+    return result
+
+
 class FrameHeaderConstructor:
     """Encode and decode frame header fields."""
     def __init__(
@@ -75,7 +92,7 @@ class FrameHeaderConstructor:
         self.coding_rate_bits = coding_rate_bits
         self.crc_bits = crc_bits
 
-        self.header_length = (
+        raw_length = (
             self.length_bits
             + self.src_bits
             + self.dst_bits
@@ -83,9 +100,7 @@ class FrameHeaderConstructor:
             + self.coding_rate_bits
             + self.crc_bits
         )
-        raw_length = self.header_length
-
-        self.header_length = 2 * int(np.ceil(self.header_length / 2))
+        self.header_length = 2 * int(np.ceil(raw_length / 2))
         self.reserved_bits = self.header_length - raw_length
 
     def _crc_calc(self, data_bits: str, poly: int = 0b10011) -> int:
@@ -96,10 +111,13 @@ class FrameHeaderConstructor:
                 reg ^= poly << i
         return reg & 0b1111
 
-    def encode(
-        self,
-        header: FrameHeader
-    ) -> np.ndarray:
+    @staticmethod
+    def _extract_field(header: np.ndarray, offset: int, width: int) -> list[int]:
+        """Extract a bit field from the header array."""
+        bits = header[offset : offset + width]
+        return bits.tolist() if isinstance(bits, np.ndarray) else bits
+
+    def encode(self, header: FrameHeader) -> np.ndarray:
         """Encode frame header."""
         length_bits = int_to_bits(header.length, self.length_bits)
         src_bits = int_to_bits(header.src, self.src_bits)
@@ -107,88 +125,55 @@ class FrameHeaderConstructor:
         mod_scheme_bits = int_to_bits(header.mod_scheme.value, self.mod_scheme_bits)
         coding_rate_bits = int_to_bits(header.coding_rate.value, self.coding_rate_bits)
 
-        header_data_bits = length_bits + src_bits + dst_bits + mod_scheme_bits + coding_rate_bits + [0] * self.reserved_bits
-        data_bits = "".join([str(bit) for bit in header_data_bits])
-        crc_bits = self._crc_calc(data_bits)
-        header_data_bits += int_to_bits(crc_bits, self.crc_bits)
+        data_bits = (
+            length_bits + src_bits + dst_bits
+            + mod_scheme_bits + coding_rate_bits
+            + [0] * self.reserved_bits
+        )
+        crc = self._crc_calc("".join(str(b) for b in data_bits))
+        data_bits += int_to_bits(crc, self.crc_bits)
 
-        return np.array(header_data_bits, dtype=int)
+        return np.array(data_bits, dtype=int)
 
     def decode(self, header: np.ndarray) -> FrameHeader:
         """Decode frame header."""
-        self.idx = 0
-        length_bits = self._get_length_bits(header)
-        src_bits = self._get_src_dst_bits(header)
-        dst_bits = self._get_src_dst_bits(header)
-        mod_scheme_bits = self._get_mod_scheme_bits(header)
-        coding_rate_bits = self._get_coding_rate_bits(header)
-        self.idx += self.reserved_bits  # skip padding bit
-        crc_bits = self._get_crc_bits(header)
+        offset = 0
+        field_widths = [
+            self.length_bits, self.src_bits, self.dst_bits,
+            self.mod_scheme_bits, self.coding_rate_bits,
+        ]
+        fields: list[list[int]] = []
+        for width in field_widths:
+            fields.append(self._extract_field(header, offset, width))
+            offset += width
 
-        # Convert bit lists to integers
-        length = int("".join(str(b) for b in length_bits), 2)
-        src = int("".join(str(b) for b in src_bits), 2)
-        dst = int("".join(str(b) for b in dst_bits), 2)
-        mod_scheme = ModulationSchemes(
-            int("".join(str(b) for b in mod_scheme_bits), 2),
-        )
-        coding_rate = CodeRates(
-            int("".join(str(b) for b in coding_rate_bits), 2),
-        )
-        crc = int("".join(str(b) for b in crc_bits), 2)
+        length_bits, src_bits, dst_bits, mod_scheme_bits, coding_rate_bits = fields
 
-        # check crc
-        header_data_bits = "".join(
-            [
-                str(bit)
-                for bit in (length_bits + src_bits + dst_bits + mod_scheme_bits + coding_rate_bits + [0] * self.reserved_bits)
-            ],
+        offset += self.reserved_bits
+        crc_bits = self._extract_field(header, offset, self.crc_bits)
+
+        length = _bits_to_int(length_bits)
+        src = _bits_to_int(src_bits)
+        dst = _bits_to_int(dst_bits)
+        mod_scheme = ModulationSchemes(_bits_to_int(mod_scheme_bits))
+        coding_rate = CodeRates(_bits_to_int(coding_rate_bits))
+        crc = _bits_to_int(crc_bits)
+
+        # Verify CRC
+        data_str = "".join(
+            str(b) for b in (
+                length_bits + src_bits + dst_bits
+                + mod_scheme_bits + coding_rate_bits
+                + [0] * self.reserved_bits
+            )
         )
-        calculated_crc = self._crc_calc(header_data_bits)
-        calculated_crc_bits = int_to_bits(calculated_crc, self.crc_bits)
+        expected_crc_bits = int_to_bits(self._crc_calc(data_str), self.crc_bits)
 
         return FrameHeader(
-            length,
-            src,
-            dst,
-            mod_scheme,
-            coding_rate,
-            crc,
-            crc_passed=(crc_bits == calculated_crc_bits),
+            length, src, dst,
+            mod_scheme, coding_rate, crc,
+            crc_passed=(crc_bits == expected_crc_bits),
         )
-
-    def _get_length_bits(self, header: np.ndarray) -> list[int]:
-        """Extract length field from header."""
-        length = header[self.idx : self.idx + self.length_bits]
-        self.idx += self.length_bits
-        return length.tolist() if isinstance(length, np.ndarray) else length
-
-    def _get_src_dst_bits(self, header: np.ndarray) -> list[int]:
-        """Extract source/destination field from header."""
-        if self.src_bits != self.dst_bits:
-            msg = "Source and destination bit widths must be equal"
-            raise ValueError(msg)
-        sd = header[self.idx : self.idx + self.src_bits]
-        self.idx += self.src_bits
-        return sd.tolist() if isinstance(sd, np.ndarray) else sd
-
-    def _get_mod_scheme_bits(self, header: np.ndarray) -> list[int]:
-        """Extract modulation scheme field from header."""
-        scheme = header[self.idx : self.idx + self.mod_scheme_bits]
-        self.idx += self.mod_scheme_bits
-        return scheme.tolist() if isinstance(scheme, np.ndarray) else scheme
-
-    def _get_coding_rate_bits(self, header: np.ndarray) -> list[int]:
-        """Extract modulation scheme field from header."""
-        rate = header[self.idx : self.idx + self.coding_rate_bits]
-        self.idx += self.coding_rate_bits
-        return rate.tolist() if isinstance(rate, np.ndarray) else rate
-
-    def _get_crc_bits(self, header: np.ndarray) -> list[int]:
-        """Extract CRC field from header."""
-        crc = header[self.idx : self.idx + self.crc_bits]
-        self.idx += self.crc_bits
-        return crc.tolist() if isinstance(crc, np.ndarray) else crc
 
 
 class FrameConstructor:
@@ -225,30 +210,28 @@ class FrameConstructor:
         header_bits = self.frame_header_constructor.encode(header)
         header_encoded = self.golay.encode(header_bits)
 
-        # find closest packet size to header.length for this coding rate
-        payload_lengths = self.ldpc.get_supported_payload_lengths(header.coding_rate)
-        closest_payload_length = next((l for l in sorted(payload_lengths) if l >= header.length), None)
-        if closest_payload_length is None:
-            raise ValueError(f"Unsupported payload length {header.length}. Greater than max length {payload_lengths[-1]}")
-        payload_padded = np.concatenate([payload, np.zeros(closest_payload_length - header.length, dtype=int)])
+        k = _closest_payload_length(self.ldpc, header.length, header.coding_rate)
+        payload_padded = np.concatenate([
+            payload, np.zeros(k - header.length, dtype=int),
+        ])
 
-        ldpc_config = LDPCConfig(k=closest_payload_length, code_rate=header.coding_rate)
+        ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
         payload_encoded = self.ldpc.encode(payload_padded, ldpc_config)
 
-        return np.concatenate([header_encoded, payload_encoded]) 
+        return np.concatenate([header_encoded, payload_encoded])
 
-    def decode(self, _frame: np.ndarray) -> tuple[FrameHeader, np.ndarray]:
+    def decode(self, frame: np.ndarray) -> tuple[FrameHeader, np.ndarray]:
         """Decode a frame to extract data bits.
 
         Args:
-            _frame: Input frame, either as hard decision bits (0/1) or LLR values.
-                    LLR convention: positive = more likely 0, negative = more likely 1.
+            frame: Input frame, either as hard decision bits (0/1) or LLR values.
+                   LLR convention: positive = more likely 0, negative = more likely 1.
         """
-        header_encoded = _frame[:self.header_config.header_total_size * 2]
-        payload_encoded = _frame[self.header_config.header_total_size * 2:]
+        header_encoded = frame[:self.header_config.header_total_size * 2]
+        payload_encoded = frame[self.header_config.header_total_size * 2:]
 
         # Detect if input is LLR (floats outside [0,1]) or hard bits
-        is_llr = not np.all((np.abs(_frame) <= 1) | (np.isclose(_frame, 0)) | (np.isclose(_frame, 1)))
+        is_llr = not np.all((np.abs(frame) <= 1) | (np.isclose(frame, 0)) | (np.isclose(frame, 1)))
 
         # Golay uses hard decision - convert LLR to bits if needed
         if is_llr:
@@ -258,7 +241,7 @@ class FrameConstructor:
 
         header_bits = self.golay.decode(header_hard)
         header = self.frame_header_constructor.decode(header_bits)
-        if header.crc_passed != True:
+        if not header.crc_passed:
             raise ValueError("Header did not yield valid crc")
 
         # LDPC uses soft decision - convert bits to LLR if needed
@@ -268,14 +251,8 @@ class FrameConstructor:
             # Convert hard bits to high-confidence LLRs (0 -> +10, 1 -> -10)
             payload_llr = 10.0 * (1 - 2 * payload_encoded.astype(np.float64))
 
-        # get closest payload length to header payload length for this coding rate
-        payload_lengths = self.ldpc.get_supported_payload_lengths(header.coding_rate)
-        closest_payload_length = next((l for l in sorted(payload_lengths) if l >= header.length), None)
-        if closest_payload_length is None:
-            raise ValueError(f"Unsupported payload length {header.length}. Greater than max length {payload_lengths[-1]}")
-
-        ldpc_config = LDPCConfig(k=closest_payload_length, code_rate=header.coding_rate)
+        k = _closest_payload_length(self.ldpc, header.length, header.coding_rate)
+        ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
         payload_bits = self.ldpc.decode(payload_llr, ldpc_config)
-        payload_bits = payload_bits[:header.length]
 
-        return (header, payload_bits)
+        return (header, payload_bits[:header.length])

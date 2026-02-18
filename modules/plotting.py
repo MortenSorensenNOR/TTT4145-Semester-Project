@@ -52,7 +52,14 @@ def plot_constellation(
 
     fig, ax = plt.subplots(figsize=(6, 6))
 
+    for sig, label in zip(signals, labels, strict=True):
+        ax.scatter(np.real(sig), np.imag(sig), s=10, alpha=0.6, label=label)
+
+    ax.set_xlabel("I (Real)")
+    ax.set_ylabel("Q (Imag)")
+    ax.legend()
     ax.grid(visible=True, alpha=0.3)
+    ax.axis("equal")
 
     if title:
         ax.set_title(title)

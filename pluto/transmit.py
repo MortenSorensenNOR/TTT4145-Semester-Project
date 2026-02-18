@@ -11,7 +11,7 @@ sdr.tx_rf_bandwidth = int(
 )  # filter cutoff, just set it to the same as sample rate
 sdr.tx_lo = int(center_freq)
 sdr.tx_hardwaregain_chan0 = (
-    -15  # Increase to increase tx power, valid range is -90 to 0 dB
+    -50  # Increase to increase tx power, valid range is -90 to 0 dB
 )
 
 N = 10000  # number of samples to transmit at once
