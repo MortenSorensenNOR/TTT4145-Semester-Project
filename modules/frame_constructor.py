@@ -28,7 +28,7 @@ class FrameHeader:
     dst: int
     mod_scheme: ModulationSchemes
     coding_rate: CodeRates
-    crc: int
+    crc: int = 0
     crc_passed: bool = True
 
 
@@ -205,8 +205,14 @@ class FrameConstructor:
         self.ldpc = LDPC()
         self.golay = Golay()
 
-    def encode(self, header: FrameHeader, payload: np.ndarray) -> np.ndarray:
-        """Encode data into a frame."""
+    def encode(self, header: FrameHeader, payload: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Encode data into a frame.
+
+        Returns:
+            Tuple of (header_encoded, payload_encoded). These are returned separately
+            because the header should always be modulated with BPSK, while the payload
+            uses a variable modulation scheme specified in the header.
+        """
         header_bits = self.frame_header_constructor.encode(header)
         header_encoded = self.golay.encode(header_bits)
 
@@ -218,31 +224,35 @@ class FrameConstructor:
         ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
         payload_encoded = self.ldpc.encode(payload_padded, ldpc_config)
 
-        return np.concatenate([header_encoded, payload_encoded])
+        return (header_encoded, payload_encoded)
 
-    def decode(self, frame: np.ndarray) -> tuple[FrameHeader, np.ndarray]:
+    def decode(
+        self,
+        header_encoded: np.ndarray,
+        payload_encoded: np.ndarray,
+    ) -> tuple[FrameHeader, np.ndarray]:
         """Decode a frame to extract data bits.
 
         Args:
-            frame: Input frame, either as hard decision bits (0/1) or LLR values.
-                   LLR convention: positive = more likely 0, negative = more likely 1.
+            header_encoded: Encoded header bits (hard decision 0/1 only, since
+                           header is always BPSK modulated).
+            payload_encoded: Encoded payload, either as hard decision bits (0/1)
+                            or LLR values. LLR convention: positive = more likely 0,
+                            negative = more likely 1.
         """
-        header_encoded = frame[:self.header_config.header_total_size * 2]
-        payload_encoded = frame[self.header_config.header_total_size * 2:]
-
-        # Detect if input is LLR (floats outside [0,1]) or hard bits
-        is_llr = not np.all((np.abs(frame) <= 1) | (np.isclose(frame, 0)) | (np.isclose(frame, 1)))
-
-        # Golay uses hard decision - convert LLR to bits if needed
-        if is_llr:
-            header_hard = (header_encoded < 0).astype(int)
-        else:
-            header_hard = header_encoded.astype(int)
-
+        # Golay uses hard decision
+        header_hard = header_encoded.astype(int)
         header_bits = self.golay.decode(header_hard)
         header = self.frame_header_constructor.decode(header_bits)
         if not header.crc_passed:
             raise ValueError("Header did not yield valid crc")
+
+        # Detect if payload input is LLR (floats outside [0,1]) or hard bits
+        is_llr = not np.all(
+            (np.abs(payload_encoded) <= 1)
+            | (np.isclose(payload_encoded, 0))
+            | (np.isclose(payload_encoded, 1))
+        )
 
         # LDPC uses soft decision - convert bits to LLR if needed
         if is_llr:

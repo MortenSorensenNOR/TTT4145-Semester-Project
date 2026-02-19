@@ -61,20 +61,24 @@ class TestFrameConstructorEncoding:
 
     def test_encoded_frame_length(self, frame_constructor, sample_header, random_payload):
         """Encoded frame should have correct total length: Golay header (48) + LDPC payload."""
-        encoded = frame_constructor.encode(sample_header, random_payload)
+        header_encoded, payload_encoded = frame_constructor.encode(sample_header, random_payload)
+
+        # Header is always 48 bits (24 bits Golay encoded to 48)
+        assert header_encoded.shape[0] == 48
 
         # For header.length=100 at HALF_RATE, closest LDPC block is 324.
         # LDPC output (rate 1/2) = 324 * 2 = 648.
-        # Total = 48 (Header) + 648 (Payload) = 696.
-        expected_payload_block = 324 
-        expected_length = 48 + (expected_payload_block * 2)
-        
-        assert encoded.shape[0] == expected_length, f"Expected {expected_length}, got {encoded.shape[0]}"
+        expected_payload_block = 324
+        expected_payload_length = expected_payload_block * 2
+
+        assert payload_encoded.shape[0] == expected_payload_length, \
+            f"Expected {expected_payload_length}, got {payload_encoded.shape[0]}"
 
     def test_encoded_frame_is_binary(self, frame_constructor, sample_header, random_payload):
         """Encoded frame should contain only 0s and 1s."""
-        encoded = frame_constructor.encode(sample_header, random_payload)
-        assert np.all((encoded == 0) | (encoded == 1))
+        header_encoded, payload_encoded = frame_constructor.encode(sample_header, random_payload)
+        assert np.all((header_encoded == 0) | (header_encoded == 1))
+        assert np.all((payload_encoded == 0) | (payload_encoded == 1))
 
 
 class TestFrameConstructorRoundtrip:
@@ -82,15 +86,15 @@ class TestFrameConstructorRoundtrip:
 
     def test_roundtrip_no_channel(self, frame_constructor, sample_header, random_payload):
         """Frame should survive encode/decode with no channel impairments."""
-        encoded = frame_constructor.encode(sample_header, random_payload)
-        decoded_header, decoded_payload = frame_constructor.decode(encoded)
+        header_encoded, payload_encoded = frame_constructor.encode(sample_header, random_payload)
+        decoded_header, decoded_payload = frame_constructor.decode(header_encoded, payload_encoded)
 
         assert decoded_header.length == sample_header.length
         assert np.array_equal(decoded_payload, random_payload)
 
     @given(
         # Test a range of lengths to ensure padding logic is hit
-        length=st.integers(min_value=1, max_value=324), 
+        length=st.integers(min_value=1, max_value=324),
         src=st.integers(min_value=0, max_value=3),
         mod_scheme=st.sampled_from(ModulationSchemes),
     )
@@ -104,8 +108,8 @@ class TestFrameConstructorRoundtrip:
         rng = np.random.default_rng()
         payload = rng.integers(0, 2, size=length, dtype=int)
 
-        encoded = frame_constructor.encode(header, payload)
-        _, decoded_payload = frame_constructor.decode(encoded)
+        header_encoded, payload_encoded = frame_constructor.encode(header, payload)
+        _, decoded_payload = frame_constructor.decode(header_encoded, payload_encoded)
 
         assert len(decoded_payload) == length
         assert np.array_equal(decoded_payload, payload)
@@ -132,22 +136,24 @@ class TestDynamicPayloadLength:
             coding_rate=CodeRates.HALF_RATE, crc=0,
         )
 
-        encoded = frame_constructor.encode(header, payload)
+        header_encoded, payload_encoded = frame_constructor.encode(header, payload)
 
-        # Total bits = 48 (header) + (expected_padded_k / rate)
-        expected_encoded_length = 48 + (expected_padded_k * 2)
-        assert encoded.shape[0] == expected_encoded_length
+        # Header is always 48 bits
+        assert header_encoded.shape[0] == 48
+        # Payload length = expected_padded_k / rate
+        expected_payload_encoded_length = expected_padded_k * 2
+        assert payload_encoded.shape[0] == expected_payload_encoded_length
 
         # Decode and verify
-        _, decoded_payload = frame_constructor.decode(encoded)
-        
+        _, decoded_payload = frame_constructor.decode(header_encoded, payload_encoded)
+
         # 1. Check length
         assert len(decoded_payload) == payload_length
-        
+
         # 2. Check content (Flatten and cast to ensure exact comparison)
         # This handles cases where one might be (N,) and the other (N, 1)
         np.testing.assert_array_equal(
-            decoded_payload.flatten().astype(int), 
+            decoded_payload.flatten().astype(int),
             payload.flatten().astype(int)
         )
 
@@ -174,17 +180,26 @@ class TestFrameConstructorWithChannel:
     """Verifies that the system works over a simulated AWGN channel."""
 
     def test_full_frame_qpsk_soft_decision(self, frame_constructor, sample_header, random_payload, qpsk):
-        """Test with LLRs at 15dB."""
-        encoded = frame_constructor.encode(sample_header, random_payload)
-        tx_symbols = qpsk.bits2symbols(encoded)
+        """Test with LLRs at 15dB. Note: In real usage, header would use BPSK."""
+        header_encoded, payload_encoded = frame_constructor.encode(sample_header, random_payload)
+
+        # For this test, we modulate both with QPSK (simulating pre-separation behavior)
+        # In real usage, header would be BPSK and payload would use the scheme from header
+        tx_header_symbols = qpsk.bits2symbols(header_encoded)
+        tx_payload_symbols = qpsk.bits2symbols(payload_encoded)
 
         channel = ChannelModel(ChannelConfig(snr_db=15.0, seed=42))
-        rx_symbols = channel.apply(tx_symbols)
+        rx_header_symbols = channel.apply(tx_header_symbols)
+        rx_payload_symbols = channel.apply(tx_payload_symbols)
 
-        sigma_sq = qpsk.estimate_noise_variance(rx_symbols)
-        rx_llr = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq).flatten()
+        # Header uses hard decision (BPSK in real usage)
+        rx_header_bits = qpsk.symbols2bits(rx_header_symbols).flatten()
 
-        decoded_header, decoded_payload = frame_constructor.decode(rx_llr)
+        # Payload uses soft decision
+        sigma_sq = qpsk.estimate_noise_variance(rx_payload_symbols)
+        rx_payload_llr = qpsk.symbols2bits_soft(rx_payload_symbols, sigma_sq=sigma_sq).flatten()
+
+        decoded_header, decoded_payload = frame_constructor.decode(rx_header_bits, rx_payload_llr)
 
         assert decoded_header.crc_passed
         assert np.array_equal(decoded_payload, random_payload)
