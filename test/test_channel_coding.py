@@ -61,10 +61,11 @@ class TestLDPCEncoding:
         assert np.array_equal(codeword[:324], random_message)
 
     def test_valid_codeword(self, ldpc, ldpc_config, random_message):
-        """H @ codeword should be zero (mod 2)."""
+        """H_permuted @ codeword should be zero (mod 2)."""
         codeword = ldpc.encode(random_message, ldpc_config)
-        H, _, _ = ldpc.get_structures(ldpc_config)
-        syndrome = H @ codeword % 2
+        # Use the permuted H matrix that matches the encoder
+        _, H_permuted = ldpc._get_encoding_structures(ldpc_config)
+        syndrome = H_permuted @ codeword % 2
         assert np.all(syndrome == 0)
 
     def test_different_messages_different_codewords(self, ldpc, ldpc_config):

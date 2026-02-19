@@ -3,6 +3,7 @@
 from enum import Enum
 from dataclasses import dataclass
 import numpy as np
+import pyldpc
 
 class CodeRates(Enum):
     """Supported channel coding rates."""
@@ -368,74 +369,55 @@ class LDPC:
             return np.zeros(Z, dtype=int)
         return np.roll(vector, -shift)
 
+    @classmethod
+    def _get_encoding_structures(cls, config: LDPCConfig) -> tuple[np.ndarray, np.ndarray]:
+        """Get or compute the generator matrix G and permuted H matrix.
+
+        Uses pyldpc to compute a systematic generator matrix G = [I_k | P].
+        Returns (G, H_permuted) where H_permuted has columns reordered so that
+        the first k columns correspond to the systematic (message) bits.
+        """
+        cache_key = ('encoding', config)
+        if cache_key in cls._cache:
+            return cls._cache[cache_key]
+
+        H, _, _ = cls._get_cached_structures(config)
+
+        # Use pyldpc to compute systematic generator matrix
+        H_permuted, G_T = pyldpc.coding_matrix_systematic(H)
+        G = G_T.T
+
+        # Convert to int arrays
+        G = np.asarray(G, dtype=int)
+        H_permuted = np.asarray(H_permuted, dtype=int)
+
+        cls._cache[cache_key] = (G, H_permuted)
+        return G, H_permuted
+
     def encode(self, message: np.ndarray, config: LDPCConfig) -> np.ndarray:
         """Encode k-bit message to a n-bit codeword.
+
+        Uses a systematic generator matrix computed by pyldpc.
+        The codeword format is [message | parity].
 
         Args:
             message: length k bit array
             config: LDPC configuration specifying n and code_rate
 
         Returns:
-            length n codeword [systematic | parity]
+            length n codeword
         """
-        n, k, Z = config.n, config.k, config.Z
+        n, k = config.n, config.k
 
-        assert len(message) == k, f"Message length {len(message)} != expected {k} ({n}, {k}, {Z}, {config.code_rate})"
+        assert len(message) == k, f"Message length {len(message)} != expected {k}"
 
-        H_base = self._base_matrix_generator.get_matrix(config.code_rate, n)
-        num_parity_blocks = H_base.shape[0]
-        num_systematic_blocks = H_base.shape[1] - num_parity_blocks
+        # Get generator matrix
+        G, _ = self._get_encoding_structures(config)
 
-        s_blocks = message.reshape(num_systematic_blocks, Z)
-        p_blocks = np.zeros((num_parity_blocks, Z), dtype=int)
+        # Encode: codeword = message @ G (mod 2)
+        codeword = message @ G % 2
 
-        # Extract parity submatrix B (rightmost columns of H_base)
-        B = H_base[:, num_systematic_blocks:]
-
-        # Compute λ_i = sum of H[i,j] * s[j] for systematic columns
-        lambda_sums = np.zeros((num_parity_blocks, Z), dtype=int)
-        for i in range(num_parity_blocks):
-            for j in range(num_systematic_blocks):
-                shift = H_base[i, j]
-                if shift != -1:
-                    lambda_sums[i] ^= self._circulant_multiply(s_blocks[j], shift, Z)
-
-        # 802.11 LDPC encoding using the dual-diagonal structure of B
-        # Step 1: Compute p[0] by XORing all λ values
-        # This works because the first parity column has entries that sum to identity
-        p0_sum = np.zeros(Z, dtype=int)
-        for i in range(num_parity_blocks):
-            p0_sum ^= lambda_sums[i]
-        p_blocks[0] = p0_sum
-
-        # Step 2: Solve remaining parity blocks using back-substitution
-        # For each row i, solve for the unknown parity block using known values
-        for i in range(num_parity_blocks):
-            # Find which parity blocks appear in this row
-            parity_entries = [(col, B[i, col]) for col in range(num_parity_blocks) if B[i, col] != -1]
-
-            # Start with λ[i]
-            result = lambda_sums[i].copy()
-
-            # XOR all known parity contributions
-            unknown_col = -1
-            for col, shift in parity_entries:
-                if col <= i:
-                    # This parity block is already computed
-                    result ^= self._circulant_multiply(p_blocks[col], shift, Z)
-                else:
-                    # This is the unknown we're solving for (should be col = i+1 for staircase)
-                    unknown_col = col
-
-            # If we found an unknown parity block, store the result
-            if unknown_col != -1 and unknown_col < num_parity_blocks:
-                # The unknown parity block appears with some shift in the matrix
-                # For 802.11 codes, the diagonal entries are always 0 (identity shift)
-                p_blocks[unknown_col] = result
-
-        # Combine systematic and parity
-        codeword = np.concatenate([s_blocks.flatten(), p_blocks.flatten()])
-        return codeword
+        return codeword.astype(int)
 
     def decode(self, llr_channel: np.ndarray, config: LDPCConfig,
                max_iterations: int = 50, alpha: float = 0.75) -> np.ndarray:
@@ -452,13 +434,18 @@ class LDPC:
             Decoded message bits (k bits).
         """
         n, k = config.n, config.k
-        H, check_neighbors, var_neighbors = self._get_cached_structures(config)
+
+        # Get the permuted H matrix used for encoding
+        _, H_permuted = self._get_encoding_structures(config)
+
+        # Build adjacency lists for the permuted H
+        check_neighbors, var_neighbors = self._build_adj_list(H_permuted)
 
         assert len(llr_channel) == n
         hard_decision = np.zeros(n, dtype=int)
 
-        num_checks = H.shape[0]
-        num_vars = H.shape[1]
+        num_checks = H_permuted.shape[0]
+        num_vars = H_permuted.shape[1]
 
         # initialize messages
         # L_v2c[i][j] = message from variable j to check i
@@ -489,7 +476,7 @@ class LDPC:
                         L_c2v[(i, j)] = 0.0
                         continue
 
-                    # min-sum - product of signs * mimimum magnitude
+                    # min-sum - product of signs * minimum magnitude
                     sign = 1
                     min_mag = float('inf')
                     for jj in other_neighbors:
@@ -521,9 +508,10 @@ class LDPC:
             hard_decision = (L_total < 0).astype(int)
 
             # check if valid codeword
-            syndrome = H @ hard_decision % 2
+            syndrome = H_permuted @ hard_decision % 2
             if np.all(syndrome == 0):
-                return hard_decision[:k]  # valid codeword -> extract systematic bits
+                # Systematic encoding: message is in first k positions
+                return hard_decision[:k]
 
         # max iterations reached - return best guess
         return hard_decision[:k]

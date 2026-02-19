@@ -16,6 +16,7 @@ dependencies = [
     "matplotlib>=3.10.8",
     "numba>=0.63.1",
     "pyadi-iio>=0.0.17",
+    "pyldpc>=0.7.9",
     "pysdr>=1.2",
     "scipy>=1.14",
     "sympy>=1.14.0",
@@ -30,6 +31,9 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendor"]
+
+[tool.uv.extra-build-dependencies]
+pyldpc = ["numpy"]
 
 [tool.ruff.lint]
 ignore = [

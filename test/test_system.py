@@ -10,6 +10,8 @@ from modules.channel import (
 )
 from modules.modulation import QPSK
 from modules.pulse_shaping import PulseShaper
+from modules.channel_coding import CodeRates
+from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
 
 BANDWIDTH_HZ = 1e6
 ROLL_OFF = 0.25
@@ -19,6 +21,12 @@ NUM_SYMBOLS = 512
 BITS_PER_SYMBOL = 2
 SNR_DB = 15.0
 SEED = 42
+
+PAYLOAD_LENGTH = 324
+SRC = 1
+DST = 1
+MOD_SCHEME = ModulationSchemes.QPSK
+CODING_RATE = CodeRates.THREE_QUARTER_RATE
 
 
 def test_end_to_end_signal_chain_shapes_and_outputs() -> None:
