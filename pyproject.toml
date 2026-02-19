@@ -35,8 +35,5 @@ norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendo
 [tool.uv.extra-build-dependencies]
 pyldpc = ["numpy"]
 
-[tool.ruff.lint]
-ignore = [
-    "D203",
-    "D213",
-]
+[tool.ruff]
+line-length = 120
