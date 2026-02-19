@@ -147,7 +147,10 @@ def _apply_integer_delay(
 
 
 def _lagrange_coefficients(frac_delay: float, order: int = 4) -> NDArray[np.float64]:
-    """Calculate Lagrange interpolation coefficients for a fractional delay."""
+    """Calculate Lagrange interpolation coefficients for a fractional delay.
+
+    Source: https://en.wikipedia.org/wiki/Lagrange_polynomial
+    """
     n_taps = order + 1
     coefficients = np.zeros(n_taps)
     for k in range(n_taps):
@@ -265,7 +268,10 @@ def generate_fading_gains(
     phases: NDArray[np.float64] | None = None,
     rng: np.random.Generator | None = None,
 ) -> tuple[NDArray[np.complex128], NDArray[np.float64]]:
-    """Generate time-varying fading gains using Clarke's sum-of-sinusoids model."""
+    """Generate time-varying fading gains using Clarke's sum-of-sinusoids model.
+
+    Source: https://en.wikipedia.org/wiki/Rayleigh_fading#Clarke's_model
+    """
     if rng is None:
         rng = np.random.default_rng()
 
@@ -361,7 +367,10 @@ def apply_sco(
     phase: float,
     buffer: NDArray[np.complex128] | None = None,
 ) -> tuple[NDArray[np.complex128], float, NDArray[np.complex128]]:
-    """Apply sample clock offset via resampling."""
+    """Apply sample clock offset via resampling using Catmull-Rom interpolation.
+
+    Source: https://en.wikipedia.org/wiki/Centripetal_Catmull%E2%80%93Rom_spline
+    """
     if abs(sco_ppm) < SCO_THRESHOLD:
         buffer_out = buffer if buffer is not None else np.zeros(4, dtype=x.dtype)
         return x.copy(), phase, buffer_out
@@ -416,15 +425,7 @@ def apply_awgn(
     rng: np.random.Generator,
     reference_power: float = 1.0,
 ) -> NDArray[np.complex128]:
-    """Add AWGN to achieve specified SNR.
-
-    Args:
-        x: Input signal.
-        snr_db: Desired SNR in dB.
-        rng: Random number generator.
-        reference_power: Reference signal power for SNR calculation.
-
-    """
+    """Add AWGN to achieve specified SNR."""
     # Calculate noise power for desired SNR using reference power
     snr_linear = 10 ** (snr_db / 10)
     noise_power = reference_power / snr_linear

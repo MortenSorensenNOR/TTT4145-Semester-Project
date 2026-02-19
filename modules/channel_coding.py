@@ -6,6 +6,7 @@ from enum import Enum
 import numba
 import numpy as np
 import pyldpc
+from scipy import sparse
 
 # Minimum number of edges connected to a check node for meaningful BP update
 MIN_CHECK_DEGREE = 2
@@ -38,7 +39,10 @@ class CodeRates(Enum):
 
 
 class Golay:
-    """Golay (24,12) channel coding for the frame header."""
+    """Golay (24,12) channel coding for the frame header.
+
+    Source: https://en.wikipedia.org/wiki/Binary_Golay_code
+    """
 
     def __init__(self) -> None:
         """Initialize Golay encoder/decoder with the standard generator matrix."""
@@ -130,7 +134,8 @@ class Golay:
         raise ValueError(msg)
 
 
-# Base matrices for 802.11 LDPC codes (Tables F-1, F-2, F-3)
+# Base matrices for 802.11 LDPC codes
+# Source: IEEE Std 802.11-2020, Annex F, Tables F-1 through F-3
 
 # n=648, Z=27
 _N648_R12 = np.array(
@@ -367,12 +372,31 @@ class LDPCConfig:
 # ---------------------------------------------------------------------------
 _h_cache: dict[LDPCConfig, np.ndarray] = {}
 _encoding_cache: dict[LDPCConfig, tuple[np.ndarray, np.ndarray]] = {}
-_decode_cache: dict[LDPCConfig, tuple[np.ndarray, int, int, np.ndarray, np.ndarray, np.ndarray]] = {}
+_decode_cache: dict[LDPCConfig, tuple[sparse.csr_matrix, int, int, np.ndarray, np.ndarray, np.ndarray]] = {}
 
 
 # ---------------------------------------------------------------------------
 # LDPC public API
 # ---------------------------------------------------------------------------
+
+
+def interleave(bits: np.ndarray, n: int) -> np.ndarray:
+    """Randomly permute bits using a seed derived from the codeword length.
+
+    TX and RX produce identical permutations from n alone -- no signaling needed.
+    """
+    rng = np.random.default_rng(seed=n)
+    perm = rng.permutation(len(bits))
+    return bits[perm]
+
+
+def deinterleave(bits: np.ndarray, n: int) -> np.ndarray:
+    """Inverse of interleave(): restore original bit order."""
+    rng = np.random.default_rng(seed=n)
+    perm = rng.permutation(len(bits))
+    out = np.empty_like(bits)
+    out[perm] = bits
+    return out
 
 
 def ldpc_get_supported_payload_lengths(code_rate: CodeRates = CodeRates.HALF_RATE) -> np.ndarray:
@@ -459,13 +483,16 @@ def ldpc_decode(
     max_iterations: int = 50,
     alpha: float = 0.75,
 ) -> np.ndarray:
-    """Decode using min-sum belief propagation."""
+    """Decode using min-sum belief propagation.
+
+    Source: https://en.wikipedia.org/wiki/Low-density_parity-check_code#Message_passing_algorithms
+    """
     n, k = config.n, config.k
     if len(llr_channel) != n:
         msg = f"Expected {n}, got {len(llr_channel)}"
         raise ValueError(msg)
 
-    (h_permuted, _num_checks, _num_vars, edge_var, check_order, check_bounds) = _get_decode_structures(config)
+    (h_sparse, _num_checks, _num_vars, edge_var, check_order, check_bounds) = _get_decode_structures(config)
 
     llr = llr_channel.astype(np.float64)
     num_edges = len(edge_var)
@@ -484,9 +511,10 @@ def ldpc_decode(
         np.add.at(l_total, edge_var, c2v)
         v2c[:] = l_total[edge_var] - c2v
 
-        # Hard decision + syndrome check
+        # Hard decision + syndrome check (sparse matrix-vector multiply)
         hard_decision = (l_total < 0).astype(int)
-        if np.all(h_permuted @ hard_decision % 2 == 0):
+        syndrome = h_sparse @ hard_decision
+        if np.all(syndrome % 2 == 0):
             return hard_decision[:k]
 
     return hard_decision[:k]
@@ -516,7 +544,7 @@ def _get_encoding_structures(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray
 
 def _get_decode_structures(
     config: LDPCConfig,
-) -> tuple[np.ndarray, int, int, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[sparse.csr_matrix, int, int, np.ndarray, np.ndarray, np.ndarray]:
     """Get cached edge-based structures for BP decoding."""
     if config in _decode_cache:
         return _decode_cache[config]
@@ -525,18 +553,25 @@ def _get_decode_structures(
     num_checks, num_vars = h_permuted.shape
 
     rows, cols = np.nonzero(h_permuted)
+    h_sparse = sparse.csr_matrix(h_permuted)
 
     check_order = np.argsort(rows).astype(np.int64)
     sorted_checks = rows[check_order]
     check_bounds = np.searchsorted(sorted_checks, np.arange(num_checks + 1)).astype(np.int64)
 
-    result = (h_permuted, num_checks, num_vars, cols, check_order, check_bounds)
+    result = (h_sparse, num_checks, num_vars, cols, check_order, check_bounds)
     _decode_cache[config] = result
     return result
 
 
 def _expand_h(config: LDPCConfig) -> np.ndarray:
-    """Expand base matrix to full H matrix using vectorized circulant placement."""
+    """Expand base matrix to full H matrix using vectorized circulant placement.
+
+    Each entry v >= 0 becomes a Z x Z identity matrix cyclically shifted by v.
+    Entries of -1 become Z x Z zero blocks.
+
+    Source: IEEE Std 802.11-2020, Section 19.3.11.6
+    """
     n, z = config.n, config.z
     h_base = get_ldpc_base_matrix(config.code_rate, n)
     num_block_rows, num_block_cols = h_base.shape

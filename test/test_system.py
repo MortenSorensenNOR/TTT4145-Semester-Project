@@ -1,91 +1,374 @@
-"""System-level checks for modulation, shaping, and channel flow."""
+"""Integration tests for the full TX/RX chain.
 
-import matplotlib.pyplot as plt
+Tests the complete pipeline:
+  Message bits -> LDPC encode -> QPSK modulate -> Pulse shape ->
+  Channel (AWGN) -> Matched filter -> QPSK soft demod -> LDPC decode -> Recovered bits
+"""
+
 import numpy as np
+import pytest
+from numpy.typing import NDArray
+from scipy import signal
 
-from modules.channel import (
-    ChannelConfig,
-    ChannelModel,
-)
-from modules.channel_coding import CodeRates
+from modules.channel import ChannelConfig, ChannelModel
+from modules.channel_coding import CodeRates, LDPCConfig, ldpc_decode, ldpc_encode
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
 from modules.modulation import BPSK, QPSK
-from modules.plotting import plot_iq
-from modules.pulse_shaping import rrc_filter
+from modules.pilots import PilotConfig, insert_pilots
+from modules.pulse_shaping import rrc_filter, upsample_and_filter
+from modules.synchronization import Synchronizer, SynchronizerConfig, build_preamble
+from modules.util import ebn0_to_snr, text_to_bits
+from pluto.config import get_modulator
+from pluto.receive import FrameDecoder
 
-BANDWIDTH_HZ = 1e6
-ROLL_OFF = 0.25
-SAMPLES_PER_SYMBOL = 8
-OVERLAP_FACTOR = 6
-NUM_SYMBOLS = 512
-BITS_PER_SYMBOL = 2
-SNR_DB = 1.0
-SEED = 42
-
-PAYLOAD_LENGTH = 324
-SRC = 1
-DST = 2
-MOD_SCHEME = ModulationSchemes.QPSK
-CODING_RATE = CodeRates.HALF_RATE
+MESSAGE_LENGTH = 324
+MAX_BIT_ERRORS_AWGN = 5
+MAX_BIT_ERRORS_PULSE = 10
+HIGH_EBN0_THRESHOLD = 5.0
+MAX_AVG_BER = 0.01
+N_SYMBOLS_TEST = 100
 
 
-def test() -> None:
-    """Verify end-to-end chain output dimensions and finite BER."""
-    symbol_rate = BANDWIDTH_HZ / (1 + ROLL_OFF)
-    sample_rate = symbol_rate * SAMPLES_PER_SYMBOL
-    pulse_taps = SAMPLES_PER_SYMBOL * OVERLAP_FACTOR * 2 + 1
+class TestFullChain:
+    """Integration tests for the complete TX/RX chain."""
 
-    # modulation
-    pulse = rrc_filter(SAMPLES_PER_SYMBOL, ROLL_OFF, pulse_taps)
-    bpsk = BPSK()
-    qpsk = QPSK()
-    rng = np.random.default_rng(SEED)
+    @pytest.fixture
+    def ldpc_config(self) -> LDPCConfig:
+        """Create default LDPC configuration."""
+        return LDPCConfig(k=MESSAGE_LENGTH, code_rate=CodeRates.HALF_RATE)
 
-    # channel
-    config = ChannelConfig(sample_rate=sample_rate, snr_db=SNR_DB, seed=SEED)
-    channel = ChannelModel(config)
+    @pytest.fixture
+    def qpsk(self) -> QPSK:
+        """Create QPSK modulator."""
+        return QPSK()
 
-    # generate payload
-    header = FrameHeader(length=PAYLOAD_LENGTH, src=SRC, dst=DST, mod_scheme=MOD_SCHEME, coding_rate=CODING_RATE)
-    payload = rng.integers(0, 2, size=(PAYLOAD_LENGTH), dtype=int)
+    @pytest.fixture
+    def random_message(self) -> NDArray[np.int_]:
+        """Generate random 324-bit message."""
+        rng = np.random.default_rng(42)
+        return rng.integers(0, 2, size=MESSAGE_LENGTH)
 
-    frame_constructor = FrameConstructor()
-    header_encoded, payload_encoded = frame_constructor.encode(header, payload)
+    def test_chain_no_channel(
+        self,
+        ldpc_config: LDPCConfig,
+        qpsk: QPSK,
+        random_message: NDArray[np.int_],
+    ) -> None:
+        """Test TX/RX chain without channel impairments (sanity check)."""
+        codeword = ldpc_encode(random_message, ldpc_config)
+        symbols = qpsk.bits2symbols(codeword)
 
-    # modulate header and payload
-    header_modulated = bpsk.bits2symbols(header_encoded)
-    payload_modulated = qpsk.bits2symbols(payload_encoded)
-    frame_modulated = np.concatenate([header_modulated, payload_modulated])
+        llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=1e-6)
+        llr_flat = llrs.flatten()
 
-    # rest of tx
-    upsampled = np.zeros(len(frame_modulated) * SAMPLES_PER_SYMBOL, dtype=complex)
-    upsampled[::SAMPLES_PER_SYMBOL] = frame_modulated
-    tx_signal = np.convolve(upsampled, pulse, mode="same")
+        decoded = ldpc_decode(llr_flat, ldpc_config, max_iterations=20)
 
-    rx_signal = channel.apply(tx_signal)
-    rx_filtered = np.convolve(rx_signal, pulse, mode="same")
-    rx_symbols = rx_filtered[::SAMPLES_PER_SYMBOL]
+        np.testing.assert_array_equal(decoded, random_message)
 
-    rx_header_sym = rx_symbols[: len(header_modulated)]
-    rx_payload_sym = rx_symbols[len(header_modulated) :]
+    def test_chain_awgn_only(
+        self,
+        ldpc_config: LDPCConfig,
+        qpsk: QPSK,
+        random_message: NDArray[np.int_],
+    ) -> None:
+        """Test TX/RX chain with AWGN channel (no pulse shaping)."""
+        codeword = ldpc_encode(random_message, ldpc_config)
+        symbols = qpsk.bits2symbols(codeword)
 
-    rx_header_bits = bpsk.symbols2bits(rx_header_sym)
-    rx_payload_bits = qpsk.symbols2bits_soft(rx_payload_sym)
+        ebn0_db = 5.0
+        code_rate = CodeRates.HALF_RATE.value_float
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=2)
+        channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=123))
+        rx_symbols = channel.apply(symbols)
 
-    # decode header and payload
-    rx_header = frame_constructor.decode_header(rx_header_bits)
-    rx_payload = frame_constructor.decode_payload(rx_header, rx_payload_bits.flatten(), soft=True)
-    ber = float(np.mean(rx_payload != payload))
+        sigma_sq = qpsk.estimate_noise_variance(rx_symbols)
+        llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
+        llr_flat = llrs.flatten()
 
-    np.testing.assert_equal(rx_header.length, PAYLOAD_LENGTH)
-    np.testing.assert_equal(rx_payload_bits.shape[1], BITS_PER_SYMBOL)
-    np.testing.assert_array_less(-1e-12, ber)
-    np.testing.assert_array_less(ber, 1.0 + 1e-12)
+        decoded = ldpc_decode(llr_flat, ldpc_config, max_iterations=50)
+        bit_errors = np.sum(decoded != random_message)
 
-    plot_iq(tx_signal)
-    plot_iq(rx_signal)
-    plt.show(block=False)
+        if bit_errors >= MAX_BIT_ERRORS_AWGN:
+            pytest.fail(f"Too many bit errors: {bit_errors}")
+
+    def test_chain_with_pulse_shaping(
+        self,
+        ldpc_config: LDPCConfig,
+        qpsk: QPSK,
+        random_message: NDArray[np.int_],
+    ) -> None:
+        """Test full chain with pulse shaping and matched filtering."""
+        sps = 4
+        pulse = rrc_filter(sps=sps, alpha=0.35, num_taps=101)
+
+        codeword = ldpc_encode(random_message, ldpc_config)
+        symbols = qpsk.bits2symbols(codeword)
+
+        tx_signal = upsample_and_filter(symbols, sps, pulse)
+
+        ebn0_db = 6.0
+        code_rate = CodeRates.HALF_RATE.value_float
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=2)
+        channel = ChannelModel(
+            ChannelConfig(
+                snr_db=snr_db,
+                sample_rate=1e6,
+                seed=456,
+            ),
+        )
+        rx_signal = channel.apply(tx_signal)
+
+        matched = signal.convolve(rx_signal, pulse, mode="same")
+
+        rx_symbols = matched[::sps]
+
+        sigma_sq = qpsk.estimate_noise_variance(rx_symbols)
+        llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
+        llr_flat = llrs.flatten()
+
+        decoded = ldpc_decode(llr_flat, ldpc_config, max_iterations=50)
+        bit_errors = np.sum(decoded != random_message)
+
+        if bit_errors >= MAX_BIT_ERRORS_PULSE:
+            pytest.fail(f"Too many bit errors: {bit_errors}")
+
+    @pytest.mark.parametrize("ebn0_db", [3.0, 4.0, 5.0, 6.0, 8.0])
+    def test_ber_vs_ebn0(
+        self,
+        ldpc_config: LDPCConfig,
+        qpsk: QPSK,
+        ebn0_db: float,
+    ) -> None:
+        """Test BER performance across different Eb/N0 values."""
+        rng = np.random.default_rng(789)
+        message = rng.integers(0, 2, size=MESSAGE_LENGTH)
+
+        codeword = ldpc_encode(message, ldpc_config)
+        symbols = qpsk.bits2symbols(codeword)
+
+        code_rate = CodeRates.HALF_RATE.value_float
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=2)
+        channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=int(ebn0_db * 100)))
+        rx_symbols = channel.apply(symbols)
+
+        sigma_sq = qpsk.estimate_noise_variance(rx_symbols)
+        llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
+        decoded = ldpc_decode(llrs.flatten(), ldpc_config, max_iterations=50)
+
+        bit_errors = np.sum(decoded != message)
+
+        if ebn0_db >= HIGH_EBN0_THRESHOLD and bit_errors >= MAX_BIT_ERRORS_PULSE:
+            pytest.fail(
+                f"Too many errors ({bit_errors}) at Eb/N0={ebn0_db} dB",
+            )
+
+    def test_multiple_frames(
+        self,
+        ldpc_config: LDPCConfig,
+        qpsk: QPSK,
+    ) -> None:
+        """Test decoding multiple frames in sequence."""
+        rng = np.random.default_rng(999)
+        n_frames = 5
+        ebn0_db = 6.0
+        code_rate = CodeRates.HALF_RATE.value_float
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=2)
+
+        total_errors = 0
+        total_bits = 0
+
+        for frame_idx in range(n_frames):
+            message = rng.integers(0, 2, size=MESSAGE_LENGTH)
+
+            codeword = ldpc_encode(message, ldpc_config)
+            symbols = qpsk.bits2symbols(codeword)
+
+            channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=frame_idx))
+            rx_symbols = channel.apply(symbols)
+
+            sigma_sq = qpsk.estimate_noise_variance(rx_symbols)
+            llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
+            decoded = ldpc_decode(llrs.flatten(), ldpc_config, max_iterations=50)
+
+            total_errors += np.sum(decoded != message)
+            total_bits += len(message)
+
+        avg_ber = total_errors / total_bits
+        if avg_ber >= MAX_AVG_BER:
+            pytest.fail(f"Average BER too high: {avg_ber:.4f}")
 
 
-if __name__ == "__main__":
-    test()
+class TestComponentInterfaces:
+    """Test that components interface correctly."""
+
+    def test_ldpc_output_matches_qpsk_input(self) -> None:
+        """LDPC codeword length should be even for QPSK (2 bits/symbol)."""
+        config = LDPCConfig(k=MESSAGE_LENGTH, code_rate=CodeRates.HALF_RATE)
+        if config.n % 2 != 0:
+            pytest.fail("Codeword length must be even for QPSK")
+
+    def test_qpsk_llr_shape_matches_ldpc_input(self) -> None:
+        """QPSK soft output shape should match LDPC decoder input."""
+        qpsk = QPSK()
+        config = LDPCConfig(k=MESSAGE_LENGTH, code_rate=CodeRates.HALF_RATE)
+
+        n_symbols = config.n // 2
+        rng = np.random.default_rng(42)
+        symbols = rng.standard_normal(n_symbols) + 1j * rng.standard_normal(n_symbols)
+
+        llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=0.1)
+
+        np.testing.assert_equal(llrs.shape, (n_symbols, 2))
+        np.testing.assert_equal(llrs.flatten().shape[0], config.n)
+
+    def test_pulse_shaper_preserves_symbol_count(self) -> None:
+        """Pulse shaper should preserve symbol timing."""
+        sps = 4
+        pulse = rrc_filter(sps=sps, alpha=0.35, num_taps=101)
+
+        n_symbols = N_SYMBOLS_TEST
+        rng = np.random.default_rng(42)
+        symbols = rng.standard_normal(n_symbols) + 1j * rng.standard_normal(n_symbols)
+
+        shaped = upsample_and_filter(symbols, sps, pulse)
+
+        matched = signal.convolve(shaped, pulse, mode="same")
+        recovered = matched[::sps]
+
+        np.testing.assert_equal(len(recovered), n_symbols)
+
+
+class TestFullPipeline:
+    """End-to-end tests covering sync, framing, and decoding.
+
+    Mirrors the actual pluto/transmit.py -> channel -> pluto/receive.py path.
+    """
+
+    SPS = 4
+    RRC_ALPHA = 0.35
+    RRC_NUM_TAPS = 101
+    SAMPLE_RATE = 1e6
+    DELAY_PADDING = 2000
+
+    @pytest.fixture
+    def rrc(self) -> np.ndarray:
+        """RRC pulse shared by TX and RX."""
+        return rrc_filter(self.SPS, self.RRC_ALPHA, self.RRC_NUM_TAPS)
+
+    @pytest.fixture
+    def sync_config(self) -> SynchronizerConfig:
+        """Return synchronizer configuration."""
+        return SynchronizerConfig()
+
+    def _transmit(
+        self,
+        text: str,
+        mod_scheme: ModulationSchemes,
+        coding_rate: CodeRates,
+        rrc: np.ndarray,
+        sync_config: SynchronizerConfig,
+    ) -> np.ndarray:
+        """Simulate the TX pipeline (mirrors pluto/transmit.py)."""
+        payload_bits = text_to_bits(text)
+        header = FrameHeader(
+            length=len(payload_bits),
+            src=0,
+            dst=0,
+            mod_scheme=mod_scheme,
+            coding_rate=coding_rate,
+        )
+        fc = FrameConstructor()
+        header_encoded, payload_encoded = fc.encode(header, payload_bits)
+
+        header_symbols = BPSK().bits2symbols(header_encoded)
+        payload_symbols = get_modulator(mod_scheme).bits2symbols(payload_encoded)
+        payload_symbols = insert_pilots(payload_symbols, PilotConfig())
+
+        preamble = build_preamble(sync_config)
+        frame = np.concatenate([preamble, header_symbols, payload_symbols])
+
+        tx_signal = upsample_and_filter(frame, self.SPS, rrc)
+        zeros = np.zeros(self.DELAY_PADDING, dtype=complex)
+        return np.concatenate([zeros, tx_signal, zeros])
+
+    def _receive(
+        self,
+        rx_raw: np.ndarray,
+        rrc: np.ndarray,
+        sync_config: SynchronizerConfig,
+    ) -> str | None:
+        """Run the RX pipeline using the actual FrameDecoder from pluto/receive.py."""
+        rx_filtered = np.convolve(rx_raw, rrc, mode="same")
+
+        sync = Synchronizer(sync_config, sps=self.SPS, rrc_taps=rrc)
+        fc = FrameConstructor()
+        decoder = FrameDecoder(sync, fc, sample_rate=self.SAMPLE_RATE, sps=self.SPS, pilot_config=PilotConfig())
+
+        result = decoder.try_decode(rx_filtered, abs_offset=0)
+        return result.text if result is not None else None
+
+    def test_pipeline_no_impairments(
+        self,
+        rrc: np.ndarray,
+        sync_config: SynchronizerConfig,
+    ) -> None:
+        """Full pipeline with no channel impairments (sanity check)."""
+        text = "Hello!"
+        tx = self._transmit(text, ModulationSchemes.QPSK, CodeRates.HALF_RATE, rrc, sync_config)
+        decoded = self._receive(tx, rrc, sync_config)
+        np.testing.assert_equal(decoded, text)
+
+    def test_pipeline_awgn(
+        self,
+        rrc: np.ndarray,
+        sync_config: SynchronizerConfig,
+    ) -> None:
+        """Full pipeline through AWGN channel at comfortable SNR."""
+        text = "Test AWGN"
+        tx = self._transmit(text, ModulationSchemes.QPSK, CodeRates.HALF_RATE, rrc, sync_config)
+
+        channel = ChannelModel(ChannelConfig(snr_db=15.0, sample_rate=self.SAMPLE_RATE, seed=42))
+        rx = channel.apply(tx)
+
+        decoded = self._receive(rx, rrc, sync_config)
+        np.testing.assert_equal(decoded, text)
+
+    def test_pipeline_awgn_with_cfo(
+        self,
+        rrc: np.ndarray,
+        sync_config: SynchronizerConfig,
+    ) -> None:
+        """Full pipeline through AWGN + CFO channel."""
+        text = "CFO test"
+        tx = self._transmit(text, ModulationSchemes.QPSK, CodeRates.HALF_RATE, rrc, sync_config)
+
+        channel = ChannelModel(
+            ChannelConfig(snr_db=15.0, sample_rate=self.SAMPLE_RATE, cfo_hz=2000.0, seed=99),
+        )
+        rx = channel.apply(tx)
+
+        decoded = self._receive(rx, rrc, sync_config)
+        np.testing.assert_equal(decoded, text)
+
+    def test_pipeline_text_roundtrip(
+        self,
+        rrc: np.ndarray,
+        sync_config: SynchronizerConfig,
+    ) -> None:
+        """Text message survives the full TX -> channel -> RX pipeline."""
+        text = "Hello, PlutoSDR!"
+        tx = self._transmit(text, ModulationSchemes.QPSK, CodeRates.HALF_RATE, rrc, sync_config)
+
+        channel = ChannelModel(
+            ChannelConfig(
+                snr_db=12.0,
+                sample_rate=self.SAMPLE_RATE,
+                cfo_hz=1000.0,
+                delay_samples=50,
+                seed=77,
+            ),
+        )
+        rx = channel.apply(tx)
+
+        decoded = self._receive(rx, rrc, sync_config)
+        np.testing.assert_equal(decoded, text)

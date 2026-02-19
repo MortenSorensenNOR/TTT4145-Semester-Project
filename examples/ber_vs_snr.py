@@ -76,16 +76,7 @@ def simulate_ldpc_coded_qpsk(
     alpha: float = 0.75,
     desc: str = "LDPC + QPSK",
 ) -> np.ndarray:
-    """Simulate LDPC-coded QPSK with soft decision decoding.
-
-    Args:
-        ebn0_db_range: Array of Eb/N0 values to simulate (dB)
-        n_trials: Number of frames per Eb/N0 point
-        rng: Random number generator
-        alpha: Min-sum normalization factor (0.75=normalized, 1.0=standard)
-        desc: Description for progress bar
-
-    """
+    """Simulate LDPC-coded QPSK with soft decision decoding."""
     code_rate = CodeRates.HALF_RATE
     rate_float = code_rate.value_float
     k = int(648 * rate_float)  # message length for n=648

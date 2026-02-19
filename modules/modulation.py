@@ -32,25 +32,33 @@ class Modulator(Protocol):
 
 
 def estimate_noise_variance(symbols: np.ndarray, constellation: np.ndarray) -> float:
-    """Estimate noise variance from received symbols using hard decisions.
-
-    Args:
-        symbols: Received complex symbols.
-        constellation: Ideal constellation points.
-
-    """
+    """Estimate noise variance from received symbols using hard decisions."""
     if len(symbols) == 0:
-        return 1e-10
+        return np.finfo(float).eps
     indices = np.argmin(
         np.abs(symbols.reshape(-1, 1) - constellation.reshape(1, -1)),
         axis=1,
     )
     noise = symbols - constellation[indices]
-    return float(max(np.mean(np.abs(noise) ** 2), 1e-10))
+    return float(max(np.mean(np.abs(noise) ** 2), np.finfo(float).eps))
 
 
-class BPSK:
-    """Binary Phase Shift Keying modulation."""
+class _ModulatorBase:
+    """Shared base providing estimate_noise_variance for all modulators."""
+
+    symbol_mapping: np.ndarray
+    bits_per_symbol: int
+
+    def estimate_noise_variance(self, symbols: np.ndarray) -> float:
+        """Estimate noise variance from received symbols."""
+        return estimate_noise_variance(symbols, self.symbol_mapping)
+
+
+class BPSK(_ModulatorBase):
+    """Binary Phase Shift Keying modulation.
+
+    Source: https://en.wikipedia.org/wiki/Phase-shift_keying#Binary_phase-shift_keying_(BPSK)
+    """
 
     def __init__(self) -> None:
         """Initialize BPSK modulation scheme."""
@@ -67,8 +75,8 @@ class BPSK:
     def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
         """Convert BPSK symbols to hard-decision bits."""
         if len(symbols) == 0:
-            return np.array([], dtype=int)
-        return np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
+            return np.array([], dtype=int).reshape(0, 1)
+        return np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1).reshape(-1, 1)
 
     def symbols2bits_soft(
         self,
@@ -78,6 +86,8 @@ class BPSK:
         """Compute log-likelihood ratios (LLRs) for soft decision decoding.
 
         LLR convention: positive = more likely 0, negative = more likely 1.
+
+        Source: https://en.wikipedia.org/wiki/Log-likelihood_ratio
         """
         if len(symbols) == 0:
             return np.array([], dtype=float)
@@ -85,17 +95,16 @@ class BPSK:
         if sigma_sq is None:
             sigma_sq = estimate_noise_variance(symbols, self.symbol_mapping)
 
-        # BPSK: symbol -1 -> bit 1, symbol +1 -> bit 0
-        # LLR = 2 * Re(y) / σ²
-        return 2.0 * np.real(symbols) / sigma_sq
-
-    def estimate_noise_variance(self, symbols: np.ndarray) -> float:
-        """Estimate noise variance from received symbols."""
-        return estimate_noise_variance(symbols, self.symbol_mapping)
+        # BPSK: symbol -1 -> bit 0, symbol +1 -> bit 1
+        # LLR = -2 * Re(y) / σ²  (positive when Re(y)<0, i.e. bit 0 more likely)
+        return (-2.0 * np.real(symbols) / sigma_sq).reshape(-1, 1)
 
 
-class QPSK:
-    """Quadrature Phase Shift Keying modulation (Gray-coded)."""
+class QPSK(_ModulatorBase):
+    """Quadrature Phase Shift Keying modulation (Gray-coded).
+
+    Source: https://en.wikipedia.org/wiki/Phase-shift_keying#Quadrature_phase-shift_keying_(QPSK)
+    """
 
     def __init__(self) -> None:
         """Initialize QPSK modulation scheme."""
@@ -144,13 +153,13 @@ class QPSK:
 
         return np.column_stack([llr_bit0, llr_bit1])
 
-    def estimate_noise_variance(self, symbols: np.ndarray) -> float:
-        """Estimate noise variance from received symbols."""
-        return estimate_noise_variance(symbols, self.symbol_mapping)
 
+class QAM(_ModulatorBase):
+    """Quadrature Amplitude Modulation with Gray coding.
 
-class QAM:
-    """Quadrature Amplitude Modulation with Gray coding."""
+    Source: https://en.wikipedia.org/wiki/Quadrature_amplitude_modulation
+    Gray coding: https://en.wikipedia.org/wiki/Gray_code#Constructing_an_n-bit_Gray_code
+    """
 
     QPSK_ORDER = 4
 
@@ -233,6 +242,8 @@ class QAM:
 
         For each bit position, LLR = min distance to constellation point with bit=1
         minus min distance to constellation point with bit=0, scaled by 1/sigma_sq.
+
+        Source: https://en.wikipedia.org/wiki/Maximum_a_posteriori_estimation
         """
         if len(symbols) == 0:
             return np.array([], dtype=float)
@@ -259,7 +270,3 @@ class QAM:
             llrs[:, bit_idx] = (min_dist_one - min_dist_zero) / sigma_sq
 
         return llrs
-
-    def estimate_noise_variance(self, symbols: np.ndarray) -> float:
-        """Estimate noise variance from received symbols."""
-        return estimate_noise_variance(symbols, self.symbol_mapping)

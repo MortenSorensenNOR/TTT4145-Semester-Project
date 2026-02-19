@@ -5,17 +5,19 @@ from enum import Enum
 
 import numpy as np
 
-from .channel_coding import (
+from modules.channel_coding import (
     CodeRates,
     Golay,
     LDPCConfig,
+    deinterleave,
+    interleave,
     ldpc_decode,
     ldpc_encode,
     ldpc_get_supported_payload_lengths,
 )
 
 
-def int_to_bits(n: int, length: int) -> list[int]:
+def _int_to_bits(n: int, length: int) -> list[int]:
     """Convert an integer to a fixed-width big-endian bit list."""
     return [(n >> (length - 1 - i)) & 1 for i in range(length)]
 
@@ -90,28 +92,32 @@ class FrameHeaderConstructor:
 
     @staticmethod
     def _crc_calc(data_bits: list[int], poly: int = 0b10011) -> int:
-        """Calculate CRC checksum from a bit list."""
+        """Calculate CRC checksum from a bit list.
+
+        Source: https://en.wikipedia.org/wiki/Cyclic_redundancy_check#Computation
+        """
+        crc_width = poly.bit_length() - 1
         reg = 0
         for b in data_bits:
             reg = (reg << 1) | b
-        reg <<= 4
+        reg <<= crc_width
         for i in range(len(data_bits) - 1, -1, -1):
-            if reg & (1 << (i + 4)):
+            if reg & (1 << (i + crc_width)):
                 reg ^= poly << i
-        return reg & 0b1111
+        return reg & ((1 << crc_width) - 1)
 
     def encode(self, header: FrameHeader) -> np.ndarray:
         """Encode frame header."""
         cfg = self.config
-        length_bits = int_to_bits(header.length, cfg.payload_length_bits)
-        src_bits = int_to_bits(header.src, cfg.src_bits)
-        dst_bits = int_to_bits(header.dst, cfg.dst_bits)
-        mod_scheme_bits = int_to_bits(header.mod_scheme.value, cfg.mod_scheme_bits)
-        coding_rate_bits = int_to_bits(header.coding_rate.value, cfg.coding_rate_bits)
+        length_bits = _int_to_bits(header.length, cfg.payload_length_bits)
+        src_bits = _int_to_bits(header.src, cfg.src_bits)
+        dst_bits = _int_to_bits(header.dst, cfg.dst_bits)
+        mod_scheme_bits = _int_to_bits(header.mod_scheme.value, cfg.mod_scheme_bits)
+        coding_rate_bits = _int_to_bits(header.coding_rate.value, cfg.coding_rate_bits)
 
         data_bits = length_bits + src_bits + dst_bits + mod_scheme_bits + coding_rate_bits + [0] * self.reserved_bits
         crc = self._crc_calc(data_bits)
-        data_bits += int_to_bits(crc, cfg.crc_bits)
+        data_bits += _int_to_bits(crc, cfg.crc_bits)
 
         return np.array(data_bits, dtype=int)
 
@@ -147,7 +153,7 @@ class FrameHeaderConstructor:
 
         # Verify CRC
         data_for_crc = length_bits + src_bits + dst_bits + mod_scheme_bits + coding_rate_bits + [0] * self.reserved_bits
-        expected_crc_bits = int_to_bits(self._crc_calc(data_for_crc), cfg.crc_bits)
+        expected_crc_bits = _int_to_bits(self._crc_calc(data_for_crc), cfg.crc_bits)
 
         return FrameHeader(
             length,
@@ -175,13 +181,30 @@ class FrameConstructor:
 
         self.golay = Golay()
 
+    @property
+    def header_encoded_n_bits(self) -> int:
+        """Number of bits in the Golay-encoded header (= number of BPSK symbols)."""
+        golay_ratio = self.golay.block_length // self.golay.message_length
+        return self.frame_header_constructor.header_length * golay_ratio
+
+    def payload_coded_n_bits(self, header: FrameHeader) -> int:
+        """Return the LDPC codeword length (coded bits) for a given header."""
+        k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
+        return LDPCConfig(k=k, code_rate=header.coding_rate).n
+
     @staticmethod
     def _crc16(data_bits: np.ndarray) -> int:
-        """Compute CRC-16-CCITT over a bit array (poly 0x11021)."""
-        reg = 0xFFFF
+        """Compute CRC-16-CCITT over a bit array (poly 0x1021).
+
+        Source: https://en.wikipedia.org/wiki/Cyclic_redundancy_check#CRC-16-CCITT
+        """
+        n = FrameConstructor.PAYLOAD_CRC_BITS
+        mask = (1 << n) - 1
+        msb = 1 << (n - 1)
+        reg = mask
         for bit in data_bits:
-            reg ^= int(bit) << 15
-            reg = (((reg << 1) ^ 0x1021) & 0xFFFF) if (reg & 0x8000) else ((reg << 1) & 0xFFFF)
+            reg ^= int(bit) << (n - 1)
+            reg = (((reg << 1) ^ 0x1021) & mask) if (reg & msb) else ((reg << 1) & mask)
         return reg
 
     def encode(self, header: FrameHeader, payload: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -190,7 +213,7 @@ class FrameConstructor:
         header_encoded = self.golay.encode(header_bits)
 
         crc = self._crc16(payload)
-        crc_bits = np.array(int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
+        crc_bits = np.array(_int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
         payload_with_crc = np.concatenate([payload, crc_bits])
 
         k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
@@ -203,16 +226,12 @@ class FrameConstructor:
 
         ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
         payload_encoded = ldpc_encode(payload_padded, ldpc_config)
+        payload_encoded = interleave(payload_encoded, ldpc_config.n)
 
         return (header_encoded, payload_encoded)
 
     def decode_header(self, header_encoded: np.ndarray) -> FrameHeader:
-        """Decode a Golay-encoded header and verify CRC.
-
-        Args:
-            header_encoded: Golay-encoded header bits (hard decisions).
-
-        """
+        """Decode a Golay-encoded header and verify CRC."""
         header_hard = header_encoded.astype(int)
         header_bits = self.golay.decode(header_hard)
         header = self.frame_header_constructor.decode(header_bits)
@@ -228,19 +247,12 @@ class FrameConstructor:
         *,
         soft: bool = False,
     ) -> np.ndarray:
-        """Decode an LDPC-encoded payload using parameters from a decoded header.
-
-        Args:
-            header: Already-decoded frame header (from decode_header).
-            payload_encoded: LDPC-encoded payload (hard bits or LLR values).
-            soft: If True, treat payload as LLR values. If False (default),
-                treat as hard bits and convert to LLR.
-
-        """
+        """Decode an LDPC-encoded payload using parameters from a decoded header."""
         payload_llr = payload_encoded if soft else 10.0 * (1 - 2 * payload_encoded.astype(np.float64))
 
         k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
         ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
+        payload_llr = deinterleave(payload_llr, ldpc_config.n)
         payload_bits = ldpc_decode(payload_llr, ldpc_config)
 
         data_bits = payload_bits[: header.length]

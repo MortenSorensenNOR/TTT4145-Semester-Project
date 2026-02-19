@@ -8,6 +8,7 @@ from matplotlib import animation
 from matplotlib.axes import Axes
 
 from pluto import create_pluto
+from pluto.config import CENTER_FREQ, RX_GAIN, SAMPLE_RATE
 
 
 def compute_psd(
@@ -25,7 +26,7 @@ def compute_psd(
 
 
 def bandpass_around_tone(samples: np.ndarray, offset_hz: float, sample_rate: float, bw: float = 20e3) -> np.ndarray:
-    """Signed bandpass — only matches the correct +/- frequency bin."""
+    """Signed bandpass - only matches the correct +/- frequency bin."""
     spectrum = np.fft.fft(samples)
     freqs = np.fft.fftfreq(len(samples), d=1 / sample_rate)
     mask = np.abs(freqs - offset_hz) > bw / 2
@@ -44,10 +45,7 @@ def style(ax: Axes) -> None:
 
 if __name__ == "__main__":
     # ─── Config ───────────────────────────────────────────────────────────────────
-    SAMPLE_RATE = 1e6
-    CENTER_FREQ = 2400e6
     NUM_SAMPS = 10000
-    RX_GAIN = 70.0
     FFT_SIZE = 1024 * 4
     AVERAGING = 10
     UPDATE_MS = 50

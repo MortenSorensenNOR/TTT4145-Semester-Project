@@ -1,43 +1,42 @@
 """Transmit a framed digital signal using the PlutoSDR.
 
-Pipeline: text -> bits -> frame encode -> modulate -> preamble + frame -> pulse shape -> SDR
+Pipeline: payload bits -> frame encode -> modulate -> preamble + frame -> pulse shape -> SDR
 """
 
 import logging
 
 import numpy as np
 
-from modules.channel_coding import CodeRates
+from modules.channel_coding import CodeRates, ldpc_get_supported_payload_lengths
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
-from modules.modulation import BPSK
+from modules.pilots import insert_pilots
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
 from modules.synchronization import build_preamble
 from modules.util import text_to_bits
-from pluto.config import RRC_ALPHA, RRC_NUM_TAPS, SPS, get_modulator
+from pluto.config import PILOT_CONFIG, RRC_ALPHA, RRC_NUM_TAPS, SPS, SYNC_CONFIG, get_modulator
 
-TX_GAIN = -30
+DEFAULT_TX_GAIN = -10
 GUARD_SAMPLES = 500
 MOD_SCHEME = ModulationSchemes.QPSK
 CODING_RATE = CodeRates.HALF_RATE
 
 
-def build_tx_signal(
-    message: str,
+def max_payload_bits(coding_rate: CodeRates = CODING_RATE) -> int:
+    """Maximum number of payload bits for the given coding rate."""
+    max_k = int(max(ldpc_get_supported_payload_lengths(coding_rate)))
+    return max_k - FrameConstructor.PAYLOAD_CRC_BITS
+
+
+def build_tx_signal_from_bits(
+    payload_bits: np.ndarray,
     mod_scheme: ModulationSchemes = MOD_SCHEME,
     coding_rate: CodeRates = CODING_RATE,
 ) -> np.ndarray:
-    """Run the full TX pipeline and return baseband samples (pre-DAC scaling).
-
-    Args:
-        message: Text string to transmit.
-        mod_scheme: Modulation scheme for the payload.
-        coding_rate: LDPC coding rate.
-
-    Returns:
-        Complex baseband samples ready for DAC scaling and transmission.
-
-    """
-    payload_bits = text_to_bits(message)
+    """Run the full TX pipeline from raw payload bits and return baseband samples."""
+    max_bits = max_payload_bits(coding_rate)
+    if len(payload_bits) > max_bits:
+        msg = f"Payload too long: {len(payload_bits)} bits exceeds max {max_bits} for {coding_rate.name}"
+        raise ValueError(msg)
 
     header = FrameHeader(
         length=len(payload_bits),
@@ -49,10 +48,11 @@ def build_tx_signal(
     fc = FrameConstructor()
     header_encoded, payload_encoded = fc.encode(header, payload_bits)
 
-    header_symbols = BPSK().bits2symbols(header_encoded)  # header always BPSK
+    header_symbols = get_modulator(ModulationSchemes.BPSK).bits2symbols(header_encoded)
     payload_symbols = get_modulator(header.mod_scheme).bits2symbols(payload_encoded)
+    payload_symbols = insert_pilots(payload_symbols, PILOT_CONFIG)
 
-    preamble = build_preamble()
+    preamble = build_preamble(SYNC_CONFIG)
     frame = np.concatenate([preamble, header_symbols, payload_symbols])
 
     h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
@@ -61,9 +61,17 @@ def build_tx_signal(
     return np.concatenate([zeros, tx_signal, zeros])
 
 
+def build_tx_signal(
+    message: str,
+    mod_scheme: ModulationSchemes = MOD_SCHEME,
+    coding_rate: CodeRates = CODING_RATE,
+) -> np.ndarray:
+    """Run the full TX pipeline from a text message and return baseband samples."""
+    return build_tx_signal_from_bits(text_to_bits(message), mod_scheme, coding_rate)
+
+
 if __name__ == "__main__":
-    import sys
-    from typing import Any, cast
+    import argparse
 
     from pluto import create_pluto
     from pluto.config import CENTER_FREQ, DAC_SCALE, SAMPLE_RATE
@@ -71,19 +79,23 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger(__name__)
 
+    parser = argparse.ArgumentParser(description="Transmit a message over PlutoSDR")
+    parser.add_argument("message", nargs="?", default="Hello, PlutoSDR!", help="Text message to transmit")
+    parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)")
+    args = parser.parse_args()
+
     # ── SDR setup ─────────────────────────────────────────────────────
-    sdr: Any = cast("Any", create_pluto())
+    sdr = create_pluto()
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.tx_rf_bandwidth = int(SAMPLE_RATE)
     sdr.tx_lo = int(CENTER_FREQ)
-    sdr.tx_hardwaregain_chan0 = TX_GAIN
+    sdr.tx_hardwaregain_chan0 = args.tx_gain
 
     # ── Build TX signal ───────────────────────────────────────────────
-    message = sys.argv[1] if len(sys.argv) > 1 else "Hello, PlutoSDR!"
-    tx_signal = build_tx_signal(message, MOD_SCHEME, CODING_RATE)
+    tx_signal = build_tx_signal(args.message, MOD_SCHEME, CODING_RATE)
     samples = tx_signal * DAC_SCALE
 
-    logger.info("TX: %r  (%d samples @ %d sps)", message, len(samples), SPS)
+    logger.info("TX: %r  (%d samples @ %d sps, gain=%.0f dB)", args.message, len(samples), SPS, args.tx_gain)
 
     # ── Transmit ──────────────────────────────────────────────────────
     try:

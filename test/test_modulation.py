@@ -43,14 +43,14 @@ class TestBPSK:
     def test_symbols2bits_perfect_symbols(self, bpsk: BPSK) -> None:
         """Verify demodulation on noiseless BPSK symbols."""
         symbols = np.array([-1 + 0j, 1 + 0j, 1 + 0j, -1 + 0j])
-        bits = bpsk.symbols2bits(symbols)
+        bits = bpsk.symbols2bits(symbols).flatten()
         expected = np.array([0, 1, 1, 0])
         np.testing.assert_array_equal(bits, expected)
 
     def test_symbols2bits_noisy_symbols(self, bpsk: BPSK) -> None:
         """Verify demodulation on noisy BPSK symbols."""
         symbols = np.array([-0.8 + 0.1j, 0.9 - 0.05j, 0.7 + 0.2j, -1.1 + 0j])
-        bits = bpsk.symbols2bits(symbols)
+        bits = bpsk.symbols2bits(symbols).flatten()
         expected = np.array([0, 1, 1, 0])
         np.testing.assert_array_equal(bits, expected)
 
@@ -58,7 +58,7 @@ class TestBPSK:
         """Verify that BPSK hard demodulation roundtrip is lossless."""
         original_bits = np.array([0, 1, 0, 1, 1, 0, 0, 1])
         symbols = bpsk.bits2symbols(original_bits)
-        recovered_bits = bpsk.symbols2bits(symbols)
+        recovered_bits = bpsk.symbols2bits(symbols).flatten()
         np.testing.assert_array_equal(recovered_bits, original_bits)
 
 
@@ -366,6 +366,6 @@ class TestEdgeCases:
         """Verify valid hard decision exactly at the BPSK boundary."""
         bpsk = BPSK()
         symbols = np.array([0 + 0j])
-        bits = bpsk.symbols2bits(symbols)
+        bits = bpsk.symbols2bits(symbols).flatten()
         np.testing.assert_array_less(bits[0], QPSK_BITS_PER_SYMBOL)
         np.testing.assert_array_less(-1, bits[0])

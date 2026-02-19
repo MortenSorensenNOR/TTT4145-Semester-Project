@@ -13,19 +13,7 @@ def ebn0_to_snr(ebn0_db: float, code_rate: float, bits_per_symbol: int = 2) -> f
     In dB:
         SNR (dB) = Eb/N0 (dB) + 10*log10(code_rate * bits_per_symbol)
 
-    Args:
-        ebn0_db: Eb/N0 in dB (energy per information bit over noise PSD).
-        code_rate: Channel coding rate (e.g., 0.5 for rate 1/2, 0.833 for rate 5/6).
-        bits_per_symbol: Number of bits per modulation symbol (2 for QPSK, 4 for 16-QAM).
-
-    Returns:
-        SNR per symbol (Es/N0) in dB.
-
-    Example:
-        >>> ebn0_to_snr(3.0, code_rate=0.5, bits_per_symbol=2)  # Rate 1/2 QPSK
-        3.0  # No change since 0.5 * 2 = 1
-        >>> ebn0_to_snr(3.0, code_rate=5/6, bits_per_symbol=2)  # Rate 5/6 QPSK
-        5.22  # +2.22 dB adjustment
+    Source: https://en.wikipedia.org/wiki/Eb/N0#Relation_to_Es/N0
 
     """
     return ebn0_db + 10 * np.log10(code_rate * bits_per_symbol)
@@ -40,35 +28,51 @@ def snr_to_ebn0(snr_db: float, code_rate: float, bits_per_symbol: int = 2) -> fl
     In dB:
         Eb/N0 (dB) = SNR (dB) - 10*log10(code_rate * bits_per_symbol)
 
-    Args:
-        snr_db: SNR per symbol (Es/N0) in dB.
-        code_rate: Channel coding rate (e.g., 0.5 for rate 1/2, 0.833 for rate 5/6).
-        bits_per_symbol: Number of bits per modulation symbol (2 for QPSK, 4 for 16-QAM).
-
-    Returns:
-        Eb/N0 in dB.
-
-    Example:
-        >>> snr_to_ebn0(3.0, code_rate=0.5, bits_per_symbol=2)  # Rate 1/2 QPSK
-        3.0  # No change since 0.5 * 2 = 1
-        >>> snr_to_ebn0(5.22, code_rate=5/6, bits_per_symbol=2)  # Rate 5/6 QPSK
-        3.0  # -2.22 dB adjustment
-
     """
     return snr_db - 10 * np.log10(code_rate * bits_per_symbol)
 
 
+def bytes_to_bits(data: bytes) -> np.ndarray:
+    """Convert raw bytes to a bit array."""
+    return np.unpackbits(np.frombuffer(data, dtype=np.uint8))
+
+
+def bits_to_bytes(bits: np.ndarray) -> bytes:
+    """Convert a bit array back to raw bytes."""
+    remainder = len(bits) % 8
+    if remainder:
+        bits = np.concatenate([bits, np.zeros(8 - remainder, dtype=int)])
+    return np.packbits(bits.astype(np.uint8)).tobytes()
+
+
 def text_to_bits(text: str) -> np.ndarray:
     """Convert a UTF-8 string to a bit array."""
-    return np.unpackbits(np.frombuffer(text.encode("utf-8"), dtype=np.uint8))
+    return bytes_to_bits(text.encode("utf-8"))
 
 
 def bits_to_text(bits: np.ndarray) -> str:
     """Convert a bit array back to a UTF-8 string."""
-    remainder = len(bits) % 8
-    if remainder:
-        bits = np.concatenate([bits, np.zeros(8 - remainder, dtype=int)])
-    return np.packbits(bits.astype(np.uint8)).tobytes().decode("utf-8", errors="replace")
+    return bits_to_bytes(bits).decode("utf-8", errors="replace")
+
+
+def block_agc(
+    symbols: NDArray[np.complex128],
+    block_size: int = 64,
+    target_power: float = 1.0,
+) -> NDArray[np.complex128]:
+    """Block-wise automatic gain control.
+
+    Divides the symbol stream into blocks and normalizes each block
+    to the target average power.
+    """
+    out = symbols.copy()
+    for start in range(0, len(symbols), block_size):
+        end = min(start + block_size, len(symbols))
+        block = out[start:end]
+        power = np.mean(np.abs(block) ** 2)
+        if power > 0:
+            out[start:end] = block * np.sqrt(target_power / power)
+    return out
 
 
 def calculate_reference_power(reference_signal: NDArray[np.complex128]) -> float:
@@ -77,14 +81,6 @@ def calculate_reference_power(reference_signal: NDArray[np.complex128]) -> float
     Use this to determine the transmit power of your signal chain
     (after modulation, upsampling, pulse shaping, etc.) for accurate
     SNR configuration in the channel model.
-
-    Args:
-        reference_signal: A representative signal sample, e.g., one or more
-            modulated, upsampled, and pulse-shaped symbols. Should not
-            contain leading/trailing zeros or silence periods.
-
-    Returns:
-        The average power of the reference signal.
 
     """
     return float(np.mean(np.abs(reference_signal) ** 2))

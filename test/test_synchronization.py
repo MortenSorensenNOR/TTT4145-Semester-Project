@@ -4,6 +4,7 @@ Uses matched-filter (cross-correlation) based detection for robust performance
 at low SNR. This is the standard approach used in WiFi, LTE, and 5G systems.
 """
 
+import logging
 from typing import cast
 
 import matplotlib.pyplot as plt
@@ -15,6 +16,8 @@ from modules.channel import (
     ChannelModel,
 )
 from modules.synchronization import Synchronizer, SynchronizerConfig, generate_zadoff_chu
+
+logger = logging.getLogger(__name__)
 
 # Fixed system parameters
 SAMPLE_RATE = 1e6
@@ -67,8 +70,8 @@ def run_sync(
         "cfo_hat_hz": result.cfo_hat_hz,
         "cfo_error_hz": result.cfo_hat_hz - actual_cfo,
         "timing_true": true_zc_long_start,
-        "timing_hat": result.timing_hat,
-        "timing_error": result.timing_hat - true_zc_long_start,
+        "timing_hat": result.long_zc_start,
+        "timing_error": result.long_zc_start - true_zc_long_start,
         "snr": snr,
         "seed": seed,
     }
@@ -185,10 +188,25 @@ def _print_summary(results: list[dict[str, object]]) -> None:
     """Print a summary of sweep results broken down by SNR."""
     successful = [r for r in results if r["success"]]
     if not successful:
+        logger.info("No successful trials.")
         return
 
     for snr in sorted(cast("set[float]", {r["snr_sweep"] for r in results})):
-        [r for r in successful if r["snr_sweep"] == snr]
+        snr_all = [r for r in results if r["snr_sweep"] == snr]
+        snr_ok = [r for r in successful if r["snr_sweep"] == snr]
+        cfo_errs = [abs(cast("float", r["cfo_error_hz"])) for r in snr_ok]
+        tim_errs = [abs(cast("float", r["timing_error"])) for r in snr_ok]
+        logger.info(
+            "SNR=%5.1f dB: %d/%d detected, CFO err mean=%.1f Hz max=%.1f Hz, "
+            "timing err mean=%.1f max=%.1f samples",
+            snr,
+            len(snr_ok),
+            len(snr_all),
+            np.mean(cfo_errs),
+            np.max(cfo_errs),
+            np.mean(tim_errs),
+            np.max(tim_errs),
+        )
 
 
 def _plot_results(results: list[dict[str, object]]) -> None:
