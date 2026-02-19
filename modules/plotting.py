@@ -141,7 +141,7 @@ def plot_spectrum(
 
     for sig, label in zip(signals, labels, strict=True):
         n = len(sig)
-        freq = np.fft.fftshift(np.fft.fftfreq(n, 1/sample_rate)) / 1e6  # MHz
+        freq = np.fft.fftshift(np.fft.fftfreq(n, 1 / sample_rate)) / 1e6  # MHz
         spectrum = np.fft.fftshift(np.fft.fft(sig))
         power_db = 20 * np.log10(np.abs(spectrum) + 1e-10)
         power_db -= np.max(power_db)  # normalize to 0 dB peak

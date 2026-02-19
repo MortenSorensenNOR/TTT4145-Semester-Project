@@ -37,3 +37,4 @@ pyldpc = ["numpy"]
 
 [tool.ruff]
 line-length = 120
+extend-exclude = ["vendor"]

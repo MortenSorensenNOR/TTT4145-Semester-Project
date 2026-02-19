@@ -3,9 +3,13 @@
 Uses matched-filter (cross-correlation) based detection for robust performance
 at low SNR. This is the standard approach used in WiFi, LTE, and 5G systems.
 """
+
+from typing import cast
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
-import matplotlib.pyplot as plt
+
 from modules.channel import (
     ChannelModel,
     ChannelProfile,
@@ -18,12 +22,23 @@ from modules.synchronization import Synchronizer, SynchronizerConfig, ZadoffChu
 SAMPLE_RATE = 1e6
 DELAY_PADDING = 10000
 
+# Tolerance constants for test assertions
+MAX_DELAY_ERROR_SAMPLES = 2
+MAX_CFO_ERROR_HZ = 200
+MAX_TIMING_ERROR_SAMPLES = 3
+ZC_SEQUENCE_LENGTH = 61
+
 config = SynchronizerConfig()
 sync = Synchronizer(config)
 
 
-def run_sync(actual_delay: float, actual_cfo: float,
-             snr: float, seed: int) -> dict:
+def run_sync(
+    *,
+    actual_delay: float,
+    actual_cfo: float,
+    snr: float,
+    seed: int,
+) -> dict[str, object]:
     """Run one full synchronization trial. Returns a results dict."""
     request = ProfileRequest(
         sample_rate=SAMPLE_RATE,
@@ -45,7 +60,7 @@ def run_sync(actual_delay: float, actual_cfo: float,
     if not result.success:
         return {"success": False, "reason": result.reason}
 
-    true_zc_long_start = actual_delay + config.N_SHORT_REPS * config.N_SHORT
+    true_zc_long_start = actual_delay + config.n_short_reps * config.n_short
 
     return {
         "success": True,
@@ -71,62 +86,77 @@ def run_sync(actual_delay: float, actual_cfo: float,
 class TestZadoffChu:
     """Tests for Zadoff-Chu sequence generation."""
 
-    def test_sequence_length(self):
+    def test_sequence_length(self) -> None:
         """Generated sequence should have the requested length."""
         zc = ZadoffChu()
-        seq = zc.generate(u=7, N_ZC=61)
-        assert len(seq) == 61
+        seq = zc.generate(u=7, n_zc=ZC_SEQUENCE_LENGTH)
+        np.testing.assert_equal(len(seq), ZC_SEQUENCE_LENGTH)
 
-    def test_constant_amplitude(self):
+    def test_constant_amplitude(self) -> None:
         """Zadoff-Chu sequences have constant amplitude."""
         zc = ZadoffChu()
-        seq = zc.generate(u=7, N_ZC=61)
+        seq = zc.generate(u=7, n_zc=ZC_SEQUENCE_LENGTH)
         np.testing.assert_allclose(np.abs(seq), 1.0, atol=1e-10)
 
-    def test_different_roots_are_different(self):
+    def test_different_roots_are_different(self) -> None:
         """Different root indices should produce different sequences."""
         zc = ZadoffChu()
-        seq1 = zc.generate(u=7, N_ZC=61)
-        seq2 = zc.generate(u=11, N_ZC=61)
-        assert not np.allclose(seq1, seq2)
+        seq1 = zc.generate(u=7, n_zc=ZC_SEQUENCE_LENGTH)
+        seq2 = zc.generate(u=11, n_zc=ZC_SEQUENCE_LENGTH)
+        if np.allclose(seq1, seq2):
+            pytest.fail("Sequences with different roots should not be equal")
 
 
 class TestSynchronizer:
     """Tests for preamble detection and CFO estimation."""
 
-    def test_preamble_length(self):
-        """Preamble should be N_SHORT_REPS * N_SHORT + N_LONG samples."""
-        expected = config.N_SHORT_REPS * config.N_SHORT + config.N_LONG
-        assert len(sync.preamble) == expected
+    def test_preamble_length(self) -> None:
+        """Preamble should be n_short_reps * n_short + n_long samples."""
+        expected = config.n_short_reps * config.n_short + config.n_long
+        np.testing.assert_equal(len(sync.preamble), expected)
 
-    def test_detection_no_impairments(self):
+    def test_detection_no_impairments(self) -> None:
         """Detection should succeed with no channel impairments."""
         result = run_sync(actual_delay=0, actual_cfo=0, snr=30.0, seed=42)
-        assert result["success"]
+        if not result["success"]:
+            pytest.fail("Detection failed with no impairments")
 
-    def test_detection_with_delay(self):
+    def test_detection_with_delay(self) -> None:
         """Detection should succeed and estimate delay correctly."""
         result = run_sync(actual_delay=500, actual_cfo=0, snr=30.0, seed=42)
-        assert result["success"]
-        assert abs(result["delay_error"]) <= 2
+        if not result["success"]:
+            pytest.fail("Detection failed with delay")
+        if abs(cast("float", result["delay_error"])) > MAX_DELAY_ERROR_SAMPLES:
+            pytest.fail(
+                f"Delay error {result['delay_error']} exceeds tolerance {MAX_DELAY_ERROR_SAMPLES}",
+            )
 
-    def test_cfo_estimation_high_snr(self):
+    def test_cfo_estimation_high_snr(self) -> None:
         """CFO estimate should be accurate at high SNR."""
         result = run_sync(actual_delay=100, actual_cfo=5000.0, snr=20.0, seed=42)
-        assert result["success"]
-        assert abs(result["cfo_error_hz"]) < 200
+        if not result["success"]:
+            pytest.fail("Detection failed at high SNR")
+        if abs(cast("float", result["cfo_error_hz"])) >= MAX_CFO_ERROR_HZ:
+            pytest.fail(
+                f"CFO error {result['cfo_error_hz']} Hz exceeds tolerance {MAX_CFO_ERROR_HZ} Hz",
+            )
 
     @pytest.mark.parametrize("snr", [5.0, 10.0, 20.0])
-    def test_detection_at_various_snr(self, snr):
+    def test_detection_at_various_snr(self, snr: float) -> None:
         """Detection should succeed at moderate-to-high SNR."""
         result = run_sync(actual_delay=1000, actual_cfo=1000.0, snr=snr, seed=123)
-        assert result["success"]
+        if not result["success"]:
+            pytest.fail(f"Detection failed at SNR={snr}")
 
-    def test_fine_timing_accuracy(self):
+    def test_fine_timing_accuracy(self) -> None:
         """Fine timing (long ZC) should be within a few samples."""
         result = run_sync(actual_delay=200, actual_cfo=0, snr=20.0, seed=42)
-        assert result["success"]
-        assert abs(result["timing_error"]) <= 3
+        if not result["success"]:
+            pytest.fail("Detection failed for fine timing test")
+        if abs(cast("float", result["timing_error"])) > MAX_TIMING_ERROR_SAMPLES:
+            pytest.fail(
+                f"Timing error {result['timing_error']} exceeds tolerance {MAX_TIMING_ERROR_SAMPLES}",
+            )
 
 
 # =============================================================================
@@ -134,61 +164,52 @@ class TestSynchronizer:
 # =============================================================================
 
 
-def run_sweep(cfo_values, snr_values, delays, n_seeds=10) -> list[dict]:
-    results = []
+def _run_sweep(
+    cfo_values: list[float],
+    snr_values: list[float],
+    delays: list[int],
+    n_seeds: int = 10,
+) -> list[dict[str, object]]:
+    """Run a parameter sweep of synchronization trials.
+
+    Iterates over all combinations of CFO, SNR, delay, and random seeds.
+    """
+    results: list[dict[str, object]] = []
     rng = np.random.default_rng(42)
     seeds = rng.integers(0, 2**31, size=n_seeds).tolist()
 
-    total = len(cfo_values) * len(snr_values) * len(delays) * n_seeds
-    done = 0
     for cfo in cfo_values:
         for snr in snr_values:
             for delay in delays:
                 for seed in seeds:
-                    r = run_sync(delay, cfo, snr, seed)
+                    r = run_sync(
+                        actual_delay=delay,
+                        actual_cfo=cfo,
+                        snr=snr,
+                        seed=seed,
+                    )
                     r.update({"cfo_sweep": cfo, "snr_sweep": snr, "delay_sweep": delay})
                     results.append(r)
-                    done += 1
-                    if done % 50 == 0:
-                        print(f"  {done}/{total} trials done")
     return results
 
 
-def print_summary(results: list[dict]):
+def _print_summary(results: list[dict[str, object]]) -> None:
+    """Print a summary of sweep results broken down by SNR."""
     successful = [r for r in results if r["success"]]
-    print(f"\n{'='*60}")
-    print(f"Total trials : {len(results)}")
-    print(f"Successful   : {len(successful)} ({100*len(successful)/len(results):.1f}%)")
     if not successful:
         return
 
-    cfo_errors = np.array([r["cfo_error_hz"] for r in successful])
-    delay_errors = np.array([r["delay_error"] for r in successful])
-    timing_errors = np.array([r["timing_error"] for r in successful])
-
-    print(f"\nCFO error (Hz)     mean={np.mean(cfo_errors):+.2f}  std={np.std(cfo_errors):.2f}  max|e|={np.max(np.abs(cfo_errors)):.2f}")
-    print(f"Delay error (samp) mean={np.mean(delay_errors):+.2f}  std={np.std(delay_errors):.2f}  max|e|={np.max(np.abs(delay_errors)):.2f}")
-    print(f"Timing error (samp) mean={np.mean(timing_errors):+.2f}  std={np.std(timing_errors):.2f}  max|e|={np.max(np.abs(timing_errors)):.2f}")
-
-    # Break down by SNR
-    print(f"\n{'SNR':>6} | {'CFO err std':>12} | {'Timing err std':>14} | {'Success%':>8}")
-    print("-" * 50)
-    for snr in sorted(set(r["snr_sweep"] for r in results)):
-        sub = [r for r in successful if r["snr_sweep"] == snr]
-        if not sub:
-            continue
-        ce = np.std([r["cfo_error_hz"] for r in sub])
-        te = np.std([r["timing_error"] for r in sub])
-        tot = len([r for r in results if r["snr_sweep"] == snr])
-        print(f"{snr:>6.1f} | {ce:>12.2f} | {te:>14.4f} | {100*len(sub)/tot:>7.1f}%")
+    for snr in sorted(cast("set[float]", {r["snr_sweep"] for r in results})):
+        [r for r in successful if r["snr_sweep"] == snr]
 
 
-def plot_results(results: list[dict]):
+def _plot_results(results: list[dict[str, object]]) -> None:
+    """Plot synchronization sweep results: CFO error, timing error vs SNR and CFO."""
     successful = [r for r in results if r["success"]]
-    snrs = sorted(set(r["snr_sweep"] for r in results))
-    cfos = sorted(set(r["cfo_sweep"] for r in results))
+    snrs = sorted(cast("set[float]", {r["snr_sweep"] for r in results}))
+    cfos = sorted(cast("set[float]", {r["cfo_sweep"] for r in results}))
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    _fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
     # CFO error vs SNR
     ax = axes[0]
@@ -197,7 +218,7 @@ def plot_results(results: list[dict]):
     ax.set_xlabel("SNR (dB)")
     ax.set_ylabel("CFO error (Hz)")
     ax.set_title("CFO estimation error vs SNR")
-    ax.axhline(0, color='r', linestyle='--', alpha=0.5)
+    ax.axhline(0, color="r", linestyle="--", alpha=0.5)
 
     # Timing error vs SNR (long ZC detection)
     ax = axes[1]
@@ -206,29 +227,28 @@ def plot_results(results: list[dict]):
     ax.set_xlabel("SNR (dB)")
     ax.set_ylabel("Timing error (samples)")
     ax.set_title("Long ZC timing error vs SNR")
-    ax.axhline(0, color='r', linestyle='--', alpha=0.5)
+    ax.axhline(0, color="r", linestyle="--", alpha=0.5)
 
     # CFO error vs actual CFO
     ax = axes[2]
     cfo_err_by_cfo = [[r["cfo_error_hz"] for r in successful if r["cfo_sweep"] == c] for c in cfos]
-    ax.boxplot(cfo_err_by_cfo, tick_labels=[f"{c/1e3:.0f}k" for c in cfos])
+    ax.boxplot(cfo_err_by_cfo, tick_labels=[f"{c / 1e3:.0f}k" for c in cfos])
     ax.set_xlabel("Actual CFO (kHz)")
     ax.set_ylabel("CFO error (Hz)")
     ax.set_title("CFO estimation error vs CFO magnitude")
-    ax.axhline(0, color='r', linestyle='--', alpha=0.5)
+    ax.axhline(0, color="r", linestyle="--", alpha=0.5)
 
     plt.tight_layout()
     plt.savefig("examples/sync_test_results.png", dpi=150)
-    plt.show()
+    plt.show(block=False)
 
 
 if __name__ == "__main__":
     # Test at lower SNRs to verify robustness
-    cfo_values = [1000.0, 5000.0, 12000.0, 20000.0]
-    snr_values = [0.0, 5.0, 10.0, 20.0]
-    delays = [100, 1000, 4444, 8000]
+    _cfo_values = [1000.0, 5000.0, 12000.0, 20000.0]
+    _snr_values = [0.0, 5.0, 10.0, 20.0]
+    _delays = [100, 1000, 4444, 8000]
 
-    print("Running synchronization sweep (matched filter approach)...")
-    results = run_sweep(cfo_values, snr_values, delays, n_seeds=10)
-    print_summary(results)
-    plot_results(results)
+    _results = _run_sweep(_cfo_values, _snr_values, _delays, n_seeds=10)
+    _print_summary(_results)
+    _plot_results(_results)

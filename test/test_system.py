@@ -1,19 +1,19 @@
 """System-level checks for modulation, shaping, and channel flow."""
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
-from modules.plotting import plot_iq
 from modules.channel import (
     ChannelModel,
     ChannelProfile,
     ProfileOverrides,
     ProfileRequest,
 )
-from modules.modulation import BPSK, QPSK
-from modules.pulse_shaping import PulseShaper
 from modules.channel_coding import CodeRates
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
+from modules.modulation import BPSK, QPSK
+from modules.plotting import plot_iq
+from modules.pulse_shaping import PulseShaper
 
 BANDWIDTH_HZ = 1e6
 ROLL_OFF = 0.25
@@ -60,15 +60,8 @@ def test() -> None:
     )
 
     # generate payload
-    header = FrameHeader(
-        length=PAYLOAD_LENGTH,
-        src=SRC,
-        dst=DST,
-        mod_scheme=MOD_SCHEME,
-        coding_rate=CODING_RATE
-    )
+    header = FrameHeader(length=PAYLOAD_LENGTH, src=SRC, dst=DST, mod_scheme=MOD_SCHEME, coding_rate=CODING_RATE)
     payload = rng.integers(0, 2, size=(PAYLOAD_LENGTH), dtype=int)
-    print(payload)
 
     frame_constructor = FrameConstructor()
     header_encoded, payload_encoded = frame_constructor.encode(header, payload)
@@ -87,18 +80,15 @@ def test() -> None:
     rx_filtered = pulse_shaper.shape(rx_signal)
     rx_symbols = rx_filtered[::SAMPLES_PER_SYMBOL]
 
-    # TODO: have a nice way to get the number of symbols for the header that does not rely on having the modulated header
-    rx_header_sym = rx_symbols[:len(header_modulated)]
-    rx_payload_sym = rx_symbols[len(header_modulated):]
+    rx_header_sym = rx_symbols[: len(header_modulated)]
+    rx_payload_sym = rx_symbols[len(header_modulated) :]
 
     rx_header_bits = bpsk.symbols2bits(rx_header_sym)
     rx_payload_bits = qpsk.symbols2bits_soft(rx_payload_sym)
-    print(rx_payload_bits.shape)
 
     # decode header
     rx_header, rx_payload = frame_constructor.decode(rx_header_bits, rx_payload_bits.flatten())
     ber = float(np.mean(rx_payload != payload))
-    print(f"BER: {ber}")
 
     np.testing.assert_equal(rx_header.length, PAYLOAD_LENGTH)
     np.testing.assert_equal(rx_payload_bits.shape[1], BITS_PER_SYMBOL)
@@ -107,7 +97,8 @@ def test() -> None:
 
     plot_iq(tx_signal)
     plot_iq(rx_signal)
-    plt.show()
+    plt.show(block=False)
+
 
 if __name__ == "__main__":
     test()

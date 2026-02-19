@@ -2,7 +2,8 @@
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings
+from hypothesis import given
+from hypothesis import strategies as st
 
 from modules.modulation import BPSK, QAM, QPSK
 
@@ -261,15 +262,11 @@ class TestQPSKSoftDecision:
         np.testing.assert_array_equal(hard_from_llr, bits)
 
     @given(
-        bits=st.lists(st.integers(0, 1), min_size=2, max_size=100).filter(
-            lambda x: len(x) % 2 == 0
-        ),
+        bits=st.lists(st.integers(0, 1), min_size=2, max_size=100).filter(lambda x: len(x) % 2 == 0),
         snr_db=st.floats(min_value=10.0, max_value=30.0),
         seed=st.integers(min_value=0, max_value=2**32 - 1),
     )
-    def test_soft_to_hard_decision_high_snr(
-        self, bits: list[int], snr_db: float, seed: int
-    ) -> None:
+    def test_soft_to_hard_decision_high_snr(self, bits: list[int], snr_db: float, seed: int) -> None:
         """Verify that hard decisions from LLRs match original bits at high SNR."""
         qpsk = QPSK()
         rng = np.random.default_rng(seed)
@@ -281,9 +278,7 @@ class TestQPSKSoftDecision:
         # sigma^2 = N_0 / 2 = 1 / (2 * SNR)
         snr_linear = 10 ** (snr_db / 10)
         sigma_sq = 1.0 / (2 * snr_linear)
-        noise = np.sqrt(sigma_sq / 2) * (
-            rng.standard_normal(len(symbols)) + 1j * rng.standard_normal(len(symbols))
-        )
+        noise = np.sqrt(sigma_sq / 2) * (rng.standard_normal(len(symbols)) + 1j * rng.standard_normal(len(symbols)))
         noisy_symbols = symbols + noise
 
         # Get soft decisions and convert to hard decisions

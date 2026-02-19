@@ -105,9 +105,7 @@ class ChannelConfig:
     def __post_init__(self) -> None:
         """Validate configuration."""
         if len(self.multipath_delays_samples) != len(self.multipath_gains_db):
-            msg = (
-                "multipath_delays_samples and multipath_gains_db must have same length"
-            )
+            msg = "multipath_delays_samples and multipath_gains_db must have same length"
             raise ValueError(msg)
         if self.fading_type not in ("rayleigh", "rician"):
             msg = "fading_type must be 'rayleigh' or 'rician'"
@@ -291,9 +289,7 @@ def apply_fractional_delay(
         # Pad to handle filter edge effects
         y_padded = np.concatenate([np.zeros(n_taps - 1, dtype=x.dtype), y])
         lfilter_result = signal.lfilter(h, 1.0, y_padded)
-        y_filtered = (
-            lfilter_result[0] if isinstance(lfilter_result, tuple) else lfilter_result
-        )
+        y_filtered = lfilter_result[0] if isinstance(lfilter_result, tuple) else lfilter_result
         y = y_filtered[n_taps - 1 : n_taps - 1 + len(x)]
 
     new_buffer = _build_delay_buffer(x, int_delay, buffer)
@@ -332,15 +328,13 @@ def apply_multipath(
         # Get delayed samples
         if frac_delay < FRACTIONAL_DELAY_LINEAR_THRESHOLD:
             # Integer delay - simple indexing
-            delayed = x_extended[
-                max_delay - int_delay : max_delay - int_delay + n_samples
-            ]
+            delayed = x_extended[max_delay - int_delay : max_delay - int_delay + n_samples]
         else:
             # Fractional delay - linear interpolation for simplicity
             idx = max_delay - int_delay
-            delayed = (1 - frac_delay) * x_extended[
-                idx : idx + n_samples
-            ] + frac_delay * x_extended[idx - 1 : idx - 1 + n_samples]
+            delayed = (1 - frac_delay) * x_extended[idx : idx + n_samples] + frac_delay * x_extended[
+                idx - 1 : idx - 1 + n_samples
+            ]
 
         # Apply gain (static or time-varying)
         if fading_gains is not None:
@@ -456,17 +450,13 @@ def generate_fading_gains(
             k_factor = params.rician_k_linear
             los_amplitude = np.sqrt(k_factor / (k_factor + 1))
             scatter_amplitude = np.sqrt(1 / (k_factor + 1))
-            gains[tap, :] = los_amplitude + scatter_amplitude * (
-                inphase + 1j * quadrature
-            )
+            gains[tap, :] = los_amplitude + scatter_amplitude * (inphase + 1j * quadrature)
         else:
             # Pure Rayleigh
             gains[tap, :] = (inphase + 1j * quadrature) / np.sqrt(2)
 
     # Update phases for streaming continuity
-    phase_increment = (
-        2 * np.pi * params.doppler_hz * params.n_samples / params.sample_rate
-    )
+    phase_increment = 2 * np.pi * params.doppler_hz * params.n_samples / params.sample_rate
     new_phases = phases.copy()
     for tap in range(params.n_taps):
         for k in range(n_sinusoids):
@@ -485,11 +475,7 @@ def apply_cfo_and_phase(
     t = (np.arange(params.sample_index, params.sample_index + n)) / params.sample_rate
 
     # Total phase: initial + CFO + drift
-    phase = (
-        params.initial_phase
-        + 2 * np.pi * params.cfo_hz * t
-        + 2 * np.pi * params.phase_drift_hz * t
-    )
+    phase = params.initial_phase + 2 * np.pi * params.cfo_hz * t + 2 * np.pi * params.phase_drift_hz * t
 
     y = x * np.exp(1j * phase)
 
@@ -575,9 +561,7 @@ def apply_sco(
         p3 = x_extended[idx + 2] if idx + 2 < len(x_extended) else p2
 
         term = 3 * (p1 - p2) + p3 - p0
-        y[i] = p1 + 0.5 * frac * (
-            p2 - p0 + frac * (2 * p0 - 5 * p1 + 4 * p2 - p3 + frac * term)
-        )
+        y[i] = p1 + 0.5 * frac * (p2 - p0 + frac * (2 * p0 - 5 * p1 + 4 * p2 - p3 + frac * term))
 
     # Update phase for next block
     new_phase = (phase + n_out * ratio) % 1.0
@@ -607,6 +591,7 @@ def apply_awgn(
 
     Returns:
         Signal with added AWGN.
+
     """
     # Calculate noise power for desired SNR using reference power
     snr_linear = 10 ** (snr_db / 10)
@@ -736,9 +721,7 @@ class ChannelModel:
         # 3. CFO and phase offset
         if self.config.enable_cfo or self.config.enable_phase_offset:
             cfo = self.config.cfo_hz if self.config.enable_cfo else 0.0
-            drift = (
-                self.config.phase_drift_hz if self.config.enable_phase_offset else 0.0
-            )
+            drift = self.config.phase_drift_hz if self.config.enable_phase_offset else 0.0
             # Always use initial_phase_rad - sample_index provides streaming continuity
             y, state.phase_accumulator = apply_cfo_and_phase(
                 y,

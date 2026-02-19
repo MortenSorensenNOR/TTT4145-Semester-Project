@@ -26,6 +26,7 @@ def ebn0_to_snr(ebn0_db: float, code_rate: float, bits_per_symbol: int = 2) -> f
         3.0  # No change since 0.5 * 2 = 1
         >>> ebn0_to_snr(3.0, code_rate=5/6, bits_per_symbol=2)  # Rate 5/6 QPSK
         5.22  # +2.22 dB adjustment
+
     """
     return ebn0_db + 10 * np.log10(code_rate * bits_per_symbol)
 
@@ -52,6 +53,7 @@ def snr_to_ebn0(snr_db: float, code_rate: float, bits_per_symbol: int = 2) -> fl
         3.0  # No change since 0.5 * 2 = 1
         >>> snr_to_ebn0(5.22, code_rate=5/6, bits_per_symbol=2)  # Rate 5/6 QPSK
         3.0  # -2.22 dB adjustment
+
     """
     return snr_db - 10 * np.log10(code_rate * bits_per_symbol)
 
@@ -70,5 +72,6 @@ def calculate_reference_power(reference_signal: NDArray[np.complex128]) -> float
 
     Returns:
         The average power of the reference signal.
+
     """
     return float(np.mean(np.abs(reference_signal) ** 2))

@@ -1,7 +1,13 @@
-import pytest
-import numpy as np
-from hypothesis import given, strategies as st, settings
+"""Tests for FrameHeaderConstructor encode/decode roundtrip and CRC detection."""
 
+from collections.abc import Sequence
+
+import numpy as np
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from modules.channel import ChannelConfig, ChannelModel
 from modules.channel_coding import CodeRates
 from modules.frame_constructor import (
     FrameHeader,
@@ -9,7 +15,6 @@ from modules.frame_constructor import (
     FrameHeaderConstructor,
     ModulationSchemes,
 )
-from modules.channel import ChannelConfig, ChannelModel
 
 LENGTH_BITS = 10
 SRC_BITS = 2
@@ -24,19 +29,48 @@ DST_MAX = (1 << DST_BITS) - 1
 
 PADDING_BIT_POS = LENGTH_BITS + SRC_BITS + DST_BITS + MOD_SCHEME_BITS + CODING_RATE_BITS
 
+HIGH_SNR_DB = 30.0
+LOW_SNR_DB = -5.0
+PHASE_OFFSET_RAD = np.pi / 4
+CHANNEL_SEED = 42
+CHANNEL_SEED_ALT = 123
+MAX_HYPOTHESIS_EXAMPLES = 50
+
 
 def make_header_constructor() -> FrameHeaderConstructor:
-    return FrameHeaderConstructor(
-        length_bits=LENGTH_BITS,
+    """Create a FrameHeaderConstructor with default test config."""
+    config = FrameHeaderConfig(
+        payload_length_bits=LENGTH_BITS,
         src_bits=SRC_BITS,
         dst_bits=DST_BITS,
         mod_scheme_bits=MOD_SCHEME_BITS,
         coding_rate_bits=CODING_RATE_BITS,
         crc_bits=CRC_BITS,
     )
+    return FrameHeaderConstructor(config)
+
+
+def _make_header(
+    length: int,
+    src: int,
+    dst: int,
+    mod_scheme: ModulationSchemes,
+    coding_rate: CodeRates,
+) -> FrameHeader:
+    """Create a FrameHeader with the given fields and zero CRC."""
+    return FrameHeader(
+        length=length,
+        src=src,
+        dst=dst,
+        mod_scheme=mod_scheme,
+        coding_rate=coding_rate,
+        crc=0,
+    )
 
 
 class TestFrameHeaderConstructor:
+    """Tests for basic header encode/decode roundtrip and CRC burst error detection."""
+
     header_constructor = make_header_constructor()
 
     @given(
@@ -46,69 +80,68 @@ class TestFrameHeaderConstructor:
         mod_scheme=st.sampled_from(ModulationSchemes),
         coding_rate=st.sampled_from(CodeRates),
     )
-    def test_roundtrip(self, length, src, dst, mod_scheme, coding_rate):
-        header = FrameHeader(
-            length=length,
-            src=src,
-            dst=dst,
-            mod_scheme=mod_scheme,
-            coding_rate=coding_rate,
-            crc=0,
-        )
+    def test_roundtrip(
+        self,
+        length: int,
+        src: int,
+        dst: int,
+        mod_scheme: ModulationSchemes,
+        coding_rate: CodeRates,
+    ) -> None:
+        """Encode then decode a header and verify all fields match."""
+        header = _make_header(length, src, dst, mod_scheme, coding_rate)
         encoded = self.header_constructor.encode(header)
         decoded = self.header_constructor.decode(np.array(encoded))
 
-        assert decoded.length == length
-        assert decoded.src == src
-        assert decoded.dst == dst
-        assert decoded.mod_scheme == mod_scheme
-        assert decoded.coding_rate == coding_rate
-        assert decoded.crc_passed
+        np.testing.assert_equal(decoded.length, length)
+        np.testing.assert_equal(decoded.src, src)
+        np.testing.assert_equal(decoded.dst, dst)
+        np.testing.assert_equal(decoded.mod_scheme, mod_scheme)
+        np.testing.assert_equal(decoded.coding_rate, coding_rate)
+        if not decoded.crc_passed:
+            pytest.fail("CRC did not pass after clean roundtrip")
 
-    @given(
-        length=st.integers(min_value=0, max_value=LENGTH_MAX),
-        src=st.integers(min_value=0, max_value=SRC_MAX),
-        dst=st.integers(min_value=0, max_value=DST_MAX),
-        mod_scheme=st.sampled_from(ModulationSchemes),
-        coding_rate=st.sampled_from(CodeRates),
-        data=st.data(),
-    )
-    def test_crc_detects_burst_errors(self, length, src, dst, mod_scheme, coding_rate, data):
-        header = FrameHeader(
-            length=length,
-            src=src,
-            dst=dst,
-            mod_scheme=mod_scheme,
-            coding_rate=coding_rate,
-            crc=0,
-        )
+    @given(data=st.data())
+    def test_crc_detects_burst_errors(
+        self,
+        data: st.DataObject,
+    ) -> None:
+        """CRC should detect burst errors up to CRC_BITS in length."""
+        length = data.draw(st.integers(min_value=0, max_value=LENGTH_MAX))
+        src = data.draw(st.integers(min_value=0, max_value=SRC_MAX))
+        dst = data.draw(st.integers(min_value=0, max_value=DST_MAX))
+        mod_scheme = data.draw(st.sampled_from(ModulationSchemes))
+        coding_rate = data.draw(st.sampled_from(CodeRates))
+        header = _make_header(length, src, dst, mod_scheme, coding_rate)
         encoded = self.header_constructor.encode(header)
 
         padding_bit_pos = PADDING_BIT_POS
 
-        # CRC guarantees detection of burst errors up to CRC_BITS
         burst_len = data.draw(st.integers(min_value=1, max_value=CRC_BITS))
 
-        # Pick a valid start position that avoids the padding bit
-        # and doesn't go out of bounds
         max_start = len(encoded) - burst_len
-        valid_starts = [
-            i for i in range(max_start + 1)
-            if padding_bit_pos not in range(i, i + burst_len)
-        ]
+        valid_starts = [i for i in range(max_start + 1) if padding_bit_pos not in range(i, i + burst_len)]
         burst_start = data.draw(st.sampled_from(valid_starts))
 
-        # Flip consecutive bits (burst error)
         for i in range(burst_start, burst_start + burst_len):
             encoded[i] ^= 1
 
         try:
             decoded = self.header_constructor.decode(np.array(encoded))
-            # If decode succeeds, CRC should fail
-            assert not decoded.crc_passed
+            if decoded.crc_passed:
+                pytest.fail("CRC passed despite burst error injection")
         except ValueError:
-            # Corruption caused invalid enum value - also counts as detection
             pass
+
+
+def _bits_to_bpsk(bits: np.ndarray | Sequence[int]) -> np.ndarray:
+    """Convert bits to BPSK symbols (0 -> +1, 1 -> -1)."""
+    return 1 - 2 * np.array(bits, dtype=np.float64)
+
+
+def _bpsk_to_bits(symbols: np.ndarray) -> np.ndarray:
+    """Convert BPSK symbols back to bits via hard decision."""
+    return (np.real(symbols) < 0).astype(int)
 
 
 class TestFrameHeaderWithChannel:
@@ -116,14 +149,6 @@ class TestFrameHeaderWithChannel:
 
     header_constructor = make_header_constructor()
 
-    def _bits_to_bpsk(self, bits: list[int]) -> np.ndarray:
-        """Convert bits to BPSK symbols (0 -> +1, 1 -> -1)."""
-        return 1 - 2 * np.array(bits, dtype=np.float64)
-
-    def _bpsk_to_bits(self, symbols: np.ndarray) -> np.ndarray:
-        """Convert BPSK symbols back to bits via hard decision."""
-        return (np.real(symbols) < 0).astype(int)
-
     @given(
         length=st.integers(min_value=0, max_value=LENGTH_MAX),
         src=st.integers(min_value=0, max_value=SRC_MAX),
@@ -131,153 +156,165 @@ class TestFrameHeaderWithChannel:
         mod_scheme=st.sampled_from(ModulationSchemes),
         coding_rate=st.sampled_from(CodeRates),
     )
-    @settings(max_examples=50)
-    def test_roundtrip_high_snr(self, length, src, dst, mod_scheme, coding_rate):
+    @settings(max_examples=MAX_HYPOTHESIS_EXAMPLES)
+    def test_roundtrip_high_snr(
+        self,
+        length: int,
+        src: int,
+        dst: int,
+        mod_scheme: ModulationSchemes,
+        coding_rate: CodeRates,
+    ) -> None:
         """Header should survive high SNR AWGN channel."""
-        header = FrameHeader(
-            length=length,
-            src=src,
-            dst=dst,
-            mod_scheme=mod_scheme,
-            coding_rate=coding_rate,
-            crc=0,
-        )
+        header = _make_header(length, src, dst, mod_scheme, coding_rate)
         encoded_bits = self.header_constructor.encode(header)
 
-        # Modulate to BPSK
-        tx_symbols = self._bits_to_bpsk(encoded_bits)
+        tx_symbols = _bits_to_bpsk(encoded_bits)
 
-        # Pass through high SNR channel
-        channel = ChannelModel(ChannelConfig(snr_db=30.0, seed=42))
+        channel = ChannelModel(ChannelConfig(snr_db=HIGH_SNR_DB, seed=CHANNEL_SEED))
         rx_symbols = channel.apply(tx_symbols)
 
-        # Demodulate
-        rx_bits = self._bpsk_to_bits(rx_symbols)
+        rx_bits = _bpsk_to_bits(rx_symbols)
 
-        # Decode header
         decoded = self.header_constructor.decode(rx_bits)
 
-        assert decoded.length == length
-        assert decoded.src == src
-        assert decoded.dst == dst
-        assert decoded.mod_scheme == mod_scheme
-        assert decoded.coding_rate == coding_rate
-        assert decoded.crc_passed
+        np.testing.assert_equal(decoded.length, length)
+        np.testing.assert_equal(decoded.src, src)
+        np.testing.assert_equal(decoded.dst, dst)
+        np.testing.assert_equal(decoded.mod_scheme, mod_scheme)
+        np.testing.assert_equal(decoded.coding_rate, coding_rate)
+        if not decoded.crc_passed:
+            pytest.fail("CRC did not pass after high-SNR channel roundtrip")
 
     @pytest.mark.parametrize("snr_db", [20.0, 15.0, 10.0])
-    def test_roundtrip_various_snr(self, snr_db):
+    def test_roundtrip_various_snr(self, snr_db: float) -> None:
         """Test header at various SNR levels with fixed seed for reproducibility."""
-        header = FrameHeader(
+        header = _make_header(
             length=100,
             src=1,
             dst=2,
             mod_scheme=ModulationSchemes.QPSK,
             coding_rate=CodeRates.HALF_RATE,
-            crc=0,
         )
         encoded_bits = self.header_constructor.encode(header)
 
-        tx_symbols = self._bits_to_bpsk(encoded_bits)
+        tx_symbols = _bits_to_bpsk(encoded_bits)
 
-        channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=123))
+        channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=CHANNEL_SEED_ALT))
         rx_symbols = channel.apply(tx_symbols)
 
-        rx_bits = self._bpsk_to_bits(rx_symbols)
+        rx_bits = _bpsk_to_bits(rx_symbols)
         decoded = self.header_constructor.decode(rx_bits)
 
-        # At these SNR levels with BPSK, we should have no errors
-        assert decoded.length == header.length
-        assert decoded.src == header.src
-        assert decoded.dst == header.dst
-        assert decoded.mod_scheme == header.mod_scheme
-        assert decoded.coding_rate == header.coding_rate
-        assert decoded.crc_passed
+        np.testing.assert_equal(decoded.length, header.length)
+        np.testing.assert_equal(decoded.src, header.src)
+        np.testing.assert_equal(decoded.dst, header.dst)
+        np.testing.assert_equal(decoded.mod_scheme, header.mod_scheme)
+        np.testing.assert_equal(decoded.coding_rate, header.coding_rate)
+        if not decoded.crc_passed:
+            pytest.fail("CRC did not pass at SNR={snr_db}")
 
-    def test_header_with_phase_offset(self):
+    def test_header_with_phase_offset(self) -> None:
         """Header should survive channel with phase offset when using coherent detection."""
-        header = FrameHeader(
+        header = _make_header(
             length=512,
             src=3,
             dst=0,
             mod_scheme=ModulationSchemes.QAM16,
             coding_rate=CodeRates.THREE_QUARTER_RATE,
-            crc=0,
         )
         encoded_bits = self.header_constructor.encode(header)
-        tx_symbols = self._bits_to_bpsk(encoded_bits)
+        tx_symbols = _bits_to_bpsk(encoded_bits)
 
-        # Channel with phase offset (but high SNR)
-        channel = ChannelModel(ChannelConfig(
-            snr_db=30.0,
-            enable_phase_offset=True,
-            initial_phase_rad=np.pi / 4,  # 45 degree phase shift
-            seed=42,
-        ))
+        channel = ChannelModel(
+            ChannelConfig(
+                snr_db=HIGH_SNR_DB,
+                enable_phase_offset=True,
+                initial_phase_rad=PHASE_OFFSET_RAD,
+                seed=CHANNEL_SEED,
+            ),
+        )
         rx_symbols = channel.apply(tx_symbols)
 
-        # Compensate for known phase offset before demodulation
-        rx_compensated = rx_symbols * np.exp(-1j * np.pi / 4)
-        rx_bits = self._bpsk_to_bits(rx_compensated)
+        rx_compensated = rx_symbols * np.exp(-1j * PHASE_OFFSET_RAD)
+        rx_bits = _bpsk_to_bits(rx_compensated)
 
         decoded = self.header_constructor.decode(rx_bits)
 
-        assert decoded.length == header.length
-        assert decoded.coding_rate == header.coding_rate
-        assert decoded.crc_passed
+        np.testing.assert_equal(decoded.length, header.length)
+        np.testing.assert_equal(decoded.coding_rate, header.coding_rate)
+        if not decoded.crc_passed:
+            pytest.fail("CRC did not pass after phase-offset channel roundtrip")
 
-    def test_crc_detects_noise_errors(self):
+    def test_crc_detects_noise_errors(self) -> None:
         """At low SNR, bit errors should be detected by CRC."""
-        header = FrameHeader(
+        header = _make_header(
             length=100,
             src=1,
             dst=2,
             mod_scheme=ModulationSchemes.BPSK,
             coding_rate=CodeRates.HALF_RATE,
-            crc=0,
         )
         encoded_bits = self.header_constructor.encode(header)
-        tx_symbols = self._bits_to_bpsk(encoded_bits)
+        tx_symbols = _bits_to_bpsk(encoded_bits)
 
-        # Very low SNR to guarantee errors
-        channel = ChannelModel(ChannelConfig(snr_db=-5.0, seed=42))
+        channel = ChannelModel(ChannelConfig(snr_db=LOW_SNR_DB, seed=CHANNEL_SEED))
         rx_symbols = channel.apply(tx_symbols)
 
-        rx_bits = self._bpsk_to_bits(rx_symbols)
+        rx_bits = _bpsk_to_bits(rx_symbols)
 
         try:
             decoded = self.header_constructor.decode(rx_bits)
-            # With this much noise, CRC should almost certainly fail
-            # (or values are corrupted beyond valid enum range)
-            assert not decoded.crc_passed
+            if decoded.crc_passed:
+                pytest.fail("CRC passed despite heavy noise corruption")
         except ValueError:
-            # Invalid enum value due to corruption - expected
             pass
+
+
+CUSTOM_CONFIG_PAYLOAD_LENGTH_BITS = 12
+CUSTOM_CONFIG_SRC_BITS = 4
+CUSTOM_CONFIG_DST_BITS = 4
+CUSTOM_CONFIG_MOD_SCHEME_BITS = 3
+CUSTOM_CONFIG_CODING_RATE_BITS = 3
+CUSTOM_CONFIG_RESERVED_BITS = 2
+CUSTOM_CONFIG_CRC_BITS = 8
 
 
 class TestFrameHeaderConfig:
     """Test FrameHeaderConfig dataclass."""
 
-    def test_default_config_total_size(self):
+    def test_default_config_total_size(self) -> None:
+        """Verify default config total size equals sum of all field widths."""
         config = FrameHeaderConfig()
         expected = (
-            config.payload_length_bits +
-            config.src_bits +
-            config.dst_bits +
-            config.mod_scheme_bits +
-            config.coding_rate_bits +
-            config.reserved_bits +
-            config.crc_bits
+            config.payload_length_bits
+            + config.src_bits
+            + config.dst_bits
+            + config.mod_scheme_bits
+            + config.coding_rate_bits
+            + config.reserved_bits
+            + config.crc_bits
         )
-        assert config.header_total_size == expected
+        np.testing.assert_equal(config.header_total_size, expected)
 
-    def test_custom_config(self):
+    def test_custom_config(self) -> None:
+        """Verify custom config total size equals sum of custom field widths."""
         config = FrameHeaderConfig(
-            payload_length_bits=12,
-            src_bits=4,
-            dst_bits=4,
-            mod_scheme_bits=3,
-            coding_rate_bits=3,
-            reserved_bits=2,
-            crc_bits=8,
+            payload_length_bits=CUSTOM_CONFIG_PAYLOAD_LENGTH_BITS,
+            src_bits=CUSTOM_CONFIG_SRC_BITS,
+            dst_bits=CUSTOM_CONFIG_DST_BITS,
+            mod_scheme_bits=CUSTOM_CONFIG_MOD_SCHEME_BITS,
+            coding_rate_bits=CUSTOM_CONFIG_CODING_RATE_BITS,
+            reserved_bits=CUSTOM_CONFIG_RESERVED_BITS,
+            crc_bits=CUSTOM_CONFIG_CRC_BITS,
         )
-        assert config.header_total_size == 12 + 4 + 4 + 3 + 3 + 2 + 8
+        expected = (
+            CUSTOM_CONFIG_PAYLOAD_LENGTH_BITS
+            + CUSTOM_CONFIG_SRC_BITS
+            + CUSTOM_CONFIG_DST_BITS
+            + CUSTOM_CONFIG_MOD_SCHEME_BITS
+            + CUSTOM_CONFIG_CODING_RATE_BITS
+            + CUSTOM_CONFIG_RESERVED_BITS
+            + CUSTOM_CONFIG_CRC_BITS
+        )
+        np.testing.assert_equal(config.header_total_size, expected)

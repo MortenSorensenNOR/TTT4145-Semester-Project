@@ -33,13 +33,6 @@ class BPSK:
         """Compute log-likelihood ratios (LLRs) for soft decision decoding.
 
         LLR convention: positive = more likely 0, negative = more likely 1.
-
-        Args:
-            symbols: Received BPSK symbols.
-            sigma_sq: Noise variance. If None, estimated from received symbols.
-
-        Returns:
-            LLR values for each bit.
         """
         if len(symbols) == 0:
             return np.array([], dtype=float)
@@ -255,6 +248,7 @@ class QPSK:
         plt.tight_layout()
         return fig, axes
 
+
 class QAM:
     """Quadrature Amplitude Modulation with Gray coding."""
 
@@ -266,7 +260,7 @@ class QAM:
         iq = 2 * np.arange(np.sqrt(qam_order)) - np.sqrt(qam_order) + 1
         q_rep, i_rep = np.meshgrid(iq, iq)
         symbols = i_rep.reshape(qam_order) + 1j * q_rep.reshape(qam_order)
-        symbols = symbols / np.sqrt(np.mean(np.abs(symbols)**2))
+        symbols = symbols / np.sqrt(np.mean(np.abs(symbols) ** 2))
 
         a = int(np.sqrt(qam_order) / 2)
         bitmapping_atom = np.hstack((np.ones(a), np.zeros(a)))

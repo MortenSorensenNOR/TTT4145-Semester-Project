@@ -16,10 +16,7 @@ def rrc_filter(sps: int, alpha: float, num_taps: int = 101) -> np.ndarray:
             h[i] = (
                 alpha
                 / np.sqrt(2)
-                * (
-                    (1 + 2 / np.pi) * np.sin(np.pi / (4 * alpha))
-                    + (1 - 2 / np.pi) * np.cos(np.pi / (4 * alpha))
-                )
+                * ((1 + 2 / np.pi) * np.sin(np.pi / (4 * alpha)) + (1 - 2 / np.pi) * np.cos(np.pi / (4 * alpha)))
             )
         else:
             num = np.sin(np.pi * ti * (1 - alpha)) + 4 * alpha * ti * np.cos(
