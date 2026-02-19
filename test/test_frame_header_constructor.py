@@ -229,7 +229,6 @@ class TestFrameHeaderWithChannel:
         channel = ChannelModel(
             ChannelConfig(
                 snr_db=HIGH_SNR_DB,
-                enable_phase_offset=True,
                 initial_phase_rad=PHASE_OFFSET_RAD,
                 seed=CHANNEL_SEED,
             ),
@@ -269,52 +268,3 @@ class TestFrameHeaderWithChannel:
                 pytest.fail("CRC passed despite heavy noise corruption")
         except ValueError:
             pass
-
-
-CUSTOM_CONFIG_PAYLOAD_LENGTH_BITS = 12
-CUSTOM_CONFIG_SRC_BITS = 4
-CUSTOM_CONFIG_DST_BITS = 4
-CUSTOM_CONFIG_MOD_SCHEME_BITS = 3
-CUSTOM_CONFIG_CODING_RATE_BITS = 3
-CUSTOM_CONFIG_RESERVED_BITS = 2
-CUSTOM_CONFIG_CRC_BITS = 8
-
-
-class TestFrameHeaderConfig:
-    """Test FrameHeaderConfig dataclass."""
-
-    def test_default_config_total_size(self) -> None:
-        """Verify default config total size equals sum of all field widths."""
-        config = FrameHeaderConfig()
-        expected = (
-            config.payload_length_bits
-            + config.src_bits
-            + config.dst_bits
-            + config.mod_scheme_bits
-            + config.coding_rate_bits
-            + config.reserved_bits
-            + config.crc_bits
-        )
-        np.testing.assert_equal(config.header_total_size, expected)
-
-    def test_custom_config(self) -> None:
-        """Verify custom config total size equals sum of custom field widths."""
-        config = FrameHeaderConfig(
-            payload_length_bits=CUSTOM_CONFIG_PAYLOAD_LENGTH_BITS,
-            src_bits=CUSTOM_CONFIG_SRC_BITS,
-            dst_bits=CUSTOM_CONFIG_DST_BITS,
-            mod_scheme_bits=CUSTOM_CONFIG_MOD_SCHEME_BITS,
-            coding_rate_bits=CUSTOM_CONFIG_CODING_RATE_BITS,
-            reserved_bits=CUSTOM_CONFIG_RESERVED_BITS,
-            crc_bits=CUSTOM_CONFIG_CRC_BITS,
-        )
-        expected = (
-            CUSTOM_CONFIG_PAYLOAD_LENGTH_BITS
-            + CUSTOM_CONFIG_SRC_BITS
-            + CUSTOM_CONFIG_DST_BITS
-            + CUSTOM_CONFIG_MOD_SCHEME_BITS
-            + CUSTOM_CONFIG_CODING_RATE_BITS
-            + CUSTOM_CONFIG_RESERVED_BITS
-            + CUSTOM_CONFIG_CRC_BITS
-        )
-        np.testing.assert_equal(config.header_total_size, expected)

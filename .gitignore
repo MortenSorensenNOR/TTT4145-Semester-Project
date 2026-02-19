@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 .venv/
+.claude
+.pytest_cache
+.ruff_cache
 pyrightconfig.json
 
 # Hypothesis test database

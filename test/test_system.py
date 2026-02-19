@@ -4,16 +4,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from modules.channel import (
+    ChannelConfig,
     ChannelModel,
-    ChannelProfile,
-    ProfileOverrides,
-    ProfileRequest,
 )
 from modules.channel_coding import CodeRates
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
 from modules.modulation import BPSK, QPSK
 from modules.plotting import plot_iq
-from modules.pulse_shaping import PulseShaper
+from modules.pulse_shaping import rrc_filter
 
 BANDWIDTH_HZ = 1e6
 ROLL_OFF = 0.25
@@ -38,26 +36,14 @@ def test() -> None:
     pulse_taps = SAMPLES_PER_SYMBOL * OVERLAP_FACTOR * 2 + 1
 
     # modulation
-    pulse_shaper = PulseShaper(SAMPLES_PER_SYMBOL, ROLL_OFF, pulse_taps)
+    pulse = rrc_filter(SAMPLES_PER_SYMBOL, ROLL_OFF, pulse_taps)
     bpsk = BPSK()
     qpsk = QPSK()
     rng = np.random.default_rng(SEED)
 
     # channel
-    request = ProfileRequest(
-        sample_rate=sample_rate,
-        snr_db=SNR_DB,
-        seed=SEED,
-        overrides=ProfileOverrides(
-            cfo_hz=0.0,
-            phase_offset_rad=0.0,
-            delay_samples=0.0,
-        ),
-    )
-    channel = ChannelModel.from_profile(
-        profile=ChannelProfile.IDEAL,
-        request=request,
-    )
+    config = ChannelConfig(sample_rate=sample_rate, snr_db=SNR_DB, seed=SEED)
+    channel = ChannelModel(config)
 
     # generate payload
     header = FrameHeader(length=PAYLOAD_LENGTH, src=SRC, dst=DST, mod_scheme=MOD_SCHEME, coding_rate=CODING_RATE)
@@ -74,10 +60,10 @@ def test() -> None:
     # rest of tx
     upsampled = np.zeros(len(frame_modulated) * SAMPLES_PER_SYMBOL, dtype=complex)
     upsampled[::SAMPLES_PER_SYMBOL] = frame_modulated
-    tx_signal = pulse_shaper.shape(upsampled)
+    tx_signal = np.convolve(upsampled, pulse, mode="same")
 
     rx_signal = channel.apply(tx_signal)
-    rx_filtered = pulse_shaper.shape(rx_signal)
+    rx_filtered = np.convolve(rx_signal, pulse, mode="same")
     rx_symbols = rx_filtered[::SAMPLES_PER_SYMBOL]
 
     rx_header_sym = rx_symbols[: len(header_modulated)]
@@ -86,8 +72,9 @@ def test() -> None:
     rx_header_bits = bpsk.symbols2bits(rx_header_sym)
     rx_payload_bits = qpsk.symbols2bits_soft(rx_payload_sym)
 
-    # decode header
-    rx_header, rx_payload = frame_constructor.decode(rx_header_bits, rx_payload_bits.flatten())
+    # decode header and payload
+    rx_header = frame_constructor.decode_header(rx_header_bits)
+    rx_payload = frame_constructor.decode_payload(rx_header, rx_payload_bits.flatten(), soft=True)
     ber = float(np.mean(rx_payload != payload))
 
     np.testing.assert_equal(rx_header.length, PAYLOAD_LENGTH)

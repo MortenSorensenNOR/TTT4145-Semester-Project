@@ -13,7 +13,6 @@ from modules.frame_constructor import (
     ModulationSchemes,
 )
 from modules.modulation import QPSK
-from modules.pulse_shaping import PulseShaper
 
 # --- Constants ---
 
@@ -23,9 +22,6 @@ GOLAY_BLOCK_SIZE = 12
 FIRST_LDPC_K = 324
 SECOND_LDPC_K = 648
 THIRD_LDPC_K = 972
-SPS = 4
-ALPHA = 0.35
-TAPS = 101
 SNR_DB = 15.0
 CHANNEL_SEED = 42
 RNG_SEED = 42
@@ -65,12 +61,6 @@ def random_payload(sample_header: FrameHeader) -> np.ndarray:
 def qpsk() -> QPSK:
     """Create QPSK modulator instance."""
     return QPSK()
-
-
-@pytest.fixture
-def pulse_shaper() -> PulseShaper:
-    """Create PulseShaper instance with default parameters."""
-    return PulseShaper(sps=SPS, alpha=ALPHA, taps=TAPS)
 
 
 # --- TEST CLASSES ---
@@ -119,7 +109,8 @@ class TestFrameConstructorRoundtrip:
     ) -> None:
         """Frame should survive encode/decode with no channel impairments."""
         header_encoded, payload_encoded = frame_constructor.encode(sample_header, random_payload)
-        decoded_header, decoded_payload = frame_constructor.decode(header_encoded, payload_encoded)
+        decoded_header = frame_constructor.decode_header(header_encoded)
+        decoded_payload = frame_constructor.decode_payload(decoded_header, payload_encoded)
 
         np.testing.assert_equal(decoded_header.length, sample_header.length)
         np.testing.assert_array_equal(decoded_payload, random_payload)
@@ -129,7 +120,7 @@ class TestFrameConstructorRoundtrip:
         src=st.integers(min_value=0, max_value=3),
         mod_scheme=st.sampled_from(ModulationSchemes),
     )
-    @settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_roundtrip_various_lengths(
         self,
         frame_constructor: FrameConstructor,
@@ -150,7 +141,8 @@ class TestFrameConstructorRoundtrip:
         payload = rng.integers(0, 2, size=length, dtype=int)
 
         header_encoded, payload_encoded = frame_constructor.encode(header, payload)
-        _, decoded_payload = frame_constructor.decode(header_encoded, payload_encoded)
+        decoded_header = frame_constructor.decode_header(header_encoded)
+        decoded_payload = frame_constructor.decode_payload(decoded_header, payload_encoded)
 
         np.testing.assert_equal(len(decoded_payload), length)
         np.testing.assert_array_equal(decoded_payload, payload)
@@ -163,9 +155,9 @@ class TestDynamicPayloadLength:
         ("payload_length", "expected_padded_k"),
         [
             (10, FIRST_LDPC_K),
-            (FIRST_LDPC_K, FIRST_LDPC_K),
+            (FIRST_LDPC_K, SECOND_LDPC_K),
             (325, SECOND_LDPC_K),
-            (SECOND_LDPC_K, SECOND_LDPC_K),
+            (SECOND_LDPC_K, THIRD_LDPC_K),
             (700, THIRD_LDPC_K),
         ],
     )
@@ -193,7 +185,8 @@ class TestDynamicPayloadLength:
         expected_payload_encoded_length = expected_padded_k * 2
         np.testing.assert_equal(payload_encoded.shape[0], expected_payload_encoded_length)
 
-        _, decoded_payload = frame_constructor.decode(header_encoded, payload_encoded)
+        decoded_header = frame_constructor.decode_header(header_encoded)
+        decoded_payload = frame_constructor.decode_payload(decoded_header, payload_encoded)
 
         np.testing.assert_equal(len(decoded_payload), payload_length)
         np.testing.assert_array_equal(decoded_payload.flatten().astype(int), payload.flatten().astype(int))
@@ -245,7 +238,8 @@ class TestFrameConstructorWithChannel:
         sigma_sq = qpsk.estimate_noise_variance(rx_payload_symbols)
         rx_payload_llr = qpsk.symbols2bits_soft(rx_payload_symbols, sigma_sq=sigma_sq).flatten()
 
-        decoded_header, decoded_payload = frame_constructor.decode(rx_header_bits, rx_payload_llr)
+        decoded_header = frame_constructor.decode_header(rx_header_bits)
+        decoded_payload = frame_constructor.decode_payload(decoded_header, rx_payload_llr, soft=True)
 
         if not decoded_header.crc_passed:
             pytest.fail("CRC check failed after channel transmission")

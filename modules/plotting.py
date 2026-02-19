@@ -1,7 +1,19 @@
 """Plotting utilities for signal visualization and analysis."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import matplotlib.pyplot as plt
 import numpy as np
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
+    from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    from modules.modulation import Modulator
 
 
 def plot_iq(
@@ -9,7 +21,7 @@ def plot_iq(
     labels: list[str] | None = None,
     title: str | None = None,
     sample_rate: float | None = None,
-) -> tuple[object, tuple[object, object]]:
+) -> tuple[Figure, tuple[Axes, Axes]]:
     """Plot I and Q components of complex signals."""
     if labels is None:
         labels = [f"Signal {i + 1}" for i in range(len(signals))]
@@ -45,7 +57,7 @@ def plot_constellation(
     *signals: np.ndarray,
     labels: list[str] | None = None,
     title: str | None = None,
-) -> tuple[object, object]:
+) -> tuple[Figure, Axes]:
     """Plot constellation diagram of complex signals."""
     if labels is None:
         labels = [f"Signal {i + 1}" for i in range(len(signals))]
@@ -73,7 +85,7 @@ def plot_constellation_confidence(
     llrs: np.ndarray,
     tx_symbols: np.ndarray | None = None,
     title: str | None = None,
-) -> tuple[object, object]:
+) -> tuple[Figure, Axes]:
     """Plot constellation with symbols colored by soft decision confidence."""
     # Confidence = minimum |LLR| across bits for each symbol
     confidence = np.min(np.abs(llrs), axis=1)
@@ -102,7 +114,7 @@ def plot_constellation_confidence(
             c="white",
             edgecolors="black",
             s=100,
-            marker="s",  # type: ignore[arg-type]
+            marker="s",
             linewidths=1.5,
             label="Ideal",
             zorder=10,
@@ -132,7 +144,7 @@ def plot_spectrum(
     sample_rate: float = 1.0,
     labels: list[str] | None = None,
     title: str | None = None,
-) -> tuple[object, object]:
+) -> tuple[Figure, Axes]:
     """Plot power spectrum of complex signals."""
     if labels is None:
         labels = [f"Signal {i + 1}" for i in range(len(signals))]
@@ -158,3 +170,69 @@ def plot_spectrum(
 
     plt.tight_layout()
     return fig, ax
+
+
+def plot_llr_heatmap(
+    modulator: Modulator,
+    sigma_sq: float = 0.1,
+    grid_size: int = 100,
+) -> tuple[Figure, NDArray[np.object_]]:
+    """Plot heatmaps showing LLR values across the complex plane."""
+    extent = 1.5
+    re = np.linspace(-extent, extent, grid_size)
+    im = np.linspace(-extent, extent, grid_size)
+    re_grid, im_grid = np.meshgrid(re, im)
+    symbols_grid = (re_grid + 1j * im_grid).flatten()
+
+    llrs = modulator.symbols2bits_soft(symbols_grid, sigma_sq=sigma_sq)
+    llr_bit0 = llrs[:, 0].reshape(grid_size, grid_size)
+    llr_bit1 = llrs[:, 1].reshape(grid_size, grid_size)
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+
+    im0 = axes[0].imshow(
+        llr_bit0,
+        extent=[-extent, extent, -extent, extent],
+        origin="lower",
+        cmap="RdBu",
+        aspect="equal",
+    )
+    axes[0].axvline(x=0, color="k", linestyle="--", linewidth=1, label="Decision boundary")
+    axes[0].plot(np.real(modulator.symbol_mapping), np.imag(modulator.symbol_mapping), "ko", markersize=8)
+    axes[0].set_xlabel("Real")
+    axes[0].set_ylabel("Imaginary")
+    axes[0].set_title("LLR for Bit 0 (I)\nBlue: likely 0, Red: likely 1")
+    plt.colorbar(im0, ax=axes[0], label="LLR")
+
+    im1 = axes[1].imshow(
+        llr_bit1,
+        extent=[-extent, extent, -extent, extent],
+        origin="lower",
+        cmap="RdBu",
+        aspect="equal",
+    )
+    axes[1].axhline(y=0, color="k", linestyle="--", linewidth=1, label="Decision boundary")
+    axes[1].plot(np.real(modulator.symbol_mapping), np.imag(modulator.symbol_mapping), "ko", markersize=8)
+    axes[1].set_xlabel("Real")
+    axes[1].set_ylabel("Imaginary")
+    axes[1].set_title("LLR for Bit 1 (Q)\nBlue: likely 0, Red: likely 1")
+    plt.colorbar(im1, ax=axes[1], label="LLR")
+
+    confidence = np.minimum(np.abs(llr_bit0), np.abs(llr_bit1))
+    im2 = axes[2].imshow(
+        confidence,
+        extent=[-extent, extent, -extent, extent],
+        origin="lower",
+        cmap="viridis",
+        aspect="equal",
+    )
+    axes[2].axvline(x=0, color="w", linestyle="--", linewidth=1)
+    axes[2].axhline(y=0, color="w", linestyle="--", linewidth=1)
+    axes[2].plot(np.real(modulator.symbol_mapping), np.imag(modulator.symbol_mapping), "wo", markersize=8)
+    axes[2].set_xlabel("Real")
+    axes[2].set_ylabel("Imaginary")
+    axes[2].set_title(f"Min Confidence |LLR| (σ²={sigma_sq})\nDark = uncertain")
+    plt.colorbar(im2, ax=axes[2], label="|LLR|")
+
+    plt.tight_layout()
+    return fig, axes

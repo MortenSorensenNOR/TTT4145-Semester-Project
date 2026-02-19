@@ -58,6 +58,19 @@ def snr_to_ebn0(snr_db: float, code_rate: float, bits_per_symbol: int = 2) -> fl
     return snr_db - 10 * np.log10(code_rate * bits_per_symbol)
 
 
+def text_to_bits(text: str) -> np.ndarray:
+    """Convert a UTF-8 string to a bit array."""
+    return np.unpackbits(np.frombuffer(text.encode("utf-8"), dtype=np.uint8))
+
+
+def bits_to_text(bits: np.ndarray) -> str:
+    """Convert a bit array back to a UTF-8 string."""
+    remainder = len(bits) % 8
+    if remainder:
+        bits = np.concatenate([bits, np.zeros(8 - remainder, dtype=int)])
+    return np.packbits(bits.astype(np.uint8)).tobytes().decode("utf-8", errors="replace")
+
+
 def calculate_reference_power(reference_signal: NDArray[np.complex128]) -> float:
     """Calculate reference power from a representative signal.
 

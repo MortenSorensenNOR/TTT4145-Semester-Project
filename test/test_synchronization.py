@@ -11,12 +11,10 @@ import numpy as np
 import pytest
 
 from modules.channel import (
+    ChannelConfig,
     ChannelModel,
-    ChannelProfile,
-    ProfileOverrides,
-    ProfileRequest,
 )
-from modules.synchronization import Synchronizer, SynchronizerConfig, ZadoffChu
+from modules.synchronization import Synchronizer, SynchronizerConfig, generate_zadoff_chu
 
 # Fixed system parameters
 SAMPLE_RATE = 1e6
@@ -40,17 +38,15 @@ def run_sync(
     seed: int,
 ) -> dict[str, object]:
     """Run one full synchronization trial. Returns a results dict."""
-    request = ProfileRequest(
+    channel_config = ChannelConfig(
         sample_rate=SAMPLE_RATE,
         snr_db=snr,
         seed=seed,
-        overrides=ProfileOverrides(
-            cfo_hz=actual_cfo,
-            phase_offset_rad=np.random.default_rng(seed).uniform(0, 2 * np.pi),
-            delay_samples=actual_delay,
-        ),
+        cfo_hz=actual_cfo,
+        initial_phase_rad=np.random.default_rng(seed).uniform(0, 2 * np.pi),
+        delay_samples=actual_delay,
     )
-    channel = ChannelModel.from_profile(profile=ChannelProfile.IDEAL, request=request)
+    channel = ChannelModel(channel_config)
 
     tx = np.concatenate([sync.preamble, np.zeros(DELAY_PADDING, dtype=complex)])
     rx = channel.apply(tx)
@@ -78,31 +74,23 @@ def run_sync(
     }
 
 
-# =============================================================================
-# Pytest-discoverable tests
-# =============================================================================
-
-
 class TestZadoffChu:
     """Tests for Zadoff-Chu sequence generation."""
 
     def test_sequence_length(self) -> None:
         """Generated sequence should have the requested length."""
-        zc = ZadoffChu()
-        seq = zc.generate(u=7, n_zc=ZC_SEQUENCE_LENGTH)
+        seq = generate_zadoff_chu(u=7, n_zc=ZC_SEQUENCE_LENGTH)
         np.testing.assert_equal(len(seq), ZC_SEQUENCE_LENGTH)
 
     def test_constant_amplitude(self) -> None:
         """Zadoff-Chu sequences have constant amplitude."""
-        zc = ZadoffChu()
-        seq = zc.generate(u=7, n_zc=ZC_SEQUENCE_LENGTH)
+        seq = generate_zadoff_chu(u=7, n_zc=ZC_SEQUENCE_LENGTH)
         np.testing.assert_allclose(np.abs(seq), 1.0, atol=1e-10)
 
     def test_different_roots_are_different(self) -> None:
         """Different root indices should produce different sequences."""
-        zc = ZadoffChu()
-        seq1 = zc.generate(u=7, n_zc=ZC_SEQUENCE_LENGTH)
-        seq2 = zc.generate(u=11, n_zc=ZC_SEQUENCE_LENGTH)
+        seq1 = generate_zadoff_chu(u=7, n_zc=ZC_SEQUENCE_LENGTH)
+        seq2 = generate_zadoff_chu(u=11, n_zc=ZC_SEQUENCE_LENGTH)
         if np.allclose(seq1, seq2):
             pytest.fail("Sequences with different roots should not be equal")
 

@@ -1,259 +1,286 @@
-"""Real-time spectrum analyzer and IQ visualizer for the PlutoSDR."""
+"""Receive and decode a framed digital signal from the PlutoSDR.
 
-from typing import Any, cast
+Pipeline: SDR -> matched filter -> sync -> CFO correct -> phase correct
+       -> downsample -> normalize -> header decode -> payload demod -> channel decode -> text
+"""
 
-import adi
-import matplotlib.pyplot as plt
+import logging
+from dataclasses import dataclass
+
 import numpy as np
-from matplotlib import animation
-from matplotlib.axes import Axes
+
+from modules.channel_coding import CodeRates, LDPCConfig, ldpc_get_supported_payload_lengths
+from modules.frame_constructor import FrameConstructor, FrameHeader
+from modules.modulation import BPSK
+from modules.pulse_shaping import rrc_filter
+from modules.synchronization import Synchronizer, SynchronizerConfig
+from modules.util import bits_to_text
+from pluto.config import RRC_ALPHA, RRC_NUM_TAPS, SPS, get_modulator
+
+logger = logging.getLogger(__name__)
+
+RX_GAIN = 70.0
 
 
-def compute_psd(
-    samples: np.ndarray,
-    window: np.ndarray,
-    fft_size: int,
-    p_fullscale_dbm: float,
-    rx_gain: float,
-) -> np.ndarray:
-    """Compute the power spectral density of the given samples."""
-    frame = samples[:fft_size] * window
-    spectrum = np.fft.fftshift(np.fft.fft(frame, n=fft_size))
-    power_norm = (np.abs(spectrum) / fft_size) ** 2
-    return 10 * np.log10(power_norm + 1e-20) + p_fullscale_dbm - rx_gain
+@dataclass
+class FrameResult:
+    """Result from a successful frame decode."""
+
+    text: str
+    header: FrameHeader
+    cfo_hz: float
+    consumed_samples: int
 
 
-def bandpass_around_tone(samples: np.ndarray, offset_hz: float, sample_rate: float, bw: float = 20e3) -> np.ndarray:
-    """Signed bandpass — only matches the correct +/- frequency bin."""
-    spectrum = np.fft.fft(samples)
-    freqs = np.fft.fftfreq(len(samples), d=1 / sample_rate)
-    mask = np.abs(freqs - offset_hz) > bw / 2
-    spectrum[mask] = 0
-    return np.fft.ifft(spectrum)
+@dataclass
+class DecodeConfig:
+    """Configuration for frame decoding."""
+
+    sample_rate: float
+    sps: int
+    bpsk: BPSK
+    golay_ratio: int
 
 
-def style(ax: Axes) -> None:
-    """Apply dark theme styling to a matplotlib axis."""
-    ax.set_facecolor("#0d1117")
-    ax.tick_params(colors="white")
-    ax.grid(visible=True, color="#2a2d35", linewidth=0.6)
-    for spine in ax.spines.values():
-        spine.set_edgecolor("#444444")
+def try_decode_frame(
+    filtered: np.ndarray,
+    abs_offset: int,
+    sync: Synchronizer,
+    fc: FrameConstructor,
+    config: DecodeConfig,
+) -> FrameResult | None:
+    """Try to detect and decode a single frame from filtered samples.
+
+    Args:
+        filtered: RRC-matched-filtered samples.
+        abs_offset: Absolute sample index of the start of `filtered`.
+        sync: Synchronizer instance.
+        fc: FrameConstructor instance.
+        config: Decode configuration parameters.
+
+    Returns:
+        FrameResult on success, None on failure.
+
+    """
+    header_n_symbols = fc.frame_header_constructor.header_length * config.golay_ratio
+
+    # ── Synchronization (at upsampled rate) ───────────────────────
+    result = sync.detect_preamble(filtered, config.sample_rate)
+    if not result.success:
+        logger.debug("No preamble detected")
+        return None
+
+    # ── CFO correction (absolute sample index for phase continuity)
+    n_vec = abs_offset + np.arange(len(filtered))
+    rx_corr = filtered * np.exp(-1j * 2 * np.pi * result.cfo_hat_hz / config.sample_rate * n_vec)
+
+    # ── Downsample to symbol rate ─────────────────────────────────
+    data_start = result.timing_hat + sync.config.n_long * config.sps
+    symbols = rx_corr[data_start :: config.sps]
+
+    # ── Residual phase correction (data-aided via long ZC) ────────
+    zc_long_ref = sync.zc_long
+    zc_start = result.timing_hat
+    zc_rx = rx_corr[zc_start :: config.sps][: len(zc_long_ref)]
+    if len(zc_rx) == len(zc_long_ref):
+        phase_hat = np.angle(np.sum(zc_rx * np.conj(zc_long_ref)))
+        symbols = symbols * np.exp(-1j * phase_hat)
+
+    # ── Decode header ────────────────────────────────────────────
+    header = _decode_header_with_validation(symbols, header_n_symbols, fc, config)
+    if header is None:
+        return None
+
+    # ── Validate and prepare payload parameters ──────────────────
+    payload_params = _prepare_payload_parameters(header, fc)
+    if payload_params is None:
+        return None
+    n_payload_symbols = payload_params
+
+    # ── Check symbol buffer and extract payload ──────────────────
+    if len(symbols) < header_n_symbols + n_payload_symbols:
+        logger.debug(
+            "Not enough symbols for payload (%d < %d)",
+            len(symbols) - header_n_symbols,
+            n_payload_symbols,
+        )
+        return None
+
+    # ── Soft-demodulate payload → LLRs ────────────────────────────
+    payload_symbols = symbols[header_n_symbols : header_n_symbols + n_payload_symbols]
+    modulator = get_modulator(header.mod_scheme)
+    sigma_sq = modulator.estimate_noise_variance(payload_symbols)
+    payload_llrs = modulator.symbols2bits_soft(payload_symbols, sigma_sq=sigma_sq).flatten()
+
+    # ── Channel decode (LDPC + CRC) ───────────────────────────────
+    try:
+        payload_bits = fc.decode_payload(header, payload_llrs, soft=True)
+    except ValueError as exc:
+        logger.debug("Payload decode failed: %s", exc)
+        return None
+
+    # ── Compute consumed samples ──────────────────────────────────
+    consumed = result.timing_hat + sync.config.n_long * config.sps + (header_n_symbols + n_payload_symbols) * config.sps
+
+    text = bits_to_text(payload_bits)
+    return FrameResult(
+        text=text,
+        header=header,
+        cfo_hz=result.cfo_hat_hz,
+        consumed_samples=consumed,
+    )
 
 
-def create_pluto() -> object:
-    """Create PlutoSDR instance."""
-    return adi.Pluto("ip:192.168.2.1")  # type: ignore[abstract]
+def _decode_header_with_validation(
+    symbols: np.ndarray,
+    header_n_symbols: int,
+    fc: FrameConstructor,
+    config: DecodeConfig,
+) -> FrameHeader | None:
+    """Decode header and validate with normalization."""
+    if len(symbols) < header_n_symbols:
+        logger.debug("Not enough symbols for header (%d < %d)", len(symbols), header_n_symbols)
+        return None
+
+    # ── Amplitude normalization (from known-power header) ─────────
+    header_power = np.mean(np.abs(symbols[:header_n_symbols]) ** 2)
+    normalized_symbols = symbols
+    if header_power > 0:
+        normalized_symbols = symbols / np.sqrt(header_power)
+    header_hard = config.bpsk.symbols2bits(normalized_symbols[:header_n_symbols])
+
+    try:
+        return fc.decode_header(header_hard)
+    except ValueError:
+        logger.debug("Header CRC failed")
+        return None
+
+
+def _prepare_payload_parameters(
+    header: FrameHeader,
+    fc: FrameConstructor,
+) -> int | None:
+    """Prepare and validate payload parameters.
+
+    Returns number of payload symbols needed, or None on error.
+    """
+    try:
+        modulator = get_modulator(header.mod_scheme)
+        supported_k = ldpc_get_supported_payload_lengths(header.coding_rate)
+        k = int(min(kk for kk in supported_k if kk >= header.length + fc.PAYLOAD_CRC_BITS))
+        n_coded = LDPCConfig(k=k, code_rate=header.coding_rate).n
+        return n_coded // modulator.bits_per_symbol
+    except ValueError:
+        logger.debug("Invalid payload parameters from header")
+        return None
 
 
 if __name__ == "__main__":
-    # ─── Config ───────────────────────────────────────────────────────────────────
-    SAMPLE_RATE = 1e6
-    CENTER_FREQ = 2400e6
-    NUM_SAMPS = 10000
-    RX_GAIN = 70.0
-    FFT_SIZE = 1024 * 4
-    AVERAGING = 10
-    UPDATE_MS = 50
+    from typing import Any, cast
 
-    TONE_FREQ = 100e3
-    ATTENUATOR_DB = 30.0
-    P_FULLSCALE_DBM = 10 * np.log10(5)
+    from pluto import create_pluto
+    from pluto.config import CENTER_FREQ, SAMPLE_RATE
 
-    # ─── Connect ──────────────────────────────────────────────────────────────────
-    sdr_obj = cast("Any", create_pluto())
-    sdr: Any = sdr_obj
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    # ── SDR setup ─────────────────────────────────────────────────────
+    sdr: Any = cast("Any", create_pluto())
     sdr.gain_control_mode_chan0 = "manual"
     sdr.rx_hardwaregain_chan0 = RX_GAIN
     sdr.rx_lo = int(CENTER_FREQ)
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_rf_bandwidth = int(SAMPLE_RATE)
-    sdr.rx_buffer_size = NUM_SAMPS
+    sdr.rx_buffer_size = 2**16
 
-    # ─── Helpers ──────────────────────────────────────────────────────────────────
-    freqs_mhz = (np.fft.fftshift(np.fft.fftfreq(FFT_SIZE, d=1 / SAMPLE_RATE)) + CENTER_FREQ) / 1e6
-    tone_mhz = (CENTER_FREQ + TONE_FREQ) / 1e6
-
-    window = np.hanning(FFT_SIZE)
-    psd_buffer = np.full((AVERAGING, FFT_SIZE), -120.0)
-
-    # ─── Figure ───────────────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(13, 11))
-    fig.patch.set_facecolor("#0d1117")
-    fig.suptitle(
-        f"PlutoSDR RX  |  {CENTER_FREQ / 1e6:.1f} MHz  |  Tone @ {tone_mhz:.3f} MHz  |  "
-        f"TX gain -50 dBm  |  {ATTENUATOR_DB:.0f} dB attenuator  |  RX gain {RX_GAIN:.0f} dB",
-        color="white",
-        fontsize=11,
-        fontweight="bold",
-        y=0.99,
+    # ── Reusable objects ──────────────────────────────────────────────
+    h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
+    sync = Synchronizer(SynchronizerConfig(), sps=SPS, rrc_taps=h_rrc)
+    fc = FrameConstructor()
+    bpsk = BPSK()
+    golay_ratio = fc.golay.block_length // fc.golay.message_length
+    decode_config = DecodeConfig(
+        sample_rate=SAMPLE_RATE,
+        sps=SPS,
+        bpsk=bpsk,
+        golay_ratio=golay_ratio,
     )
 
-    gs = fig.add_gridspec(3, 2, height_ratios=[2, 1.5, 1.5], hspace=0.45, wspace=0.35)
-    ax_spec = fig.add_subplot(gs[0, :])
-    ax_wf = fig.add_subplot(gs[1, :])
-    ax_iq = fig.add_subplot(gs[2, 0])
-    ax_time = fig.add_subplot(gs[2, 1])
+    # Maximum frame length in samples for overlap retention
+    max_preamble_symbols = sync.config.n_short * sync.config.n_short_reps + sync.config.n_long
+    max_header_symbols = fc.frame_header_constructor.header_length * golay_ratio
+    max_k = int(max(ldpc_get_supported_payload_lengths()))
+    max_payload_coded = LDPCConfig(k=max_k, code_rate=CodeRates.HALF_RATE).n
+    MAX_FRAME_SAMPLES = (max_preamble_symbols + max_header_symbols + max_payload_coded) * SPS
 
-    for ax in [ax_spec, ax_wf, ax_iq, ax_time]:
-        style(ax)
+    # Flush a few buffers so the SDR settles
+    for _ in range(5):
+        sdr.rx()
 
-    # ── Spectrum ───────────────────────────────────────────────────────────────────
-    ax_spec.set_xlim(freqs_mhz[0], freqs_mhz[-1])
-    ax_spec.set_ylim(-120, 0)
-    ax_spec.set_ylabel("Power (dBm)", color="white")
-    ax_spec.set_xlabel("Frequency (MHz)", color="white")
+    logger.info("RX: listening on %.0f MHz ...", CENTER_FREQ / 1e6)
 
-    (line_live,) = ax_spec.plot(freqs_mhz, np.full(FFT_SIZE, -120.0), color="#00d4ff", lw=0.8, alpha=0.4, label="Live")
-    (line_avg,) = ax_spec.plot(freqs_mhz, np.full(FFT_SIZE, -120.0), color="#ff6b35", lw=1.4, label=f"Avg x{AVERAGING}")
-    (line_peak,) = ax_spec.plot(
-        freqs_mhz,
-        np.full(FFT_SIZE, -120.0),
-        color="#a8ff3e",
-        lw=0.8,
-        ls="--",
-        alpha=0.7,
-        label="Peak hold",
-    )
+    # Overlap-save state for incremental matched filtering
+    filter_overlap = len(h_rrc) - 1
+    filter_state = np.zeros(filter_overlap, dtype=complex)
 
-    ax_spec.axvline(tone_mhz, color="#ffdd00", lw=1.0, ls="--", alpha=0.8, label=f"Expected {tone_mhz:.3f} MHz")
-    ax_spec.axvline(CENTER_FREQ / 1e6, color="white", lw=0.5, ls=":", alpha=0.3)
-    ax_spec.legend(loc="upper right", framealpha=0.25, facecolor="#1a1d24", labelcolor="white", fontsize=8)
+    # Pre-allocated receive buffer
+    BUF_CAPACITY = MAX_FRAME_SAMPLES * 4
+    rx_buf = np.zeros(BUF_CAPACITY, dtype=complex)
+    buf_len = 0
+    abs_offset = 0
 
-    stats_text = ax_spec.text(
-        0.01,
-        0.97,
-        "",
-        transform=ax_spec.transAxes,
-        color="#cccccc",
-        fontsize=8,
-        va="top",
-        fontfamily="monospace",
-        bbox={"boxstyle": "round,pad=0.3", "facecolor": "#1a1d24", "alpha": 0.7},
-    )
+    try:
+        while True:
+            rx = sdr.rx()
 
-    # ── Waterfall ─────────────────────────────────────────────────────────────────
-    WATERFALL_ROWS = 80
-    waterfall_data = np.full((WATERFALL_ROWS, FFT_SIZE), -120.0)
+            # ── Incremental matched filter (overlap-save) ─────────────
+            chunk = np.concatenate([filter_state, rx])
+            new_filtered = np.convolve(chunk, h_rrc, mode="valid")
+            filter_state = rx[-filter_overlap:]
 
-    wf_img = ax_wf.imshow(
-        waterfall_data,
-        aspect="auto",
-        origin="upper",
-        extent=(freqs_mhz[0], freqs_mhz[-1], WATERFALL_ROWS, 0),
-        vmin=-120,
-        vmax=0,
-        cmap="inferno",
-        interpolation="nearest",
-    )
-    ax_wf.set_ylabel("Time (frames)", color="white")
-    ax_wf.set_xlabel("Frequency (MHz)", color="white")
-    ax_wf.axvline(tone_mhz, color="#ffdd00", lw=0.8, ls="--", alpha=0.6)
-    cbar = fig.colorbar(wf_img, ax=ax_wf, orientation="vertical", pad=0.01)
-    cbar.set_label("dBm", color="white", fontsize=8)
-    cbar.ax.yaxis.set_tick_params(color="white", labelcolor="white")
+            # Append to pre-allocated buffer
+            n_new = len(new_filtered)
+            if buf_len + n_new > BUF_CAPACITY:
+                # Shift out old data to make room
+                keep = MAX_FRAME_SAMPLES
+                rx_buf[:keep] = rx_buf[buf_len - keep : buf_len]
+                abs_offset += buf_len - keep
+                buf_len = keep
+            rx_buf[buf_len : buf_len + n_new] = new_filtered
+            buf_len += n_new
 
-    # ── IQ Constellation ──────────────────────────────────────────────────────────
-    ax_iq.set_xlim(-1.5, 1.5)
-    ax_iq.set_ylim(-1.5, 1.5)
-    ax_iq.set_xlabel("I", color="white")
-    ax_iq.set_ylabel("Q", color="white")
-    ax_iq.set_title("IQ Constellation (mixed to DC)", color="#aaaaaa", fontsize=9)
-    ax_iq.axhline(0, color="#444", lw=0.6)
-    ax_iq.axvline(0, color="#444", lw=0.6)
-    ax_iq.set_aspect("equal")
-    theta = np.linspace(0, 2 * np.pi, 200)
-    ax_iq.plot(np.cos(theta), np.sin(theta), color="#333355", lw=0.8, ls="--")
-    iq_scatter = ax_iq.scatter([], [], c=[], cmap="plasma", s=4, vmin=0, vmax=1, alpha=0.6)
+            # ── Multi-frame detection loop ────────────────────────────
+            while True:
+                frame_result = try_decode_frame(
+                    rx_buf[:buf_len],
+                    abs_offset,
+                    sync,
+                    fc,
+                    decode_config,
+                )
 
-    # ── Time domain ───────────────────────────────────────────────────────────────
-    SHOW_SAMPLES = 500
-    t_axis_us = np.arange(SHOW_SAMPLES) / SAMPLE_RATE * 1e6
+                if frame_result is not None:
+                    logger.info(
+                        "RX: %r  (mod=%s, rate=%s, CFO=%+.0f Hz, bits=%d)",
+                        frame_result.text,
+                        frame_result.header.mod_scheme.name,
+                        frame_result.header.coding_rate.name,
+                        frame_result.cfo_hz,
+                        frame_result.header.length,
+                    )
+                    # Trim consumed samples from front
+                    consumed = frame_result.consumed_samples
+                    remaining = buf_len - consumed
+                    rx_buf[:remaining] = rx_buf[consumed:buf_len]
+                    buf_len = remaining
+                    abs_offset += consumed
+                else:
+                    break
 
-    ax_time.set_xlim(0, t_axis_us[-1])
-    ax_time.set_ylim(-1.5, 1.5)
-    ax_time.set_xlabel("Time (µs)", color="white")
-    ax_time.set_ylabel("Amplitude (norm.)", color="white")
-    ax_time.set_title("Time Domain (mixed to DC)", color="#aaaaaa", fontsize=9)
-
-    (line_i,) = ax_time.plot(t_axis_us, np.zeros(SHOW_SAMPLES), color="#00d4ff", lw=1.0, label="I")
-    (line_q,) = ax_time.plot(t_axis_us, np.zeros(SHOW_SAMPLES), color="#ff4dff", lw=1.0, label="Q")
-    ax_time.legend(loc="upper right", framealpha=0.2, facecolor="#1a1d24", labelcolor="white", fontsize=8)
-
-    plt.tight_layout(rect=(0, 0, 1, 0.97))
-
-    # ─── Animation ────────────────────────────────────────────────────────────────
-    LP_CUTOFF_HZ = 10e3
-
-    _state: dict[str, object] = {
-        "peak_hold": np.full(FFT_SIZE, -120.0),
-        "buf_idx": 0,
-        "waterfall_data": waterfall_data,
-    }
-    t_mix_full = np.arange(NUM_SAMPS) / SAMPLE_RATE  # pre-allocate mix vector
-
-    def update(_frame: int) -> tuple[object, ...]:
-        """Update all plot elements with fresh SDR data."""
-        raw = cast("np.ndarray", sdr.rx())
-
-        # ── Spectrum + waterfall ──────────────────────────────────────────────────
-        psd = compute_psd(raw, window, FFT_SIZE, P_FULLSCALE_DBM, RX_GAIN)
-        buf_idx = cast("int", _state["buf_idx"])
-        psd_buffer[buf_idx % AVERAGING] = psd
-        _state["buf_idx"] = buf_idx + 1
-        psd_avg = np.mean(psd_buffer, axis=0)
-        peak_hold = cast("np.ndarray", _state["peak_hold"])
-        _state["peak_hold"] = np.maximum(peak_hold * 0.995, psd)
-
-        wf = cast("np.ndarray", _state["waterfall_data"])
-        wf = np.roll(wf, 1, axis=0)
-        wf[0] = psd_avg
-        _state["waterfall_data"] = wf
-
-        line_live.set_ydata(psd)
-        line_avg.set_ydata(psd_avg)
-        line_peak.set_ydata(_state["peak_hold"])
-        wf_img.set_data(_state["waterfall_data"])
-
-        # ── Actual peak ───────────────────────────────────────────────────────────
-        peak_idx = np.argmax(psd_avg)
-        peak_freq = freqs_mhz[peak_idx]
-        tone_pwr = psd_avg[peak_idx]
-        noise_floor = np.percentile(psd_avg, 10)
-        snr = tone_pwr - noise_floor
-        detected_offset_hz = (peak_freq - CENTER_FREQ / 1e6) * 1e6
-
-        stats_text.set_text(
-            f"Peak: {peak_freq:.4f} MHz  |  {tone_pwr:.1f} dBm  |  Noise: {noise_floor:.1f} dBm  |  SNR: {snr:.1f} dB",
-        )
-
-        # ── Bandpass around detected peak (signed frequency) ─────────────────────
-        filtered = bandpass_around_tone(cast("np.ndarray", raw), detected_offset_hz, SAMPLE_RATE, bw=20e3)
-
-        # ── Mix down to DC so constellation doesn't spin ──────────────────────────
-        filtered = filtered * np.exp(-2j * np.pi * detected_offset_hz * t_mix_full)
-
-        # ── Low-pass at 10 kHz to clean up after mix ──────────────────────────────
-        spectrum = np.fft.fft(filtered)
-        lp_freqs = np.fft.fftfreq(len(filtered), d=1 / SAMPLE_RATE)
-        spectrum[np.abs(lp_freqs) > LP_CUTOFF_HZ] = 0
-        filtered = np.fft.ifft(spectrum)
-
-        scale = np.max(np.abs(filtered)) + 1e-9
-        filtered_norm = filtered / scale
-
-        # ── IQ constellation ─────────────────────────────────────────────────────
-        iq_pts = filtered_norm[-1000:]
-        colors = np.linspace(0, 1, len(iq_pts))
-        iq_scatter.set_offsets(np.column_stack([iq_pts.real, iq_pts.imag]))
-        iq_scatter.set_array(colors)
-
-        # ── Time domain ───────────────────────────────────────────────────────────
-        seg = filtered_norm[:SHOW_SAMPLES]
-        line_i.set_ydata(seg.real)
-        line_q.set_ydata(seg.imag)
-
-        return (line_live, line_avg, line_peak, wf_img, stats_text, iq_scatter, line_i, line_q)
-
-    ani = animation.FuncAnimation(fig, cast("Any", update), interval=UPDATE_MS, blit=True, cache_frame_data=False)
-    plt.show()
+            # Keep overlap for frames that may straddle buffer boundaries
+            if buf_len > MAX_FRAME_SAMPLES:
+                trim = buf_len - MAX_FRAME_SAMPLES
+                rx_buf[:MAX_FRAME_SAMPLES] = rx_buf[trim:buf_len]
+                buf_len = MAX_FRAME_SAMPLES
+                abs_offset += trim
+    except KeyboardInterrupt:
+        pass

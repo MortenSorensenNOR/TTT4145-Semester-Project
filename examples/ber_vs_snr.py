@@ -8,9 +8,6 @@ for accurate performance comparison. This properly accounts for the coding
 rate, making it possible to fairly compare codes with different rates.
 
 Also compares standard min-sum vs normalized min-sum decoding.
-
-Usage:
-    uv run python examples/ber_vs_snr.py
 """
 
 import matplotlib.pyplot as plt
@@ -19,7 +16,7 @@ from scipy.special import erfc, erfcinv
 from tqdm import tqdm
 
 from modules.channel import ChannelConfig, ChannelModel
-from modules.channel_coding import LDPC, CodeRates, LDPCConfig
+from modules.channel_coding import CodeRates, LDPCConfig, ldpc_decode, ldpc_encode
 from modules.modulation import QPSK
 from modules.util import ebn0_to_snr
 
@@ -93,7 +90,6 @@ def simulate_ldpc_coded_qpsk(
     rate_float = code_rate.value_float
     k = int(648 * rate_float)  # message length for n=648
     config = LDPCConfig(k=k, code_rate=code_rate)
-    ldpc = LDPC()
     qpsk = QPSK()
 
     ber = np.zeros(len(ebn0_db_range))
@@ -110,7 +106,7 @@ def simulate_ldpc_coded_qpsk(
             message = rng.integers(0, 2, size=config.k)
 
             # LDPC encode
-            codeword = ldpc.encode(message, config)
+            codeword = ldpc_encode(message, config)
 
             # QPSK modulate
             symbols = qpsk.bits2symbols(codeword)
@@ -129,7 +125,7 @@ def simulate_ldpc_coded_qpsk(
             llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
 
             # LDPC decode
-            decoded = ldpc.decode(llrs.flatten(), config, max_iterations=50, alpha=alpha)
+            decoded = ldpc_decode(llrs.flatten(), config, max_iterations=50, alpha=alpha)
 
             # Count errors (on message bits, not codeword)
             total_errors += np.sum(message != decoded)
@@ -169,7 +165,6 @@ def measure_coding_gain_at_target_ber(
 
     # For LDPC, simulate around expected waterfall region
     config = LDPCConfig(k=324, code_rate=CodeRates.HALF_RATE)
-    ldpc = LDPC()
     qpsk = QPSK()
     code_rate = CodeRates.HALF_RATE.value_float
 
@@ -187,7 +182,7 @@ def measure_coding_gain_at_target_ber(
 
         for trial in range(n_trials):
             message = rng.integers(0, 2, size=config.k)
-            codeword = ldpc.encode(message, config)
+            codeword = ldpc_encode(message, config)
             symbols = qpsk.bits2symbols(codeword)
 
             channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=trial))
@@ -195,7 +190,7 @@ def measure_coding_gain_at_target_ber(
 
             sigma_sq = qpsk.estimate_noise_variance(rx_symbols)
             llrs = qpsk.symbols2bits_soft(rx_symbols, sigma_sq=sigma_sq)
-            decoded = ldpc.decode(llrs.flatten(), config, max_iterations=50, alpha=0.75)
+            decoded = ldpc_decode(llrs.flatten(), config, max_iterations=50, alpha=0.75)
 
             total_errors += np.sum(message != decoded)
             total_bits += config.k

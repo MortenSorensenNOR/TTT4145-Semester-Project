@@ -26,7 +26,7 @@ class TestBPSK:
     def test_symbol_constellation(self, bpsk: BPSK) -> None:
         """Verify that BPSK defines the expected constellation points."""
         expected = np.array([-1 + 0j, 1 + 0j])
-        np.testing.assert_array_equal(bpsk.symbols, expected)
+        np.testing.assert_array_equal(bpsk.symbol_mapping, expected)
 
     def test_bits2symbols_single_bit(self, bpsk: BPSK) -> None:
         """Verify that single bits map to the expected BPSK symbol."""
@@ -145,11 +145,74 @@ class TestQAM:
         """Verify that all bit patterns are represented in the mapping."""
         qam = QAM(QAM_ORDER_16)
         decimal_values = np.sum(
-            qam.bit_mapping * 2 ** np.arange(qam.bits_per_symbol),
+            qam.bit_mapping * 2 ** np.arange(qam.bits_per_symbol - 1, -1, -1),
             axis=1,
         )
         np.testing.assert_equal(len(np.unique(decimal_values)), qam.qam_order)
         np.testing.assert_equal(set(decimal_values), set(range(qam.qam_order)))
+
+
+class TestQAM4EqualsQPSK:
+    """Verify that QAM(4) and QPSK produce identical behavior."""
+
+    @pytest.fixture
+    def qpsk(self) -> QPSK:
+        """Create a QPSK instance."""
+        return QPSK()
+
+    @pytest.fixture
+    def qam4(self) -> QAM:
+        """Create a QAM(4) instance."""
+        return QAM(4)
+
+    def test_same_constellation(self, qpsk: QPSK, qam4: QAM) -> None:
+        """QAM(4) and QPSK should have the same constellation points."""
+        np.testing.assert_array_almost_equal(
+            qam4.symbol_mapping,
+            qpsk.symbol_mapping,
+        )
+
+    def test_same_bit_mapping(self, qpsk: QPSK, qam4: QAM) -> None:
+        """QAM(4) and QPSK should map bits to symbols identically."""
+        np.testing.assert_array_equal(qam4.bit_mapping, qpsk.bit_mapping)
+
+    def test_same_symbols_for_all_bit_patterns(self, qpsk: QPSK, qam4: QAM) -> None:
+        """Every 2-bit pattern should produce the same symbol in both."""
+        bits = np.array([0, 0, 0, 1, 1, 0, 1, 1])
+        np.testing.assert_array_almost_equal(
+            qam4.bits2symbols(bits),
+            qpsk.bits2symbols(bits),
+        )
+
+    def test_hard_decision_equivalent(self, qpsk: QPSK, qam4: QAM) -> None:
+        """Hard demodulation should produce the same bits."""
+        rng = np.random.default_rng(42)
+        symbols = qpsk.symbol_mapping + 0.05 * (rng.standard_normal(4) + 1j * rng.standard_normal(4))
+        np.testing.assert_array_equal(
+            qam4.symbols2bits(symbols),
+            qpsk.symbols2bits(symbols),
+        )
+
+    def test_soft_decision_equivalent(self, qpsk: QPSK, qam4: QAM) -> None:
+        """Soft demodulation LLRs should match between QAM(4) and QPSK."""
+        rng = np.random.default_rng(42)
+        symbols = qpsk.symbol_mapping + 0.1 * (rng.standard_normal(4) + 1j * rng.standard_normal(4))
+        sigma_sq = 0.1
+        llr_qpsk = qpsk.symbols2bits_soft(symbols, sigma_sq=sigma_sq)
+        llr_qam4 = qam4.symbols2bits_soft(symbols, sigma_sq=sigma_sq)
+        np.testing.assert_array_almost_equal(llr_qam4, llr_qpsk, decimal=5)
+
+    def test_roundtrip_interchangeable(self, qpsk: QPSK, qam4: QAM) -> None:
+        """Encoding with QPSK and decoding with QAM(4) should work and vice versa."""
+        bits = np.array([0, 1, 1, 0, 0, 0, 1, 1])
+        # QPSK encode → QAM(4) decode
+        symbols = qpsk.bits2symbols(bits)
+        recovered = qam4.symbols2bits(symbols).flatten()
+        np.testing.assert_array_equal(recovered, bits)
+        # QAM(4) encode → QPSK decode
+        symbols = qam4.bits2symbols(bits)
+        recovered = qpsk.symbols2bits(symbols).flatten()
+        np.testing.assert_array_equal(recovered, bits)
 
 
 class TestQPSKSoftDecision:
@@ -173,7 +236,7 @@ class TestQPSKSoftDecision:
 
     def test_llr_sign_matches_hard_decision(self, qpsk: QPSK) -> None:
         """Verify that LLR signs match hard decisions."""
-        symbols = qpsk.symbols
+        symbols = qpsk.symbol_mapping
         llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=0.1)
         hard_bits = qpsk.symbols2bits(symbols)
 

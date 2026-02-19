@@ -1,39 +1,93 @@
-"""Transmit a sinusoidal signal using the PlutoSDR."""
+"""Transmit a framed digital signal using the PlutoSDR.
 
-from typing import Any
+Pipeline: text -> bits -> frame encode -> modulate -> preamble + frame -> pulse shape -> SDR
+"""
 
-import adi
+import logging
+
 import numpy as np
 
+from modules.channel_coding import CodeRates
+from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
+from modules.modulation import BPSK
+from modules.pulse_shaping import rrc_filter, upsample_and_filter
+from modules.synchronization import build_preamble
+from modules.util import text_to_bits
+from pluto.config import RRC_ALPHA, RRC_NUM_TAPS, SPS, get_modulator
 
-def create_pluto() -> object:
-    """Create PlutoSDR instance."""
-    return adi.Pluto("ip:192.168.2.1")  # type: ignore[abstract]
+TX_GAIN = -30
+GUARD_SAMPLES = 500
+MOD_SCHEME = ModulationSchemes.QPSK
+CODING_RATE = CodeRates.HALF_RATE
+
+
+def build_tx_signal(
+    message: str,
+    mod_scheme: ModulationSchemes = MOD_SCHEME,
+    coding_rate: CodeRates = CODING_RATE,
+) -> np.ndarray:
+    """Run the full TX pipeline and return baseband samples (pre-DAC scaling).
+
+    Args:
+        message: Text string to transmit.
+        mod_scheme: Modulation scheme for the payload.
+        coding_rate: LDPC coding rate.
+
+    Returns:
+        Complex baseband samples ready for DAC scaling and transmission.
+
+    """
+    payload_bits = text_to_bits(message)
+
+    header = FrameHeader(
+        length=len(payload_bits),
+        src=0,
+        dst=0,
+        mod_scheme=mod_scheme,
+        coding_rate=coding_rate,
+    )
+    fc = FrameConstructor()
+    header_encoded, payload_encoded = fc.encode(header, payload_bits)
+
+    header_symbols = BPSK().bits2symbols(header_encoded)  # header always BPSK
+    payload_symbols = get_modulator(header.mod_scheme).bits2symbols(payload_encoded)
+
+    preamble = build_preamble()
+    frame = np.concatenate([preamble, header_symbols, payload_symbols])
+
+    h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
+    tx_signal = upsample_and_filter(frame, SPS, h_rrc)
+    zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
+    return np.concatenate([zeros, tx_signal, zeros])
 
 
 if __name__ == "__main__":
+    import sys
     from typing import Any, cast
 
-    sample_rate = 1e6  # Hz
-    center_freq = 2.4e9  # Hz
+    from pluto import create_pluto
+    from pluto.config import CENTER_FREQ, DAC_SCALE, SAMPLE_RATE
 
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logger = logging.getLogger(__name__)
+
+    # ── SDR setup ─────────────────────────────────────────────────────
     sdr: Any = cast("Any", create_pluto())
-    sdr.sample_rate = int(sample_rate)
-    sdr.tx_rf_bandwidth = int(
-        sample_rate,
-    )  # filter cutoff, just set it to the same as sample rate
-    sdr.tx_lo = int(center_freq)
-    sdr.tx_hardwaregain_chan0 = (
-        -50  # Increase to increase tx power, valid range is -90 to 0 dB
-    )
+    sdr.sample_rate = int(SAMPLE_RATE)
+    sdr.tx_rf_bandwidth = int(SAMPLE_RATE)
+    sdr.tx_lo = int(CENTER_FREQ)
+    sdr.tx_hardwaregain_chan0 = TX_GAIN
 
-    N = 10000  # number of samples to transmit at once
-    t = np.arange(N) / sample_rate
-    samples = 0.5 * np.exp(
-        2.0j * np.pi * 100e3 * t,
-    )  # Simulate a sinusoid of 100 kHz, so it should show up at 915.1 MHz at the receiver
-    samples *= 2**14  # The PlutoSDR expects samples to be between -2^14 and +2^14, not -1 and +1 like some SDRs
+    # ── Build TX signal ───────────────────────────────────────────────
+    message = sys.argv[1] if len(sys.argv) > 1 else "Hello, PlutoSDR!"
+    tx_signal = build_tx_signal(message, MOD_SCHEME, CODING_RATE)
+    samples = tx_signal * DAC_SCALE
 
-    # Transmit our batch of samples 100 times, so it should be 1 second worth of samples total, if USB can keep up
-    while True:
-        sdr.tx(samples)  # transmit the batch of samples once
+    logger.info("TX: %r  (%d samples @ %d sps)", message, len(samples), SPS)
+
+    # ── Transmit ──────────────────────────────────────────────────────
+    try:
+        while True:
+            sdr.tx(samples)
+    except KeyboardInterrupt:
+        sdr.tx_destroy_buffer()

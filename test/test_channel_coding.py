@@ -5,7 +5,14 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from modules.channel_coding import LDPC, CodeRates, LdpcBaseMatrix, LDPCConfig
+from modules.channel_coding import (
+    CodeRates,
+    LDPCConfig,
+    get_ldpc_base_matrix,
+    ldpc_decode,
+    ldpc_encode,
+    ldpc_get_h_matrix,
+)
 from modules.util import ebn0_to_snr
 
 CODEWORD_LENGTH = 648
@@ -47,21 +54,9 @@ LDPC_CONFIGS = [
 
 
 @pytest.fixture
-def ldpc() -> LDPC:
-    """Create LDPC codec instance."""
-    return LDPC()
-
-
-@pytest.fixture
 def ldpc_config() -> LDPCConfig:
     """Create default LDPC configuration."""
     return LDPCConfig(k=MESSAGE_LENGTH, code_rate=CodeRates.HALF_RATE)
-
-
-@pytest.fixture
-def base_matrix() -> LdpcBaseMatrix:
-    """Create LDPC base matrix generator."""
-    return LdpcBaseMatrix()
 
 
 @pytest.fixture
@@ -86,30 +81,30 @@ def _expand_base_matrix(matrix: np.ndarray, num_rows: int, z_size: int) -> np.nd
 class TestLDPCEncoding:
     """Tests for LDPC encoder."""
 
-    def test_codeword_length(self, ldpc: LDPC, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
+    def test_codeword_length(self, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
         """Encoded codeword should be n bits."""
-        codeword = ldpc.encode(random_message, ldpc_config)
+        codeword = ldpc_encode(random_message, ldpc_config)
         np.testing.assert_equal(len(codeword), CODEWORD_LENGTH)
 
-    def test_systematic_bits_preserved(self, ldpc: LDPC, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
+    def test_systematic_bits_preserved(self, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
         """First k bits of codeword should be the original message."""
-        codeword = ldpc.encode(random_message, ldpc_config)
+        codeword = ldpc_encode(random_message, ldpc_config)
         np.testing.assert_array_equal(codeword[:MESSAGE_LENGTH], random_message)
 
-    def test_valid_codeword(self, ldpc: LDPC, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
+    def test_valid_codeword(self, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
         """Encode then decode should recover the original message."""
-        codeword = ldpc.encode(random_message, ldpc_config)
+        codeword = ldpc_encode(random_message, ldpc_config)
         tx = 1 - 2 * codeword
         llr = LLR_SCALE * tx
-        decoded = ldpc.decode(llr, ldpc_config, max_iterations=20)
+        decoded = ldpc_decode(llr, ldpc_config, max_iterations=20)
         np.testing.assert_array_equal(decoded, random_message)
 
-    def test_different_messages_different_codewords(self, ldpc: LDPC, ldpc_config: LDPCConfig) -> None:
+    def test_different_messages_different_codewords(self, ldpc_config: LDPCConfig) -> None:
         """Different messages should produce different codewords."""
         msg1 = np.zeros(MESSAGE_LENGTH, dtype=int)
         msg2 = np.ones(MESSAGE_LENGTH, dtype=int)
-        cw1 = ldpc.encode(msg1, ldpc_config)
-        cw2 = ldpc.encode(msg2, ldpc_config)
+        cw1 = ldpc_encode(msg1, ldpc_config)
+        cw2 = ldpc_encode(msg2, ldpc_config)
         if np.array_equal(cw1, cw2):
             pytest.fail("Different messages produced identical codewords")
 
@@ -117,20 +112,23 @@ class TestLDPCEncoding:
 class TestLDPCDecoding:
     """Tests for LDPC decoder."""
 
-    def test_decode_no_noise(self, ldpc: LDPC, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
+    def test_decode_no_noise(self, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
         """Perfect channel should decode perfectly."""
-        codeword = ldpc.encode(random_message, ldpc_config)
+        codeword = ldpc_encode(random_message, ldpc_config)
         tx = 1 - 2 * codeword
         llr = LLR_SCALE * tx
-        decoded = ldpc.decode(llr, ldpc_config, max_iterations=20)
+        decoded = ldpc_decode(llr, ldpc_config, max_iterations=20)
         np.testing.assert_array_equal(decoded, random_message)
 
     @pytest.mark.parametrize("ebn0_db", [4.0, 5.0, 6.0])
     def test_decode_with_noise(
-        self, ldpc: LDPC, ldpc_config: LDPCConfig, random_message: np.ndarray, ebn0_db: float,
+        self,
+        ldpc_config: LDPCConfig,
+        random_message: np.ndarray,
+        ebn0_db: float,
     ) -> None:
         """Should decode with few/no errors at reasonable Eb/N0."""
-        codeword = ldpc.encode(random_message, ldpc_config)
+        codeword = ldpc_encode(random_message, ldpc_config)
         code_rate = CodeRates.HALF_RATE.value_float
 
         tx = 1 - 2 * codeword
@@ -142,68 +140,56 @@ class TestLDPCDecoding:
         rx = tx + rng.standard_normal(CODEWORD_LENGTH) * noise_std
         llr = 2 * rx / (noise_std**2)
 
-        decoded = ldpc.decode(llr, ldpc_config, max_iterations=50)
+        decoded = ldpc_decode(llr, ldpc_config, max_iterations=50)
         bit_errors = np.sum(random_message != decoded)
         if bit_errors >= MAX_BIT_ERRORS:
             pytest.fail(f"Too many errors ({bit_errors}) at Eb/N0={ebn0_db} dB")
 
-    def test_decode_returns_k_bits(self, ldpc: LDPC, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
+    def test_decode_returns_k_bits(self, ldpc_config: LDPCConfig, random_message: np.ndarray) -> None:
         """Decoded message should be k bits."""
-        codeword = ldpc.encode(random_message, ldpc_config)
+        codeword = ldpc_encode(random_message, ldpc_config)
         tx = 1 - 2 * codeword
         llr = LLR_SCALE * tx
-        decoded = ldpc.decode(llr, ldpc_config)
+        decoded = ldpc_decode(llr, ldpc_config)
         np.testing.assert_equal(len(decoded), MESSAGE_LENGTH)
 
 
 class TestLDPCStructure:
     """Tests for LDPC matrix structure."""
 
-    def test_h_matrix_dimensions(self, ldpc: LDPC, ldpc_config: LDPCConfig) -> None:
+    def test_h_matrix_dimensions(self, ldpc_config: LDPCConfig) -> None:
         """H matrix should be (n-k) x n."""
-        h_mat, _, _ = ldpc.get_structures(ldpc_config)
+        h_mat = ldpc_get_h_matrix(ldpc_config)
         np.testing.assert_equal(h_mat.shape, (MESSAGE_LENGTH, CODEWORD_LENGTH))
 
-    def test_h_matrix_sparse(self, ldpc: LDPC, ldpc_config: LDPCConfig) -> None:
+    def test_h_matrix_sparse(self, ldpc_config: LDPCConfig) -> None:
         """H matrix should be sparse (low density)."""
-        h_mat, _, _ = ldpc.get_structures(ldpc_config)
+        h_mat = ldpc_get_h_matrix(ldpc_config)
         density = np.sum(h_mat) / (MESSAGE_LENGTH * CODEWORD_LENGTH)
         if density >= MAX_DENSITY:
             pytest.fail(f"H matrix too dense: {density:.3f}")
-
-    def test_adjacency_lists_consistent(self, ldpc: LDPC, ldpc_config: LDPCConfig) -> None:
-        """Adjacency lists should match H matrix."""
-        h_mat, check_neighbors, var_neighbors = ldpc.get_structures(ldpc_config)
-
-        for i, neighbors in enumerate(check_neighbors):
-            for j in neighbors:
-                np.testing.assert_equal(h_mat[i, j], 1)
-
-        for j, neighbors in enumerate(var_neighbors):
-            for i in neighbors:
-                np.testing.assert_equal(h_mat[i, j], 1)
 
 
 class TestLDPCBaseMatrix:
     """Tests for all LDPC base matrices from 802.11 standard."""
 
     @pytest.mark.parametrize("cfg", LDPC_CONFIGS)
-    def test_matrix_dimensions(self, base_matrix: LdpcBaseMatrix, cfg: LdpcTestConfig) -> None:
+    def test_matrix_dimensions(self, cfg: LdpcTestConfig) -> None:
         """Base matrix should have correct dimensions for each configuration."""
-        matrix = base_matrix.get_matrix(cfg.code_rate, cfg.n)
+        matrix = get_ldpc_base_matrix(cfg.code_rate, cfg.n)
         np.testing.assert_equal(matrix.shape, (cfg.num_parity_rows, BASE_MATRIX_COLS))
 
     @pytest.mark.parametrize("cfg", LDPC_CONFIGS)
-    def test_matrix_values_in_range(self, base_matrix: LdpcBaseMatrix, cfg: LdpcTestConfig) -> None:
+    def test_matrix_values_in_range(self, cfg: LdpcTestConfig) -> None:
         """All matrix values should be -1 or in range [0, Z-1]."""
-        matrix = base_matrix.get_matrix(cfg.code_rate, cfg.n)
+        matrix = get_ldpc_base_matrix(cfg.code_rate, cfg.n)
         if not np.all((matrix >= -1) & (matrix < cfg.z)):
             pytest.fail(f"Values out of range for n={cfg.n}, z={cfg.z}")
 
     @pytest.mark.parametrize("cfg", LDPC_CONFIGS)
-    def test_parity_structure(self, base_matrix: LdpcBaseMatrix, cfg: LdpcTestConfig) -> None:
+    def test_parity_structure(self, cfg: LdpcTestConfig) -> None:
         """Parity portion should have staircase/dual-diagonal structure."""
-        matrix = base_matrix.get_matrix(cfg.code_rate, cfg.n)
+        matrix = get_ldpc_base_matrix(cfg.code_rate, cfg.n)
         num_info_cols = BASE_MATRIX_COLS - cfg.num_parity_rows
         parity_part = matrix[:, num_info_cols:]
         non_neg_count = np.sum(parity_part >= 0)
@@ -211,36 +197,36 @@ class TestLDPCBaseMatrix:
             pytest.fail("Parity part has too few non-negative entries")
 
     @pytest.mark.parametrize("cfg", LDPC_CONFIGS)
-    def test_expanded_matrix_dimensions(self, base_matrix: LdpcBaseMatrix, cfg: LdpcTestConfig) -> None:
+    def test_expanded_matrix_dimensions(self, cfg: LdpcTestConfig) -> None:
         """Expanded H matrix should have correct dimensions."""
-        matrix = base_matrix.get_matrix(cfg.code_rate, cfg.n)
+        matrix = get_ldpc_base_matrix(cfg.code_rate, cfg.n)
         h_mat = _expand_base_matrix(matrix, cfg.num_parity_rows, cfg.z)
         expected_rows = cfg.n - cfg.k
         expected_cols = cfg.n
         np.testing.assert_equal(h_mat.shape, (expected_rows, expected_cols))
 
     @pytest.mark.parametrize("cfg", LDPC_CONFIGS)
-    def test_expanded_matrix_sparsity(self, base_matrix: LdpcBaseMatrix, cfg: LdpcTestConfig) -> None:
+    def test_expanded_matrix_sparsity(self, cfg: LdpcTestConfig) -> None:
         """Expanded H matrix should be sparse (LDPC property)."""
-        matrix = base_matrix.get_matrix(cfg.code_rate, cfg.n)
+        matrix = get_ldpc_base_matrix(cfg.code_rate, cfg.n)
         h_mat = _expand_base_matrix(matrix, cfg.num_parity_rows, cfg.z)
         density = np.sum(h_mat) / h_mat.size
         if density >= MAX_DENSITY:
             pytest.fail(f"H matrix too dense: {density:.3f}")
 
     @pytest.mark.parametrize("cfg", LDPC_CONFIGS)
-    def test_each_row_has_connections(self, base_matrix: LdpcBaseMatrix, cfg: LdpcTestConfig) -> None:
+    def test_each_row_has_connections(self, cfg: LdpcTestConfig) -> None:
         """Each row in base matrix should have at least 2 non-negative entries."""
-        matrix = base_matrix.get_matrix(cfg.code_rate, cfg.n)
+        matrix = get_ldpc_base_matrix(cfg.code_rate, cfg.n)
         for i in range(cfg.num_parity_rows):
             row_connections = np.sum(matrix[i] >= 0)
             if row_connections < MIN_ROW_CONNECTIONS:
                 pytest.fail(f"Row {i} has only {row_connections} connections")
 
     @pytest.mark.parametrize("cfg", LDPC_CONFIGS)
-    def test_each_column_has_connections(self, base_matrix: LdpcBaseMatrix, cfg: LdpcTestConfig) -> None:
+    def test_each_column_has_connections(self, cfg: LdpcTestConfig) -> None:
         """Each column in base matrix should have at least 1 non-negative entry."""
-        matrix = base_matrix.get_matrix(cfg.code_rate, cfg.n)
+        matrix = get_ldpc_base_matrix(cfg.code_rate, cfg.n)
         for j in range(BASE_MATRIX_COLS):
             col_connections = np.sum(matrix[:, j] >= 0)
             if col_connections < MIN_COL_CONNECTIONS:
