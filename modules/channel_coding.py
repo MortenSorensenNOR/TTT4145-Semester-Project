@@ -441,7 +441,7 @@ class LDPC:
         # Build adjacency lists for the permuted H
         check_neighbors, var_neighbors = self._build_adj_list(H_permuted)
 
-        assert len(llr_channel) == n
+        assert len(llr_channel) == n, f"Expected {n}, got {len(llr_channel)}"
         hard_decision = np.zeros(n, dtype=int)
 
         num_checks = H_permuted.shape[0]

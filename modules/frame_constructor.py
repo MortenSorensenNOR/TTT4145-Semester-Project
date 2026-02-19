@@ -181,17 +181,10 @@ class FrameConstructor:
 
     def __init__(
         self,
-        data_size: int,  # number of data bits per frame
-        code_rate: CodeRates,
-        pilots: Sequence[int] | np.ndarray,
         header_config: FrameHeaderConfig | None = None,
     ) -> None:
         """Initialize frame construction parameters."""
-        self.data_size = data_size
-        self.code_rate = code_rate
-        self.pilots = pilots
         self.header_config = header_config or FrameHeaderConfig()
-
         self.frame_header_constructor = FrameHeaderConstructor(
             self.header_config.payload_length_bits,
             self.header_config.src_bits,

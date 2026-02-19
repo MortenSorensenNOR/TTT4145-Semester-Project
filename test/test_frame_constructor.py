@@ -19,12 +19,8 @@ from modules.pulse_shaping import PulseShaper
 
 @pytest.fixture
 def frame_constructor():
-    """Default FrameConstructor with rate-1/2 LDPC."""
-    return FrameConstructor(
-        data_size=324,
-        code_rate=CodeRates.HALF_RATE,
-        pilots=np.array([]),
-    )
+    """Default FrameConstructor."""
+    return FrameConstructor()
 
 @pytest.fixture
 def sample_header():

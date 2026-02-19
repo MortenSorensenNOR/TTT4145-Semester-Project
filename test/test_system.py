@@ -1,14 +1,16 @@
 """System-level checks for modulation, shaping, and channel flow."""
 
 import numpy as np
+import matplotlib.pyplot as plt
 
+from modules.plotting import plot_iq
 from modules.channel import (
     ChannelModel,
     ChannelProfile,
     ProfileOverrides,
     ProfileRequest,
 )
-from modules.modulation import QPSK
+from modules.modulation import BPSK, QPSK
 from modules.pulse_shaping import PulseShaper
 from modules.channel_coding import CodeRates
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
@@ -19,26 +21,29 @@ SAMPLES_PER_SYMBOL = 8
 OVERLAP_FACTOR = 6
 NUM_SYMBOLS = 512
 BITS_PER_SYMBOL = 2
-SNR_DB = 15.0
+SNR_DB = 1.0
 SEED = 42
 
 PAYLOAD_LENGTH = 324
 SRC = 1
-DST = 1
+DST = 2
 MOD_SCHEME = ModulationSchemes.QPSK
-CODING_RATE = CodeRates.THREE_QUARTER_RATE
+CODING_RATE = CodeRates.HALF_RATE
 
 
-def test_end_to_end_signal_chain_shapes_and_outputs() -> None:
+def test() -> None:
     """Verify end-to-end chain output dimensions and finite BER."""
     symbol_rate = BANDWIDTH_HZ / (1 + ROLL_OFF)
     sample_rate = symbol_rate * SAMPLES_PER_SYMBOL
     pulse_taps = SAMPLES_PER_SYMBOL * OVERLAP_FACTOR * 2 + 1
 
+    # modulation
     pulse_shaper = PulseShaper(SAMPLES_PER_SYMBOL, ROLL_OFF, pulse_taps)
+    bpsk = BPSK()
     qpsk = QPSK()
     rng = np.random.default_rng(SEED)
 
+    # channel
     request = ProfileRequest(
         sample_rate=sample_rate,
         snr_db=SNR_DB,
@@ -54,30 +59,55 @@ def test_end_to_end_signal_chain_shapes_and_outputs() -> None:
         request=request,
     )
 
-    bitstream = rng.integers(
-        0,
-        BITS_PER_SYMBOL,
-        size=(NUM_SYMBOLS, BITS_PER_SYMBOL),
-        dtype=int,
+    # generate payload
+    header = FrameHeader(
+        length=PAYLOAD_LENGTH,
+        src=SRC,
+        dst=DST,
+        mod_scheme=MOD_SCHEME,
+        coding_rate=CODING_RATE
     )
-    symbols = qpsk.bits2symbols(bitstream)
+    payload = rng.integers(0, 2, size=(PAYLOAD_LENGTH), dtype=int)
+    print(payload)
 
-    upsampled = np.zeros(len(symbols) * SAMPLES_PER_SYMBOL, dtype=complex)
-    upsampled[::SAMPLES_PER_SYMBOL] = symbols
+    frame_constructor = FrameConstructor()
+    header_encoded, payload_encoded = frame_constructor.encode(header, payload)
+
+    # modulate header and payload
+    header_modulated = bpsk.bits2symbols(header_encoded)
+    payload_modulated = qpsk.bits2symbols(payload_encoded)
+    frame_modulated = np.concatenate([header_modulated, payload_modulated])
+
+    # rest of tx
+    upsampled = np.zeros(len(frame_modulated) * SAMPLES_PER_SYMBOL, dtype=complex)
+    upsampled[::SAMPLES_PER_SYMBOL] = frame_modulated
     tx_signal = pulse_shaper.shape(upsampled)
 
     rx_signal = channel.apply(tx_signal)
     rx_filtered = pulse_shaper.shape(rx_signal)
     rx_symbols = rx_filtered[::SAMPLES_PER_SYMBOL]
 
-    rx_bits_hard = qpsk.symbols2bits(rx_symbols)
-    rx_bits_soft = qpsk.symbols2bits_soft(rx_symbols)
-    ber = float(np.mean(rx_bits_hard != bitstream))
+    # TODO: have a nice way to get the number of symbols for the header that does not rely on having the modulated header
+    rx_header_sym = rx_symbols[:len(header_modulated)]
+    rx_payload_sym = rx_symbols[len(header_modulated):]
 
-    np.testing.assert_equal(rx_bits_soft.shape[1], BITS_PER_SYMBOL)
-    np.testing.assert_equal(len(rx_symbols), NUM_SYMBOLS)
+    rx_header_bits = bpsk.symbols2bits(rx_header_sym)
+    rx_payload_bits = qpsk.symbols2bits_soft(rx_payload_sym)
+    print(rx_payload_bits.shape)
+
+    # decode header
+    rx_header, rx_payload = frame_constructor.decode(rx_header_bits, rx_payload_bits.flatten())
+    ber = float(np.mean(rx_payload != payload))
+    print(f"BER: {ber}")
+
+    np.testing.assert_equal(rx_header.length, PAYLOAD_LENGTH)
+    np.testing.assert_equal(rx_payload_bits.shape[1], BITS_PER_SYMBOL)
     np.testing.assert_array_less(-1e-12, ber)
     np.testing.assert_array_less(ber, 1.0 + 1e-12)
 
+    plot_iq(tx_signal)
+    plot_iq(rx_signal)
+    plt.show()
+
 if __name__ == "__main__":
-    test_end_to_end_signal_chain_shapes_and_outputs()
+    test()

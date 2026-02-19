@@ -25,6 +25,48 @@ class BPSK:
             return np.array([], dtype=int)
         return np.argmin(np.abs(symbols[:, None] - self.symbols[None, :]), axis=1)
 
+    def symbols2bits_soft(
+        self,
+        symbols: np.ndarray,
+        sigma_sq: float | None = None,
+    ) -> np.ndarray:
+        """Compute log-likelihood ratios (LLRs) for soft decision decoding.
+
+        LLR convention: positive = more likely 0, negative = more likely 1.
+
+        Args:
+            symbols: Received BPSK symbols.
+            sigma_sq: Noise variance. If None, estimated from received symbols.
+
+        Returns:
+            LLR values for each bit.
+        """
+        if len(symbols) == 0:
+            return np.array([], dtype=float)
+
+        if sigma_sq is None:
+            indices = np.argmin(
+                np.abs(symbols[:, None] - self.symbols[None, :]),
+                axis=1,
+            )
+            noise = symbols - self.symbols[indices]
+            sigma_sq = float(max(np.mean(np.abs(noise) ** 2), 1e-10))
+
+        # BPSK: symbol -1 -> bit 1, symbol +1 -> bit 0
+        # LLR = 2 * Re(y) / σ²
+        return 2.0 * np.real(symbols) / sigma_sq
+
+    def estimate_noise_variance(self, symbols: np.ndarray) -> float:
+        """Estimate noise variance from received symbols."""
+        if len(symbols) == 0:
+            return 1e-10
+        indices = np.argmin(
+            np.abs(symbols[:, None] - self.symbols[None, :]),
+            axis=1,
+        )
+        noise = symbols - self.symbols[indices]
+        return float(max(np.mean(np.abs(noise) ** 2), 1e-10))
+
     def plot_constellation(self) -> None:
         """Plot BPSK constellation diagram."""
         plt.plot(np.real(self.symbols), np.imag(self.symbols), "bo")
