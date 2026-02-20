@@ -30,7 +30,7 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendor"]
+norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendor", "pluto"]
 
 [tool.uv.extra-build-dependencies]
 pyldpc = ["numpy"]

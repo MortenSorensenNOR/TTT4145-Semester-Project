@@ -55,8 +55,10 @@ def build_tx_signal_from_bits(
         length=len(payload_bits),
         src=0,
         dst=0,
+        frame_type=0,
         mod_scheme=mod_scheme,
         coding_rate=coding_rate,
+        sequence_number=0,
     )
     header_encoded, payload_encoded = _fc.encode(
         header,

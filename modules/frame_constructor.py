@@ -240,7 +240,7 @@ class FrameConstructor:
 
     def payload_coded_n_bits(self, header: FrameHeader, *, channel_coding: bool = True) -> int:
         """Return the number of coded payload bits for a given header."""
-        if not channel_coding:
+        if not channel_coding or header.coding_rate == CodeRates.NONE:
             raw = header.length + self.PAYLOAD_CRC_BITS
             return raw + (-raw % 12)  # pad to multiple of 12
         k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
@@ -277,7 +277,7 @@ class FrameConstructor:
         crc_bits = np.array(int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
         payload_with_crc = np.concatenate([payload, crc_bits])
 
-        if not channel_coding:
+        if not channel_coding or header.coding_rate == CodeRates.NONE:
             n = self.payload_coded_n_bits(header, channel_coding=False)
             payload_encoded = np.concatenate(
                 [payload_with_crc, np.zeros(n - len(payload_with_crc), dtype=int)]
@@ -319,7 +319,7 @@ class FrameConstructor:
         interleaving: bool = True,
     ) -> np.ndarray:
         """Decode an LDPC-encoded payload using parameters from a decoded header."""
-        if not channel_coding:
+        if not channel_coding or header.coding_rate == CodeRates.NONE:
             if soft:
                 payload_bits = (payload_encoded < 0).astype(int)
             else:
