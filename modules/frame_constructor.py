@@ -1,6 +1,6 @@
 """Construct frames with header data, pilots, and error correction information."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 import numpy as np
@@ -17,7 +17,7 @@ from modules.channel_coding import (
 )
 
 
-def _int_to_bits(n: int, length: int) -> list[int]:
+def int_to_bits(n: int, length: int) -> list[int]:
     """Convert an integer to a fixed-width big-endian bit list."""
     return [(n >> (length - 1 - i)) & 1 for i in range(length)]
 
@@ -25,10 +25,10 @@ def _int_to_bits(n: int, length: int) -> list[int]:
 class ModulationSchemes(Enum):
     """Supported modulation schemes."""
 
-    BPSK = 1
-    QPSK = 2
-    QAM16 = 3
-    QAM64 = 4
+    BPSK = 0
+    QPSK = 1
+    QAM16 = 2
+    QAM64 = 3
 
 
 @dataclass
@@ -38,8 +38,10 @@ class FrameHeader:
     length: int
     src: int
     dst: int
+    frame_type: int
     mod_scheme: ModulationSchemes
     coding_rate: CodeRates
+    sequence_number: int
     crc: int = 0
     crc_passed: bool = True
 
@@ -48,12 +50,29 @@ class FrameHeader:
 class FrameHeaderConfig:
     """Bit-width configuration for frame header fields."""
 
-    payload_length_bits: int = 10
+    payload_length_bits: int = 12  # length in bytes
     src_bits: int = 2
     dst_bits: int = 2
-    mod_scheme_bits: int = 3
-    coding_rate_bits: int = 2
-    crc_bits: int = 4
+    frame_type_bits: int = 2
+    mod_scheme_bits: int = 2
+    coding_rate_bits: int = 3
+    sequence_number_bits: int = 4
+    reserved_bits: int = 1
+    crc_bits: int = 8
+    header_total_size: int = field(init=False)
+
+    def __post_init__(self):
+        self.header_total_size = (
+            self.payload_length_bits +
+            self.src_bits +
+            self.dst_bits +
+            self.frame_type_bits +
+            self.mod_scheme_bits +
+            self.coding_rate_bits +
+            self.sequence_number_bits +
+            self.reserved_bits +
+            self.crc_bits
+        )
 
 
 def _bits_to_int(bits: list[int]) -> int:
@@ -74,63 +93,74 @@ def _closest_payload_length(length: int, code_rate: CodeRates) -> int:
 class FrameHeaderConstructor:
     """Encode and decode frame header fields."""
 
-    def __init__(self, config: FrameHeaderConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: FrameHeaderConfig
+    ) -> None:
         """Initialize fixed bit widths for each frame header field."""
-        self.config = config or FrameHeaderConfig()
+        self.length_bits = config.payload_length_bits
+        self.src_bits = config.src_bits
+        self.dst_bits = config.dst_bits
+        self.frame_type_bits = config.frame_type_bits
+        self.mod_scheme_bits = config.mod_scheme_bits
+        self.coding_rate_bits = config.coding_rate_bits
+        self.sequence_number_bits = config.sequence_number_bits
+        self.reserved_bits = config.reserved_bits
+        self.crc_bits = config.crc_bits
 
-        raw_length = (
-            self.config.payload_length_bits
-            + self.config.src_bits
-            + self.config.dst_bits
-            + self.config.mod_scheme_bits
-            + self.config.coding_rate_bits
-            + self.config.crc_bits
-        )
-        # Pad to multiple of 12 (Golay block size)
-        self.header_length = 12 * int(np.ceil(raw_length / 12))
-        self.reserved_bits = self.header_length - raw_length
+        raw_length = config.header_total_size
+        self.header_length = 2 * int(np.ceil(raw_length / 2))
 
-    @staticmethod
-    def _crc_calc(data_bits: list[int], poly: int = 0b10011) -> int:
-        """Calculate CRC checksum from a bit list.
-
-        Source: https://en.wikipedia.org/wiki/Cyclic_redundancy_check#Computation
-        """
-        crc_width = poly.bit_length() - 1
-        reg = 0
-        for b in data_bits:
-            reg = (reg << 1) | b
-        reg <<= crc_width
-        for i in range(len(data_bits) - 1, -1, -1):
-            if reg & (1 << (i + crc_width)):
-                reg ^= poly << i
-        return reg & ((1 << crc_width) - 1)
+    def _crc_calc(self, data_bits: str, poly: int = 0x07) -> int:
+        """Calculate CRC checksum."""
+        padded = data_bits.zfill((len(data_bits) + 7) // 8 * 8)
+        crc = 0x00
+        for i in range(0, len(padded), 8):
+            byte = int(padded[i:i+8], 2)
+            crc ^= byte
+            for _ in range(8):
+                if crc & 0x80:
+                    crc = ((crc << 1) ^ 0x07) & 0xFF
+                else:
+                    crc = (crc << 1) & 0xFF
+        return crc
 
     def encode(self, header: FrameHeader) -> np.ndarray:
         """Encode frame header."""
-        cfg = self.config
-        length_bits = _int_to_bits(header.length, cfg.payload_length_bits)
-        src_bits = _int_to_bits(header.src, cfg.src_bits)
-        dst_bits = _int_to_bits(header.dst, cfg.dst_bits)
-        mod_scheme_bits = _int_to_bits(header.mod_scheme.value, cfg.mod_scheme_bits)
-        coding_rate_bits = _int_to_bits(header.coding_rate.value, cfg.coding_rate_bits)
+        length_bits = int_to_bits(header.length, self.length_bits)
+        src_bits = int_to_bits(header.src, self.src_bits)
+        dst_bits = int_to_bits(header.dst, self.dst_bits)
+        frame_type_bits = int_to_bits(header.frame_type, self.frame_type_bits)
+        mod_scheme_bits = int_to_bits(header.mod_scheme.value, self.mod_scheme_bits)
+        coding_rate_bits = int_to_bits(header.coding_rate.value, self.coding_rate_bits)
+        sequence_number_bits = int_to_bits(header.sequence_number, self.sequence_number_bits)
 
-        data_bits = length_bits + src_bits + dst_bits + mod_scheme_bits + coding_rate_bits + [0] * self.reserved_bits
-        crc = self._crc_calc(data_bits)
-        data_bits += _int_to_bits(crc, cfg.crc_bits)
+        data_bits = (
+            length_bits
+            + src_bits
+            + dst_bits
+            + frame_type_bits
+            + mod_scheme_bits
+            + coding_rate_bits
+            + sequence_number_bits
+            + [0] * self.reserved_bits
+        )
+        crc = self._crc_calc("".join(str(b) for b in data_bits))
+        data_bits += int_to_bits(crc, self.crc_bits)
 
         return np.array(data_bits, dtype=int)
 
     def decode(self, header: np.ndarray) -> FrameHeader:
         """Decode frame header."""
-        cfg = self.config
         offset = 0
         field_widths = [
-            cfg.payload_length_bits,
-            cfg.src_bits,
-            cfg.dst_bits,
-            cfg.mod_scheme_bits,
-            cfg.coding_rate_bits,
+            self.length_bits,
+            self.src_bits,
+            self.dst_bits,
+            self.frame_type_bits,
+            self.mod_scheme_bits,
+            self.coding_rate_bits,
+            self.sequence_number_bits
         ]
         fields: list[list[int]] = []
         for width in field_widths:
@@ -138,29 +168,50 @@ class FrameHeaderConstructor:
             fields.append(bits.tolist() if isinstance(bits, np.ndarray) else bits)
             offset += width
 
-        length_bits, src_bits, dst_bits, mod_scheme_bits, coding_rate_bits = fields
+        (length_bits, 
+         src_bits, 
+         dst_bits, 
+         frame_type_bits, 
+         mod_scheme_bits, 
+         coding_rate_bits, 
+         sequence_number_bits) = fields
 
         offset += self.reserved_bits
-        crc_field = header[offset : offset + cfg.crc_bits]
+        crc_field = header[offset : offset + self.crc_bits]
         crc_bits = crc_field.tolist() if isinstance(crc_field, np.ndarray) else crc_field
 
         length = _bits_to_int(length_bits)
         src = _bits_to_int(src_bits)
         dst = _bits_to_int(dst_bits)
+        frame_type = _bits_to_int(frame_type_bits)
         mod_scheme = ModulationSchemes(_bits_to_int(mod_scheme_bits))
         coding_rate = CodeRates(_bits_to_int(coding_rate_bits))
+        sequence_number = _bits_to_int(sequence_number_bits)
         crc = _bits_to_int(crc_bits)
 
         # Verify CRC
-        data_for_crc = length_bits + src_bits + dst_bits + mod_scheme_bits + coding_rate_bits + [0] * self.reserved_bits
-        expected_crc_bits = _int_to_bits(self._crc_calc(data_for_crc), cfg.crc_bits)
+        data_str = "".join(
+            str(b) for b in (
+                length_bits
+                + src_bits
+                + dst_bits
+                + frame_type_bits
+                + mod_scheme_bits
+                + coding_rate_bits
+                + sequence_number_bits
+                + [0] * self.reserved_bits
+            )
+        )
+        expected_crc_bits = int_to_bits(self._crc_calc(data_str), self.crc_bits)
 
         return FrameHeader(
             length,
             src,
             dst,
+            frame_type,
             mod_scheme,
             coding_rate,
+            sequence_number,
             crc,
             crc_passed=(crc_bits == expected_crc_bits),
         )
@@ -223,7 +274,7 @@ class FrameConstructor:
         header_encoded = self.golay.encode(header_bits)
 
         crc = self._crc16(payload)
-        crc_bits = np.array(_int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
+        crc_bits = np.array(int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
         payload_with_crc = np.concatenate([payload, crc_bits])
 
         if not channel_coding:

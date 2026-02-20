@@ -16,8 +16,8 @@ from modules.modulation import QPSK
 
 # --- Constants ---
 
-GOLAY_ENCODED_BITS = 48
-GOLAY_MESSAGE_BITS = 24
+GOLAY_ENCODED_BITS = 72
+GOLAY_MESSAGE_BITS = 36
 GOLAY_BLOCK_SIZE = 12
 FIRST_LDPC_K = 324
 SECOND_LDPC_K = 648
@@ -44,8 +44,10 @@ def sample_header() -> FrameHeader:
         length=100,
         src=1,
         dst=2,
+        frame_type=0,
         mod_scheme=ModulationSchemes.QPSK,
         coding_rate=CodeRates.HALF_RATE,
+        sequence_number=0,
         crc=0,
     )
 
@@ -133,8 +135,10 @@ class TestFrameConstructorRoundtrip:
             length=length,
             src=src,
             dst=0,
+            frame_type=0,
             mod_scheme=mod_scheme,
             coding_rate=CodeRates.HALF_RATE,
+            sequence_number=0,
             crc=0,
         )
         rng = np.random.default_rng()
@@ -174,8 +178,10 @@ class TestDynamicPayloadLength:
             length=payload_length,
             src=1,
             dst=2,
+            frame_type=0,
             mod_scheme=ModulationSchemes.QPSK,
             coding_rate=CodeRates.HALF_RATE,
+            sequence_number=0,
             crc=0,
         )
 
@@ -251,8 +257,10 @@ class TestFrameConstructorWithChannel:
             length=UNSUPPORTED_PAYLOAD_LENGTH,
             src=1,
             dst=2,
+            frame_type=0,
             mod_scheme=ModulationSchemes.QPSK,
             coding_rate=CodeRates.HALF_RATE,
+            sequence_number=0,
             crc=0,
         )
         payload = np.zeros(UNSUPPORTED_PAYLOAD_LENGTH, dtype=int)
