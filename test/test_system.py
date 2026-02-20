@@ -274,8 +274,10 @@ class TestFullPipeline:
             length=len(payload_bits),
             src=0,
             dst=0,
+            frame_type=0,
             mod_scheme=mod_scheme,
             coding_rate=coding_rate,
+            sequence_number=0,
         )
         fc = FrameConstructor()
         header_encoded, payload_encoded = fc.encode(header, payload_bits)

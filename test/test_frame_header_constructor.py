@@ -19,15 +19,19 @@ from modules.frame_constructor import (
 LENGTH_BITS = 10
 SRC_BITS = 2
 DST_BITS = 2
+FRAME_TYPE_BITS = 2
 MOD_SCHEME_BITS = 3
-CODING_RATE_BITS = 2
-CRC_BITS = 4
+CODING_RATE_BITS = 3
+SEQUENCE_NUMBER_BITS = 4
+CRC_BITS = 8
 
 LENGTH_MAX = (1 << LENGTH_BITS) - 1
 SRC_MAX = (1 << SRC_BITS) - 1
 DST_MAX = (1 << DST_BITS) - 1
+FRAME_TYPE_MAX = (1 << FRAME_TYPE_BITS) - 1
+SEQUENCE_NUMBER_MAX = (1 << SEQUENCE_NUMBER_BITS) - 1
 
-PADDING_BIT_POS = LENGTH_BITS + SRC_BITS + DST_BITS + MOD_SCHEME_BITS + CODING_RATE_BITS
+PADDING_BIT_POS = LENGTH_BITS + SRC_BITS + DST_BITS + FRAME_TYPE_BITS + MOD_SCHEME_BITS + CODING_RATE_BITS + SEQUENCE_NUMBER_BITS
 
 HIGH_SNR_DB = 30.0
 LOW_SNR_DB = -5.0
@@ -43,8 +47,10 @@ def make_header_constructor() -> FrameHeaderConstructor:
         payload_length_bits=LENGTH_BITS,
         src_bits=SRC_BITS,
         dst_bits=DST_BITS,
+        frame_type_bits=FRAME_TYPE_BITS,
         mod_scheme_bits=MOD_SCHEME_BITS,
         coding_rate_bits=CODING_RATE_BITS,
+        sequence_number_bits=SEQUENCE_NUMBER_BITS,
         crc_bits=CRC_BITS,
     )
     return FrameHeaderConstructor(config)
@@ -56,14 +62,18 @@ def _make_header(
     dst: int,
     mod_scheme: ModulationSchemes,
     coding_rate: CodeRates,
+    frame_type: int = 0,
+    sequence_number: int = 0,
 ) -> FrameHeader:
     """Create a FrameHeader with the given fields and zero CRC."""
     return FrameHeader(
         length=length,
         src=src,
         dst=dst,
+        frame_type=frame_type,
         mod_scheme=mod_scheme,
         coding_rate=coding_rate,
+        sequence_number=sequence_number,
         crc=0,
     )
 
