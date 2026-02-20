@@ -6,6 +6,7 @@ Pipeline: SDR -> matched filter -> sync -> CFO correct -> phase correct
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -19,7 +20,7 @@ from modules.pulse_shaping import rrc_filter
 from modules.synchronization import SynchronizationResult, Synchronizer
 from modules.util import bits_to_bytes, bits_to_text
 from pluto import SDRReceiver
-from pluto.config import PILOT_CONFIG, RRC_ALPHA, RRC_NUM_TAPS, SPS, SYNC_CONFIG, get_modulator
+from pluto.config import PILOT_CONFIG, PIPELINE, PipelineConfig, RRC_ALPHA, RRC_NUM_TAPS, SAMPLE_RATE, SPS, SYNC_CONFIG, get_modulator
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class FrameDecoder:
         sample_rate: float,
         sps: int,
         pilot_config: PilotConfig | None = None,
+        pipeline: PipelineConfig | None = None,
     ) -> None:
         """Initialize with fixed radio parameters."""
         self.sync = sync
@@ -61,6 +63,7 @@ class FrameDecoder:
         self.sample_rate = sample_rate
         self.sps = sps
         self.pilot_config = pilot_config or PilotConfig()
+        self.pipeline = pipeline or PipelineConfig()
         self.bpsk = BPSK()
         self.header_n_symbols = fc.header_encoded_n_bits
 
@@ -107,8 +110,11 @@ class FrameDecoder:
         # ── CFO correction (only from long ZC onward) ─────────────────
         needed_start = result.long_zc_start
         needed = filtered[needed_start:]
-        n_vec = (abs_offset + needed_start) + np.arange(len(needed))
-        rx_corr = needed * np.exp(-1j * 2 * np.pi * result.cfo_hat_hz / self.sample_rate * n_vec)
+        if self.pipeline.cfo_correction:
+            n_vec = (abs_offset + needed_start) + np.arange(len(needed))
+            rx_corr = needed * np.exp(-1j * 2 * np.pi * result.cfo_hat_hz / self.sample_rate * n_vec)
+        else:
+            rx_corr = needed
 
         # ── Residual phase correction (data-aided via long ZC) ────────
         zc_long_ref = self.sync.zc_long
@@ -141,24 +147,25 @@ class FrameDecoder:
         Pipeline: extract -> equalize -> phase track -> re-estimate noise -> soft demod -> decode
         """
         modulator = get_modulator(header.mod_scheme)
-        n_coded = self.fc.payload_coded_n_bits(header)
+        n_coded = self.fc.payload_coded_n_bits(header, channel_coding=self.pipeline.channel_coding)
         n_data = n_coded // modulator.bits_per_symbol
 
-        # ── Pre-compute pilot/data indices (shared by equalization and phase tracking) ──
-        p_idx = pilot_indices(n_data, self.pilot_config)
-        d_idx = data_indices(n_data, self.pilot_config)
-
-        # ── Extract payload symbols (including pilots) ────────────────
+        # ── Extract payload symbols ───────────────────────────────────
         payload_symbols = symbols[self.header_n_symbols : self.header_n_symbols + n_payload_symbols]
 
         # ── Initial noise estimate from BPSK header (for MMSE regularization) ──
         sigma_sq = self.bpsk.estimate_noise_variance(symbols[: self.header_n_symbols])
 
-        # ── Equalize first (before any amplitude modification) ────────
-        payload_symbols = equalize_payload(payload_symbols, n_data, self.pilot_config, sigma_sq, p_idx=p_idx)
+        if self.pipeline.pilots:
+            # ── Pre-compute pilot/data indices (shared by equalization and phase tracking) ──
+            p_idx = pilot_indices(n_data, self.pilot_config)
+            d_idx = data_indices(n_data, self.pilot_config)
 
-        # ── Pilot-aided phase tracking (returns data-only symbols) ────
-        payload_symbols = pilot_aided_phase_track(payload_symbols, n_data, self.pilot_config, p_idx=p_idx, d_idx=d_idx)
+            # ── Equalize first (before any amplitude modification) ────
+            payload_symbols = equalize_payload(payload_symbols, n_data, self.pilot_config, sigma_sq, p_idx=p_idx)
+
+            # ── Pilot-aided phase tracking (returns data-only symbols) ─
+            payload_symbols = pilot_aided_phase_track(payload_symbols, n_data, self.pilot_config, p_idx=p_idx, d_idx=d_idx)
 
         # ── Re-estimate noise variance from equalized payload symbols ─
         sigma_sq = estimate_noise_variance(payload_symbols, modulator.symbol_mapping)
@@ -168,7 +175,13 @@ class FrameDecoder:
 
         # ── Channel decode (LDPC + CRC) ───────────────────────────────
         try:
-            payload_bits = self.fc.decode_payload(header, payload_llrs, soft=True)
+            payload_bits = self.fc.decode_payload(
+                header,
+                payload_llrs,
+                soft=True,
+                channel_coding=self.pipeline.channel_coding,
+                interleaving=self.pipeline.interleaving,
+            )
         except ValueError as exc:
             logger.debug("Payload decode failed: %s", exc)
             return None
@@ -193,37 +206,70 @@ class FrameDecoder:
         cfg = self.sync.config
         max_preamble = cfg.n_short * cfg.n_short_reps + cfg.n_long
         max_header = self.fc.header_encoded_n_bits
-        # All LDPC rates share the same max codeword length (n=1944), so the
-        # rate choice here is arbitrary.  Treating coded bits as symbols (1 bit
-        # = 1 BPSK symbol) gives the worst-case symbol count for any modulation.
-        max_k = int(max(ldpc_get_supported_payload_lengths(CodeRates.HALF_RATE)))
-        max_data_symbols = LDPCConfig(k=max_k, code_rate=CodeRates.HALF_RATE).n
-        max_payload = n_total_symbols(max_data_symbols, self.pilot_config)
+
+        if self.pipeline.channel_coding:
+            max_k = int(max(ldpc_get_supported_payload_lengths(CodeRates.HALF_RATE)))
+            max_data_symbols = LDPCConfig(k=max_k, code_rate=CodeRates.HALF_RATE).n
+        else:
+            # header length field is 10 bits -> max 1023 payload bits + 16 CRC, pad to 12
+            raw = (2**10 - 1) + FrameConstructor.PAYLOAD_CRC_BITS
+            max_data_symbols = raw + (-raw % 12)
+
+        if self.pipeline.pilots:
+            max_payload = n_total_symbols(max_data_symbols, self.pilot_config)
+        else:
+            max_payload = max_data_symbols
         return (max_preamble + max_header + max_payload) * self.sps
 
     def _payload_n_symbols(self, header: FrameHeader) -> int | None:
         """Compute number of payload symbols (including pilots) from header, or None on error."""
         try:
             modulator = get_modulator(header.mod_scheme)
-            n_coded = self.fc.payload_coded_n_bits(header)
+            n_coded = self.fc.payload_coded_n_bits(header, channel_coding=self.pipeline.channel_coding)
             n_data = n_coded // modulator.bits_per_symbol
-            return n_total_symbols(n_data, self.pilot_config)
+            if self.pipeline.pilots:
+                return n_total_symbols(n_data, self.pilot_config)
+            return n_data
         except ValueError:
             logger.debug("Invalid payload parameters from header")
             return None
 
 
-def run_receiver(sdr: SDRReceiver, decoder: FrameDecoder, h_rrc: np.ndarray, rx_buffer_size: int) -> None:
+def run_receiver(
+    sdr: SDRReceiver,
+    decoder: FrameDecoder,
+    h_rrc: np.ndarray | None,
+    rx_buffer_size: int,
+    on_frame: Callable[[FrameResult], None] | None = None,
+    pipeline: PipelineConfig | None = None,
+) -> None:
     """Continuously receive, matched-filter, and decode frames from the SDR.
 
     Runs an overlap-save matched filter feeding a multi-frame detection
-    loop until interrupted by KeyboardInterrupt.
+    loop until interrupted by KeyboardInterrupt or SDR failure.
     """
+    pipeline = pipeline or PIPELINE
+    if on_frame is None:
+
+        def _log_frame(result: FrameResult) -> None:
+            logger.info(
+                "RX: %r  (mod=%s, rate=%s, CFO=%+.0f Hz, bits=%d)",
+                result.text,
+                result.header.mod_scheme.name,
+                result.header.coding_rate.name,
+                result.cfo_hz,
+                result.header.length,
+            )
+
+        on_frame = _log_frame
+
     max_frame_samples = decoder.max_frame_samples
+    use_filter = pipeline.pulse_shaping and h_rrc is not None
 
     # Overlap-save state for incremental matched filtering
-    filter_overlap = len(h_rrc) - 1
-    filter_state = np.zeros(filter_overlap, dtype=complex)
+    if use_filter:
+        filter_overlap = len(h_rrc) - 1
+        filter_state = np.zeros(filter_overlap, dtype=complex)
 
     # Pre-allocated receive buffer
     buf_capacity = max_frame_samples + rx_buffer_size
@@ -233,12 +279,19 @@ def run_receiver(sdr: SDRReceiver, decoder: FrameDecoder, h_rrc: np.ndarray, rx_
 
     try:
         while True:
-            rx = sdr.rx()
+            try:
+                rx = sdr.rx()
+            except Exception:
+                logger.exception("RX: SDR read failed")
+                break
 
-            # ── Incremental matched filter (overlap-save) ─────────────
-            chunk = np.concatenate([filter_state, rx])
-            new_filtered = np.convolve(chunk, h_rrc, mode="valid")
-            filter_state = rx[-filter_overlap:]
+            if use_filter:
+                # ── Incremental matched filter (overlap-save) ─────────
+                chunk = np.concatenate([filter_state, rx])
+                new_filtered = np.convolve(chunk, h_rrc, mode="valid")
+                filter_state = rx[-filter_overlap:]
+            else:
+                new_filtered = rx
 
             # Append to pre-allocated buffer
             n_new = len(new_filtered)
@@ -253,16 +306,8 @@ def run_receiver(sdr: SDRReceiver, decoder: FrameDecoder, h_rrc: np.ndarray, rx_
             # ── Multi-frame detection loop ────────────────────────────
             while True:
                 frame_result = decoder.try_decode(rx_buf[:buf_len], abs_offset)
-
                 if frame_result is not None:
-                    logger.info(
-                        "RX: %r  (mod=%s, rate=%s, CFO=%+.0f Hz, bits=%d)",
-                        frame_result.text,
-                        frame_result.header.mod_scheme.name,
-                        frame_result.header.coding_rate.name,
-                        frame_result.cfo_hz,
-                        frame_result.header.length,
-                    )
+                    on_frame(frame_result)
                     consumed = frame_result.consumed_samples
                     remaining = buf_len - consumed
                     rx_buf[:remaining] = rx_buf[consumed:buf_len]
@@ -281,9 +326,20 @@ def run_receiver(sdr: SDRReceiver, decoder: FrameDecoder, h_rrc: np.ndarray, rx_
         pass
 
 
+def create_decoder(pipeline: PipelineConfig | None = None) -> tuple[FrameDecoder, np.ndarray | None]:
+    """Build FrameDecoder + h_rrc respecting pipeline toggles."""
+    pipeline = pipeline or PIPELINE
+    effective_sps = SPS if pipeline.pulse_shaping else 1
+    h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS) if pipeline.pulse_shaping else None
+    sync = Synchronizer(SYNC_CONFIG, sps=effective_sps, rrc_taps=h_rrc)
+    fc = FrameConstructor()
+    decoder = FrameDecoder(sync, fc, sample_rate=SAMPLE_RATE, sps=effective_sps, pilot_config=PILOT_CONFIG, pipeline=pipeline)
+    return decoder, h_rrc
+
+
 if __name__ == "__main__":
     from pluto import create_pluto
-    from pluto.config import CENTER_FREQ, SAMPLE_RATE
+    from pluto.config import CENTER_FREQ, RX_BUFFER_SIZE
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -293,14 +349,10 @@ if __name__ == "__main__":
     sdr.rx_lo = int(CENTER_FREQ)
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_rf_bandwidth = int(SAMPLE_RATE)
-    RX_BUFFER_SIZE = 2**16
     sdr.rx_buffer_size = RX_BUFFER_SIZE
 
     # ── Reusable objects ──────────────────────────────────────────────
-    h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
-    sync = Synchronizer(SYNC_CONFIG, sps=SPS, rrc_taps=h_rrc)
-    fc = FrameConstructor()
-    decoder = FrameDecoder(sync, fc, sample_rate=SAMPLE_RATE, sps=SPS, pilot_config=PILOT_CONFIG)
+    decoder, h_rrc = create_decoder()
 
     sdr.rx()  # flush stale DMA buffer
 

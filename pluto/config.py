@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from modules.channel_coding import CodeRates
 from modules.frame_constructor import ModulationSchemes
 from modules.modulation import BPSK, QAM, QPSK, Modulator
 from modules.pilots import PilotConfig
@@ -19,6 +21,10 @@ RRC_ALPHA = 0.35
 RRC_NUM_TAPS = 101
 DAC_SCALE = 2**14
 RX_GAIN = 70.0
+MOD_SCHEME = ModulationSchemes.QPSK
+CODING_RATE = CodeRates.HALF_RATE
+DEFAULT_TX_GAIN = -10
+RX_BUFFER_SIZE = 2**16
 
 # FDD frequency pair for bidirectional bridge mode
 FREQ_A_TO_B = 2_400_000_000
@@ -26,6 +32,20 @@ FREQ_B_TO_A = 2_450_000_000
 
 SYNC_CONFIG = SynchronizerConfig()
 PILOT_CONFIG = PilotConfig()
+
+
+@dataclass
+class PipelineConfig:
+    """Toggle individual pipeline stages on/off for testing."""
+
+    pulse_shaping: bool = True
+    pilots: bool = True
+    channel_coding: bool = True
+    interleaving: bool = True
+    cfo_correction: bool = True
+
+
+PIPELINE = PipelineConfig()
 
 _modulator_cache: dict[ModulationSchemes, Modulator] = {}
 

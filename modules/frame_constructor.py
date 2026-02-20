@@ -187,8 +187,11 @@ class FrameConstructor:
         golay_ratio = self.golay.block_length // self.golay.message_length
         return self.frame_header_constructor.header_length * golay_ratio
 
-    def payload_coded_n_bits(self, header: FrameHeader) -> int:
-        """Return the LDPC codeword length (coded bits) for a given header."""
+    def payload_coded_n_bits(self, header: FrameHeader, *, channel_coding: bool = True) -> int:
+        """Return the number of coded payload bits for a given header."""
+        if not channel_coding:
+            raw = header.length + self.PAYLOAD_CRC_BITS
+            return raw + (-raw % 12)  # pad to multiple of 12
         k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
         return LDPCConfig(k=k, code_rate=header.coding_rate).n
 
@@ -207,7 +210,14 @@ class FrameConstructor:
             reg = (((reg << 1) ^ 0x1021) & mask) if (reg & msb) else ((reg << 1) & mask)
         return reg
 
-    def encode(self, header: FrameHeader, payload: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def encode(
+        self,
+        header: FrameHeader,
+        payload: np.ndarray,
+        *,
+        channel_coding: bool = True,
+        interleaving: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Encode data into a frame."""
         header_bits = self.frame_header_constructor.encode(header)
         header_encoded = self.golay.encode(header_bits)
@@ -215,6 +225,13 @@ class FrameConstructor:
         crc = self._crc16(payload)
         crc_bits = np.array(_int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
         payload_with_crc = np.concatenate([payload, crc_bits])
+
+        if not channel_coding:
+            n = self.payload_coded_n_bits(header, channel_coding=False)
+            payload_encoded = np.concatenate(
+                [payload_with_crc, np.zeros(n - len(payload_with_crc), dtype=int)]
+            )
+            return (header_encoded, payload_encoded)
 
         k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
         payload_padded = np.concatenate(
@@ -226,7 +243,8 @@ class FrameConstructor:
 
         ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
         payload_encoded = ldpc_encode(payload_padded, ldpc_config)
-        payload_encoded = interleave(payload_encoded, ldpc_config.n)
+        if interleaving:
+            payload_encoded = interleave(payload_encoded, ldpc_config.n)
 
         return (header_encoded, payload_encoded)
 
@@ -246,13 +264,30 @@ class FrameConstructor:
         payload_encoded: np.ndarray,
         *,
         soft: bool = False,
+        channel_coding: bool = True,
+        interleaving: bool = True,
     ) -> np.ndarray:
         """Decode an LDPC-encoded payload using parameters from a decoded header."""
+        if not channel_coding:
+            if soft:
+                payload_bits = (payload_encoded < 0).astype(int)
+            else:
+                payload_bits = payload_encoded.astype(int)
+            data_bits = payload_bits[: header.length]
+            crc_bits = payload_bits[header.length : header.length + self.PAYLOAD_CRC_BITS]
+            received_crc = _bits_to_int(crc_bits.astype(int).tolist())
+            expected_crc = self._crc16(data_bits)
+            if received_crc != expected_crc:
+                msg = f"Payload CRC-16 mismatch: got 0x{received_crc:04X}, expected 0x{expected_crc:04X}"
+                raise ValueError(msg)
+            return data_bits
+
         payload_llr = payload_encoded if soft else 10.0 * (1 - 2 * payload_encoded.astype(np.float64))
 
         k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
         ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
-        payload_llr = deinterleave(payload_llr, ldpc_config.n)
+        if interleaving:
+            payload_llr = deinterleave(payload_llr, ldpc_config.n)
         payload_bits = ldpc_decode(payload_llr, ldpc_config)
 
         data_bits = payload_bits[: header.length]

@@ -24,26 +24,20 @@ import struct
 import threading
 from dataclasses import dataclass
 
-import numpy as np
-
-from modules.channel_coding import CodeRates
-from modules.frame_constructor import FrameConstructor, ModulationSchemes
-from modules.pulse_shaping import rrc_filter
-from modules.synchronization import Synchronizer
 from modules.util import bytes_to_bits
 from pluto import create_pluto
 from pluto.config import (
+    CODING_RATE,
     DAC_SCALE,
+    DEFAULT_TX_GAIN,
     FREQ_A_TO_B,
     FREQ_B_TO_A,
-    PILOT_CONFIG,
-    RRC_ALPHA,
-    RRC_NUM_TAPS,
+    MOD_SCHEME,
+    PIPELINE,
+    RX_BUFFER_SIZE,
     SAMPLE_RATE,
-    SPS,
-    SYNC_CONFIG,
 )
-from pluto.receive import FrameDecoder
+from pluto.receive import create_decoder, run_receiver
 from pluto.transmit import build_tx_signal_from_bits, max_payload_bits
 
 logger = logging.getLogger(__name__)
@@ -64,11 +58,6 @@ SIOCSIFMTU = 0x8922
 # From linux/if.h
 IFF_UP = 0x1
 IFF_RUNNING = 0x40
-
-MOD_SCHEME = ModulationSchemes.QPSK
-CODING_RATE = CodeRates.HALF_RATE
-DEFAULT_TX_GAIN = -10
-RX_BUFFER_SIZE = 2**16
 
 
 @dataclass
@@ -153,70 +142,17 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
 
 def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
     """Receive frames from PlutoSDR and write decoded IP packets to TUN."""
-    h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
-    sync = Synchronizer(SYNC_CONFIG, sps=SPS, rrc_taps=h_rrc)
-    fc = FrameConstructor()
-    decoder = FrameDecoder(sync, fc, sample_rate=SAMPLE_RATE, sps=SPS, pilot_config=PILOT_CONFIG)
+    decoder, h_rrc = create_decoder(PIPELINE)
 
-    max_frame_samples = decoder.max_frame_samples
-
-    # Overlap-save matched filter state
-    filter_overlap = len(h_rrc) - 1
-    filter_state = np.zeros(filter_overlap, dtype=complex)
-
-    # Receive buffer
-    buf_capacity = max_frame_samples + RX_BUFFER_SIZE
-    rx_buf = np.zeros(buf_capacity, dtype=complex)
-    buf_len = 0
-    abs_offset = 0
+    def on_frame(result):
+        try:
+            os.write(tun_fd, result.payload_bytes)
+            logger.debug("RX: %d bytes (CFO=%+.0f Hz)", len(result.payload_bytes), result.cfo_hz)
+        except OSError:
+            logger.exception("RX: TUN write failed")
 
     logger.info("RX thread started")
-
-    while True:
-        try:
-            rx = sdr.rx()  # type: ignore[union-attr]
-        except Exception:
-            logger.exception("RX: SDR read failed")
-            break
-
-        # Incremental matched filter
-        chunk = np.concatenate([filter_state, rx])
-        new_filtered = np.convolve(chunk, h_rrc, mode="valid")
-        filter_state = rx[-filter_overlap:]
-
-        n_new = len(new_filtered)
-        if buf_len + n_new > buf_capacity:
-            keep = max_frame_samples
-            rx_buf[:keep] = rx_buf[buf_len - keep : buf_len]
-            abs_offset += buf_len - keep
-            buf_len = keep
-        rx_buf[buf_len : buf_len + n_new] = new_filtered
-        buf_len += n_new
-
-        # Multi-frame detection
-        while True:
-            result = decoder.try_decode(rx_buf[:buf_len], abs_offset)
-            if result is None:
-                break
-
-            packet = result.payload_bytes
-            try:
-                os.write(tun_fd, packet)
-                logger.debug("RX: %d bytes (CFO=%+.0f Hz)", len(packet), result.cfo_hz)
-            except OSError:
-                logger.exception("RX: TUN write failed")
-
-            consumed = result.consumed_samples
-            remaining = buf_len - consumed
-            rx_buf[:remaining] = rx_buf[consumed:buf_len]
-            buf_len = remaining
-            abs_offset += consumed
-
-        if buf_len > max_frame_samples:
-            trim = buf_len - max_frame_samples
-            rx_buf[:max_frame_samples] = rx_buf[trim:buf_len]
-            buf_len = max_frame_samples
-            abs_offset += trim
+    run_receiver(sdr, decoder, h_rrc, RX_BUFFER_SIZE, on_frame, pipeline=PIPELINE)  # type: ignore[arg-type]
 
 
 def main() -> None:
@@ -263,6 +199,7 @@ def main() -> None:
     )
 
     # ── Launch TX and RX threads ──────────────────────────────────────
+    # TX and RX use separate DMA channels in libiio, safe to use from different threads.
     t_tx = threading.Thread(target=tx_thread, args=(tun_fd, sdr, tun_mtu), daemon=True, name="tx")
     t_rx = threading.Thread(target=rx_thread_bridge, args=(tun_fd, sdr), daemon=True, name="rx")
     t_tx.start()
