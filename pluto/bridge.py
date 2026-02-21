@@ -24,6 +24,8 @@ import struct
 import threading
 from dataclasses import dataclass
 
+import numpy as np
+
 from modules.util import bytes_to_bits
 from pluto import create_pluto
 from pluto.config import (
@@ -117,6 +119,10 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
     max_bits = max_payload_bits(CODING_RATE)
     logger.info("TX thread started (max payload %d bytes)", max_bits // 8)
 
+    # Compute fixed buffer length from max-size frame (PlutoSDR requires constant buffer size)
+    max_signal = build_tx_signal_from_bits(np.zeros(max_bits, dtype=np.uint8), MOD_SCHEME, CODING_RATE)
+    tx_buffer_len = len(max_signal)
+
     while True:
         try:
             packet = os.read(tun_fd, mtu)
@@ -133,7 +139,9 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
 
         try:
             tx_signal = build_tx_signal_from_bits(payload_bits, MOD_SCHEME, CODING_RATE)
-            samples = tx_signal * DAC_SCALE
+            # Pad to fixed buffer length
+            samples = np.zeros(tx_buffer_len, dtype=complex)
+            samples[: len(tx_signal)] = tx_signal * DAC_SCALE
             sdr.tx(samples)  # type: ignore[union-attr]
             logger.debug("TX: %d bytes", len(packet))
         except Exception:
@@ -145,9 +153,18 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
     decoder, h_rrc = create_decoder(PIPELINE)
 
     def on_frame(result):
+        data = result.payload_bytes
+        # Validate minimum IP packet: 20+ bytes, version nibble is 4 (IPv4) or 6 (IPv6)
+        if len(data) < 20:
+            logger.debug("RX: dropping short frame (%d bytes)", len(data))
+            return
+        version = (data[0] >> 4) & 0xF
+        if version not in (4, 6):
+            logger.debug("RX: dropping non-IP frame (version=%d)", version)
+            return
         try:
-            os.write(tun_fd, result.payload_bytes)
-            logger.debug("RX: %d bytes (CFO=%+.0f Hz)", len(result.payload_bytes), result.cfo_hz)
+            os.write(tun_fd, data)
+            logger.debug("RX: %d bytes (CFO=%+.0f Hz)", len(data), result.cfo_hz)
         except OSError:
             logger.exception("RX: TUN write failed")
 
