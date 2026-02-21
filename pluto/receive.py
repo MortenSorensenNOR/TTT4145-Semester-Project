@@ -338,15 +338,22 @@ def create_decoder(pipeline: PipelineConfig | None = None) -> tuple[FrameDecoder
 
 
 if __name__ == "__main__":
+    import argparse
+
     from pluto import create_pluto
     from pluto.config import CENTER_FREQ, RX_BUFFER_SIZE
+
+    parser = argparse.ArgumentParser(description="Receive frames from PlutoSDR")
+    parser.add_argument("--cfo-offset", type=int, default=0, help="CFO offset in Hz to add to RX LO (compensate for TX oscillator drift)")
+    args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     # ── SDR setup ─────────────────────────────────────────────────────
+    rx_freq = CENTER_FREQ + args.cfo_offset
     sdr = create_pluto()
     sdr.gain_control_mode_chan0 = "slow_attack"
-    sdr.rx_lo = int(CENTER_FREQ)
+    sdr.rx_lo = int(rx_freq)
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_rf_bandwidth = int(SAMPLE_RATE)
     sdr.rx_buffer_size = RX_BUFFER_SIZE
@@ -356,5 +363,5 @@ if __name__ == "__main__":
 
     sdr.rx()  # flush stale DMA buffer
 
-    logger.info("RX: listening on %.0f MHz ...", CENTER_FREQ / 1e6)
+    logger.info("RX: listening on %.0f Hz (offset %+d Hz)...", rx_freq, args.cfo_offset)
     run_receiver(sdr, decoder, h_rrc, RX_BUFFER_SIZE)

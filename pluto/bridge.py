@@ -178,6 +178,7 @@ def main() -> None:
     parser.add_argument("--node", choices=["A", "B"], required=True, help="Node identity (A or B)")
     parser.add_argument("--tun", default="pluto0", help="TUN device name (default: pluto0)")
     parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)")
+    parser.add_argument("--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
@@ -203,19 +204,21 @@ def main() -> None:
     sdr.tx_hardwaregain_chan0 = args.tx_gain
 
     # RX config
+    rx_freq = node.rx_freq + args.rx_cfo_offset
     sdr.gain_control_mode_chan0 = "slow_attack"
-    sdr.rx_lo = int(node.rx_freq)
+    sdr.rx_lo = int(rx_freq)
     sdr.rx_rf_bandwidth = int(SAMPLE_RATE)
     sdr.rx_buffer_size = RX_BUFFER_SIZE
 
     sdr.rx()  # flush stale DMA buffer
 
     logger.info(
-        "Node %s: TX %.0f MHz (%.0f dB) -> RX %.0f MHz",
+        "Node %s: TX %.0f MHz (%.0f dB) -> RX %.0f Hz (CFO offset %+d Hz)",
         args.node,
         node.tx_freq / 1e6,
         args.tx_gain,
-        node.rx_freq / 1e6,
+        rx_freq,
+        args.rx_cfo_offset,
     )
 
     # ── Launch TX and RX threads ──────────────────────────────────────
