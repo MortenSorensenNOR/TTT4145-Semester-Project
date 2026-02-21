@@ -119,6 +119,15 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
     max_bits = max_payload_bits(CODING_RATE)
     logger.info("TX thread started (max payload %d bytes)", max_bits // 8)
 
+    # Pre-warm LDPC cache for all supported payload sizes to avoid 100-400ms JIT delays
+    logger.info("TX: warming LDPC cache...")
+    from modules.channel_coding import ldpc_get_supported_payload_lengths
+    for k in ldpc_get_supported_payload_lengths(CODING_RATE):
+        # Build a dummy frame to trigger cache population
+        dummy_bits = np.zeros(int(k) - 16, dtype=np.uint8)  # -16 for CRC
+        build_tx_signal_from_bits(dummy_bits, MOD_SCHEME, CODING_RATE)
+    logger.info("TX: LDPC cache ready")
+
     # Compute fixed buffer length from max-size frame (PlutoSDR requires constant buffer size)
     max_signal = build_tx_signal_from_bits(np.zeros(max_bits, dtype=np.uint8), MOD_SCHEME, CODING_RATE)
     tx_buffer_len = len(max_signal)
@@ -151,6 +160,17 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
 def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
     """Receive frames from PlutoSDR and write decoded IP packets to TUN."""
     decoder, h_rrc = create_decoder(PIPELINE)
+
+    # Pre-warm LDPC decode cache
+    logger.info("RX: warming LDPC cache...")
+    from modules.channel_coding import ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths, LDPCConfig
+    for k in ldpc_get_supported_payload_lengths(CODING_RATE):
+        config = LDPCConfig(k=int(k), code_rate=CODING_RATE)
+        dummy_msg = np.zeros(int(k), dtype=int)
+        codeword = ldpc_encode(dummy_msg, config)
+        llr = (1 - 2 * codeword).astype(float) * 5.0
+        ldpc_decode(llr, config, max_iterations=1)
+    logger.info("RX: LDPC cache ready")
 
     def on_frame(result):
         data = result.payload_bytes
