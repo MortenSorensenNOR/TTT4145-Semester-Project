@@ -412,6 +412,19 @@ def ldpc_get_supported_payload_lengths(code_rate: CodeRates = CodeRates.HALF_RAT
     return np.array([n * num // denom for n in valid_n])
 
 
+def ldpc_max_k(code_rate: CodeRates) -> int:
+    """Return the maximum message length (k) for the given code rate.
+
+    This uses the largest 802.11 LDPC block (n=1944).
+    """
+    return int(ldpc_get_supported_payload_lengths(code_rate)[-1])
+
+
+def ldpc_max_n(code_rate: CodeRates) -> int:
+    """Return the codeword length (n) for the maximum block size."""
+    return 1944  # Largest 802.11 LDPC block
+
+
 def ldpc_get_h_matrix(config: LDPCConfig) -> np.ndarray:
     """Get (or compute and cache) the full H parity-check matrix."""
     if config not in _h_cache:

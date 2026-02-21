@@ -14,6 +14,8 @@ from modules.channel_coding import (
     ldpc_decode,
     ldpc_encode,
     ldpc_get_supported_payload_lengths,
+    ldpc_max_k,
+    ldpc_max_n,
 )
 
 
@@ -48,16 +50,19 @@ class FrameHeader:
 
 @dataclass
 class FrameHeaderConfig:
-    """Bit-width configuration for frame header fields."""
+    """Bit-width configuration for frame header fields.
 
-    payload_length_bits: int = 12  # length in bytes
+    Total header size must be a multiple of 12 for Golay encoding.
+    """
+
+    payload_length_bits: int = 14  # max ~16K bits payload for multi-block LDPC
     src_bits: int = 2
     dst_bits: int = 2
     frame_type_bits: int = 2
     mod_scheme_bits: int = 2
     coding_rate_bits: int = 3
     sequence_number_bits: int = 4
-    reserved_bits: int = 1
+    reserved_bits: int = 11  # padding to make total 48 bits (4 Golay blocks)
     crc_bits: int = 8
     header_total_size: int = field(init=False)
 
@@ -221,6 +226,7 @@ class FrameConstructor:
     """Build and parse frames based on a configured header format."""
 
     PAYLOAD_CRC_BITS = 16
+    MAX_LDPC_BLOCKS = 8  # Max blocks per frame (limits frame length)
 
     def __init__(
         self,
@@ -232,6 +238,16 @@ class FrameConstructor:
 
         self.golay = Golay()
 
+    def _num_ldpc_blocks(self, payload_bits: int, code_rate: CodeRates) -> int:
+        """Compute number of LDPC blocks needed for the payload."""
+        max_k = ldpc_max_k(code_rate)
+        return int(np.ceil(payload_bits / max_k))
+
+    def max_payload_bits(self, code_rate: CodeRates) -> int:
+        """Return max payload bits (excluding CRC) for multi-block LDPC."""
+        max_k = ldpc_max_k(code_rate)
+        return self.MAX_LDPC_BLOCKS * max_k - self.PAYLOAD_CRC_BITS
+
     @property
     def header_encoded_n_bits(self) -> int:
         """Number of bits in the Golay-encoded header (= number of BPSK symbols)."""
@@ -239,12 +255,26 @@ class FrameConstructor:
         return self.frame_header_constructor.header_length * golay_ratio
 
     def payload_coded_n_bits(self, header: FrameHeader, *, channel_coding: bool = True) -> int:
-        """Return the number of coded payload bits for a given header."""
+        """Return the number of coded payload bits for a given header.
+
+        For multi-block LDPC, this returns the total bits across all blocks.
+        """
         if not channel_coding or header.coding_rate == CodeRates.NONE:
             raw = header.length + self.PAYLOAD_CRC_BITS
             return raw + (-raw % 12)  # pad to multiple of 12
-        k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
-        return LDPCConfig(k=k, code_rate=header.coding_rate).n
+
+        payload_with_crc = header.length + self.PAYLOAD_CRC_BITS
+        max_k = ldpc_max_k(header.coding_rate)
+        max_n = ldpc_max_n(header.coding_rate)
+
+        # Check if single block suffices
+        if payload_with_crc <= max_k:
+            k = _closest_payload_length(payload_with_crc, header.coding_rate)
+            return LDPCConfig(k=k, code_rate=header.coding_rate).n
+
+        # Multi-block: use max-size blocks for all
+        n_blocks = self._num_ldpc_blocks(payload_with_crc, header.coding_rate)
+        return n_blocks * max_n
 
     @staticmethod
     def _crc16(data_bits: np.ndarray) -> int:
@@ -269,7 +299,11 @@ class FrameConstructor:
         channel_coding: bool = True,
         interleaving: bool = True,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Encode data into a frame."""
+        """Encode data into a frame.
+
+        For payloads exceeding a single LDPC block, uses multi-block encoding
+        with the largest available block size (n=1944).
+        """
         header_bits = self.frame_header_constructor.encode(header)
         header_encoded = self.golay.encode(header_bits)
 
@@ -284,19 +318,40 @@ class FrameConstructor:
             )
             return (header_encoded, payload_encoded)
 
-        k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
+        max_k = ldpc_max_k(header.coding_rate)
+
+        # Single block case
+        if len(payload_with_crc) <= max_k:
+            k = _closest_payload_length(len(payload_with_crc), header.coding_rate)
+            payload_padded = np.concatenate(
+                [payload_with_crc, np.zeros(k - len(payload_with_crc), dtype=int)]
+            )
+            ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
+            payload_encoded = ldpc_encode(payload_padded, ldpc_config)
+            if interleaving:
+                payload_encoded = interleave(payload_encoded, ldpc_config.n)
+            return (header_encoded, payload_encoded)
+
+        # Multi-block: split into max_k chunks, encode each
+        n_blocks = self._num_ldpc_blocks(len(payload_with_crc), header.coding_rate)
+        ldpc_config = LDPCConfig(k=max_k, code_rate=header.coding_rate)
+
+        # Pad payload to exact multiple of max_k
+        total_bits = n_blocks * max_k
         payload_padded = np.concatenate(
-            [
-                payload_with_crc,
-                np.zeros(k - len(payload_with_crc), dtype=int),
-            ],
+            [payload_with_crc, np.zeros(total_bits - len(payload_with_crc), dtype=int)]
         )
 
-        ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
-        payload_encoded = ldpc_encode(payload_padded, ldpc_config)
-        if interleaving:
-            payload_encoded = interleave(payload_encoded, ldpc_config.n)
+        # Encode each block
+        encoded_blocks = []
+        for i in range(n_blocks):
+            block = payload_padded[i * max_k : (i + 1) * max_k]
+            encoded = ldpc_encode(block, ldpc_config)
+            if interleaving:
+                encoded = interleave(encoded, ldpc_config.n)
+            encoded_blocks.append(encoded)
 
+        payload_encoded = np.concatenate(encoded_blocks)
         return (header_encoded, payload_encoded)
 
     def decode_header(self, header_encoded: np.ndarray) -> FrameHeader:
@@ -318,7 +373,10 @@ class FrameConstructor:
         channel_coding: bool = True,
         interleaving: bool = True,
     ) -> np.ndarray:
-        """Decode an LDPC-encoded payload using parameters from a decoded header."""
+        """Decode an LDPC-encoded payload using parameters from a decoded header.
+
+        Handles multi-block LDPC payloads by decoding each block separately.
+        """
         if not channel_coding or header.coding_rate == CodeRates.NONE:
             if soft:
                 payload_bits = (payload_encoded < 0).astype(int)
@@ -335,11 +393,31 @@ class FrameConstructor:
 
         payload_llr = payload_encoded if soft else 10.0 * (1 - 2 * payload_encoded.astype(np.float64))
 
-        k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
-        ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
-        if interleaving:
-            payload_llr = deinterleave(payload_llr, ldpc_config.n)
-        payload_bits = ldpc_decode(payload_llr, ldpc_config)
+        payload_with_crc_len = header.length + self.PAYLOAD_CRC_BITS
+        max_k = ldpc_max_k(header.coding_rate)
+        max_n = ldpc_max_n(header.coding_rate)
+
+        # Single block case
+        if payload_with_crc_len <= max_k:
+            k = _closest_payload_length(payload_with_crc_len, header.coding_rate)
+            ldpc_config = LDPCConfig(k=k, code_rate=header.coding_rate)
+            if interleaving:
+                payload_llr = deinterleave(payload_llr, ldpc_config.n)
+            payload_bits = ldpc_decode(payload_llr, ldpc_config)
+        else:
+            # Multi-block decoding
+            n_blocks = self._num_ldpc_blocks(payload_with_crc_len, header.coding_rate)
+            ldpc_config = LDPCConfig(k=max_k, code_rate=header.coding_rate)
+
+            decoded_blocks = []
+            for i in range(n_blocks):
+                block_llr = payload_llr[i * max_n : (i + 1) * max_n]
+                if interleaving:
+                    block_llr = deinterleave(block_llr, max_n)
+                decoded = ldpc_decode(block_llr, ldpc_config)
+                decoded_blocks.append(decoded)
+
+            payload_bits = np.concatenate(decoded_blocks)
 
         data_bits = payload_bits[: header.length]
         crc_bits = payload_bits[header.length : header.length + self.PAYLOAD_CRC_BITS]

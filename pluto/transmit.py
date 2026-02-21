@@ -7,7 +7,7 @@ import logging
 
 import numpy as np
 
-from modules.channel_coding import CodeRates, ldpc_get_supported_payload_lengths
+from modules.channel_coding import CodeRates
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
 from modules.pilots import insert_pilots
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
@@ -33,11 +33,13 @@ _h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
 
 
 def max_payload_bits(coding_rate: CodeRates = CODING_RATE) -> int:
-    """Maximum number of payload bits for the given coding rate."""
+    """Maximum number of payload bits for the given coding rate.
+
+    With multi-block LDPC, this can be several times larger than a single block.
+    """
     if not PIPELINE.channel_coding:
         return (2**10 - 1)  # header length field limit
-    max_k = int(max(ldpc_get_supported_payload_lengths(coding_rate)))
-    return max_k - FrameConstructor.PAYLOAD_CRC_BITS
+    return _fc.max_payload_bits(coding_rate)
 
 
 def build_tx_signal_from_bits(
