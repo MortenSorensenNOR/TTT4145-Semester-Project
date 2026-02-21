@@ -308,9 +308,10 @@ def run_receiver(
                 frame_result = decoder.try_decode(rx_buf[:buf_len], abs_offset)
                 if frame_result is not None:
                     on_frame(frame_result)
-                    consumed = frame_result.consumed_samples
+                    consumed = min(frame_result.consumed_samples, buf_len)
                     remaining = buf_len - consumed
-                    rx_buf[:remaining] = rx_buf[consumed:buf_len]
+                    if remaining > 0:
+                        rx_buf[:remaining] = rx_buf[consumed:buf_len]
                     buf_len = remaining
                     abs_offset += consumed
                 else:

@@ -143,7 +143,7 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
             samples = np.zeros(tx_buffer_len, dtype=complex)
             samples[: len(tx_signal)] = tx_signal * DAC_SCALE
             sdr.tx(samples)  # type: ignore[union-attr]
-            logger.debug("TX: %d bytes", len(packet))
+            logger.info("TX: %d bytes", len(packet))
         except Exception:
             logger.exception("TX: failed to transmit packet")
 
@@ -164,7 +164,7 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
             return
         try:
             os.write(tun_fd, data)
-            logger.debug("RX: %d bytes (CFO=%+.0f Hz)", len(data), result.cfo_hz)
+            logger.info("RX: %d bytes (CFO=%+.0f Hz)", len(data), result.cfo_hz)
         except OSError:
             logger.exception("RX: TUN write failed")
 
@@ -181,7 +181,7 @@ def main() -> None:
     parser.add_argument("--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
     node = NODE_CONFIGS[args.node]
     max_bytes = max_payload_bits(CODING_RATE) // 8
