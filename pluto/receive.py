@@ -20,7 +20,7 @@ from modules.pulse_shaping import rrc_filter
 from modules.synchronization import SynchronizationResult, Synchronizer
 from modules.util import bits_to_bytes, bits_to_text
 from pluto import SDRReceiver
-from pluto.config import PILOT_CONFIG, PIPELINE, PipelineConfig, RRC_ALPHA, RRC_NUM_TAPS, SAMPLE_RATE, SPS, SYNC_CONFIG, get_modulator
+from pluto.config import CODING_RATE, PILOT_CONFIG, PIPELINE, PipelineConfig, RRC_ALPHA, RRC_NUM_TAPS, SAMPLE_RATE, SPS, SYNC_CONFIG, get_modulator
 
 logger = logging.getLogger(__name__)
 
@@ -204,18 +204,19 @@ class FrameDecoder:
     def max_frame_samples(self) -> int:
         """Maximum possible frame length in samples (for buffer sizing).
 
-        With multi-block LDPC, this accounts for MAX_LDPC_BLOCKS blocks.
+        With multi-block LDPC, this accounts for MAX_LDPC_BLOCKS blocks
+        at the configured code rate (not worst-case HALF_RATE).
         """
         cfg = self.sync.config
         max_preamble = cfg.n_short * cfg.n_short_reps + cfg.n_long
         max_header = self.fc.header_encoded_n_bits
 
         if self.pipeline.channel_coding:
-            # Multi-block: MAX_LDPC_BLOCKS * max_n (use lowest rate for largest codeword)
-            max_data_symbols = FrameConstructor.MAX_LDPC_BLOCKS * ldpc_max_n(CodeRates.HALF_RATE)
+            # Multi-block: use configured code rate for realistic buffer sizing
+            max_data_symbols = FrameConstructor.MAX_LDPC_BLOCKS * ldpc_max_n(CODING_RATE)
         else:
-            # header length field is 12 bits -> max 4095 payload bits + 16 CRC, pad to 12
-            raw = (2**12 - 1) + FrameConstructor.PAYLOAD_CRC_BITS
+            # header length field is 14 bits -> max 16383 payload bits + 16 CRC, pad to 12
+            raw = (2**14 - 1) + FrameConstructor.PAYLOAD_CRC_BITS
             max_data_symbols = raw + (-raw % 12)
 
         if self.pipeline.pilots:
