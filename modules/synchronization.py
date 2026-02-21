@@ -124,6 +124,8 @@ class Synchronizer:
 
         corr_short = self._matched_filter(rx, self._template_short)
         corr_mag = np.abs(corr_short)
+        if len(corr_mag) == 0:
+            return SynchronizationResult(success=False)
         global_max_idx = np.argmax(corr_mag)
 
         # find the peaks of all the repetitions of zc_short
