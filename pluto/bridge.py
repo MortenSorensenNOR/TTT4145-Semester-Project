@@ -180,7 +180,7 @@ def main() -> None:
     parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
     node = NODE_CONFIGS[args.node]
     max_bytes = max_payload_bits(CODING_RATE) // 8
@@ -194,7 +194,10 @@ def main() -> None:
     sdr = create_pluto()
     sdr.sample_rate = int(SAMPLE_RATE)
 
-    # TX config
+    # TX config - compute buffer size from max frame
+    max_bits = max_payload_bits(CODING_RATE)
+    max_signal = build_tx_signal_from_bits(np.zeros(max_bits, dtype=np.uint8), MOD_SCHEME, CODING_RATE)
+    sdr.tx_buffer_size = len(max_signal)
     sdr.tx_rf_bandwidth = int(SAMPLE_RATE)
     sdr.tx_lo = int(node.tx_freq)
     sdr.tx_hardwaregain_chan0 = args.tx_gain
