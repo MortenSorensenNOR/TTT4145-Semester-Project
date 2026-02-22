@@ -14,17 +14,18 @@ from modules.synchronization import SynchronizerConfig
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-SAMPLE_RATE = 1_000_000
+SAMPLE_RATE = 5_333_000 # MHz
 CENTER_FREQ = 2_400_000_000
-SPS = 4
+SPS = 8
+SPAN = 8
 RRC_ALPHA = 0.35
-RRC_NUM_TAPS = 101
+RRC_NUM_TAPS = 2 * SPS * SPAN + 1
 DAC_SCALE = 2**14
 RX_GAIN = 70.0
 MOD_SCHEME = ModulationSchemes.QPSK
 CODING_RATE = CodeRates.THREE_QUARTER_RATE # Higher rate = more throughput (needs good SNR)
 DEFAULT_TX_GAIN = -10
-RX_BUFFER_SIZE = 2**14  # Smaller buffer = lower latency
+RX_BUFFER_SIZE = 2**16
 
 # FDD frequency pair for bidirectional bridge mode
 FREQ_A_TO_B = 2_400_000_000
