@@ -22,7 +22,7 @@ RRC_NUM_TAPS = 101
 DAC_SCALE = 2**14
 RX_GAIN = 70.0
 MOD_SCHEME = ModulationSchemes.QPSK
-CODING_RATE = CodeRates.THREE_QUARTER_RATE # Higher rate = more throughput (needs good SNR)
+CODING_RATE = CodeRates.THREE_QUARTER_RATE  # Higher rate = more throughput (needs good SNR)
 DEFAULT_TX_GAIN = -10
 RX_BUFFER_SIZE = 2**14  # Smaller buffer = lower latency
 
@@ -57,7 +57,7 @@ def get_modulator(scheme: ModulationSchemes) -> Modulator:
             ModulationSchemes.BPSK: BPSK,
             ModulationSchemes.QPSK: QPSK,
             ModulationSchemes.QAM16: lambda: QAM(16),
-            ModulationSchemes.QAM64: lambda: QAM(256),
+            ModulationSchemes.QAM64: lambda: QAM(64),
         }
         if scheme not in factories:
             msg = f"Unknown modulation scheme: {scheme}"

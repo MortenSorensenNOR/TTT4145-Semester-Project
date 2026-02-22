@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from modules.channel_coding import CodeRates, LDPCConfig, ldpc_max_n
+from modules.channel_coding import CodeRates, LDPCConfig, ldpc_get_supported_payload_lengths
 from modules.equalization import equalize_payload
 from modules.frame_constructor import FrameConstructor, FrameHeader
 from modules.modulation import BPSK, estimate_noise_variance
@@ -202,20 +202,17 @@ class FrameDecoder:
 
     @property
     def max_frame_samples(self) -> int:
-        """Maximum possible frame length in samples (for buffer sizing).
-
-        With multi-block LDPC, this accounts for MAX_LDPC_BLOCKS blocks.
-        """
+        """Maximum possible frame length in samples (for buffer sizing)."""
         cfg = self.sync.config
         max_preamble = cfg.n_short * cfg.n_short_reps + cfg.n_long
         max_header = self.fc.header_encoded_n_bits
 
         if self.pipeline.channel_coding:
-            # Multi-block: MAX_LDPC_BLOCKS * max_n (use lowest rate for largest codeword)
-            max_data_symbols = FrameConstructor.MAX_LDPC_BLOCKS * ldpc_max_n(CodeRates.HALF_RATE)
+            max_k = int(max(ldpc_get_supported_payload_lengths(CodeRates.HALF_RATE)))
+            max_data_symbols = LDPCConfig(k=max_k, code_rate=CodeRates.HALF_RATE).n
         else:
-            # header length field is 12 bits -> max 4095 payload bits + 16 CRC, pad to 12
-            raw = (2**12 - 1) + FrameConstructor.PAYLOAD_CRC_BITS
+            # header length field is 10 bits -> max 1023 payload bits + 16 CRC, pad to 12
+            raw = (2**10 - 1) + FrameConstructor.PAYLOAD_CRC_BITS
             max_data_symbols = raw + (-raw % 12)
 
         if self.pipeline.pilots:
