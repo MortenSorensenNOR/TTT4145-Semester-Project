@@ -14,12 +14,11 @@ from modules.synchronization import SynchronizerConfig
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-SAMPLE_RATE = 5_333_000 # MHz
+SAMPLE_RATE = 1_000_000
 CENTER_FREQ = 2_400_000_000
-SPS = 8
-SPAN = 8
+SPS = 4
 RRC_ALPHA = 0.35
-RRC_NUM_TAPS = 2 * SPS * SPAN + 1
+RRC_NUM_TAPS = 101
 DAC_SCALE = 2**14
 RX_GAIN = 70.0
 MOD_SCHEME = ModulationSchemes.QPSK
