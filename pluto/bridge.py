@@ -119,19 +119,17 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
     max_bits = max_payload_bits(CODING_RATE)
     logger.info("TX thread started (max payload %d bytes)", max_bits // 8)
 
-    # Pre-warm LDPC cache for all payload sizes to avoid 100-400ms JIT delays
+    # Pre-warm LDPC cache for all supported payload sizes to avoid 100-400ms JIT delays
     logger.info("TX: warming LDPC cache...")
     from modules.channel_coding import ldpc_get_supported_payload_lengths, ldpc_max_k
     # Warm single-block sizes
     for k in ldpc_get_supported_payload_lengths(CODING_RATE):
         dummy_bits = np.zeros(int(k) - 16, dtype=np.uint8)  # -16 for CRC
         build_tx_signal_from_bits(dummy_bits, MOD_SCHEME, CODING_RATE)
-    # Warm multi-block paths (2, 3, 4+ blocks) - common packet sizes
+    # Warm multi-block path (2 blocks)
     max_k = ldpc_max_k(CODING_RATE)
-    for n_blocks in range(2, 9):  # 2-8 blocks
-        dummy_bits = np.zeros((n_blocks - 1) * max_k + 100, dtype=np.uint8)
-        if len(dummy_bits) <= max_bits:
-            build_tx_signal_from_bits(dummy_bits, MOD_SCHEME, CODING_RATE)
+    dummy_bits = np.zeros(max_k + 100, dtype=np.uint8)  # Just over 1 block
+    build_tx_signal_from_bits(dummy_bits, MOD_SCHEME, CODING_RATE)
     logger.info("TX: LDPC cache ready")
 
     # Compute fixed buffer length from max-size frame (PlutoSDR requires constant buffer size)
@@ -167,7 +165,7 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
     """Receive frames from PlutoSDR and write decoded IP packets to TUN."""
     decoder, h_rrc = create_decoder(PIPELINE)
 
-    # Pre-warm LDPC decode cache (all block sizes)
+    # Pre-warm LDPC decode cache (all single-block sizes + max block for multi-block)
     logger.info("RX: warming LDPC cache...")
     from modules.channel_coding import ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths, ldpc_max_k, LDPCConfig
     for k in ldpc_get_supported_payload_lengths(CODING_RATE):
@@ -176,6 +174,7 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
         codeword = ldpc_encode(dummy_msg, config)
         llr = (1 - 2 * codeword).astype(float) * 5.0
         ldpc_decode(llr, config, max_iterations=1)
+    # Multi-block uses max_k repeatedly - already warmed above since max_k is in the list
     logger.info("RX: LDPC cache ready (max block k=%d)", ldpc_max_k(CODING_RATE))
 
     def on_frame(result):
