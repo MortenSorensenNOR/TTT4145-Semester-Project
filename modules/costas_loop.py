@@ -1,0 +1,171 @@
+"""Costas loop for blind carrier phase synchronization.
+
+This module provides a Costas loop implementation for recovering carrier phase
+from a modulated signal without the need for pilot symbols. It is a form of
+phase-locked loop (PLL) that is "decision-directed," meaning it uses the
+output of a symbol slicer to derive its phase error estimate.
+
+The implementation is specifically designed for QPSK modulation but can be
+extended to other M-PSK schemes.
+"""
+
+import numpy as np
+import logging
+
+from modules.modulation import BPSK, Modulator
+
+logger = logging.getLogger(__name__)
+
+
+def _costas_loop_iteration(
+    current_symbol: complex,
+    modulator: Modulator,
+    phase_estimate: float,
+    integrator: float,
+    alpha: float,
+    beta: float,
+) -> tuple[complex, float, float]:
+    """Performs a single iteration of the Costas loop.
+
+    Args:
+        current_symbol: The incoming complex-valued symbol.
+        modulator: The modulator object, used for the decision-slicer.
+        phase_estimate: The current phase estimate (rad).
+        integrator: The current state of the loop filter's integrator.
+        alpha: The proportional gain of the PI loop filter.
+        beta: The integral gain of the PI loop filter.
+
+    Returns:
+        A tuple containing:
+        - corrected_symbol: The phase-corrected symbol.
+        - new_phase_estimate: The updated phase estimate.
+        - new_integrator: The updated integrator state.
+    """
+    # 1. Correct phase of the current symbol
+    corrected_sym = current_symbol * np.exp(-1j * phase_estimate)
+
+    # 2. Make a hard decision (slice) on the corrected symbol
+    # For debugging: print modulator info
+    logger.debug(f"Costas Iteration: mod map = {modulator.symbol_mapping}, corrected_sym = {corrected_sym}")
+    
+    decision = modulator.symbol_mapping[np.argmin(np.abs(corrected_sym - modulator.symbol_mapping))]
+    logger.debug(f"Costas Iteration: decision = {decision}")
+
+    # 3. Calculate the phase error (unified for BPSK/QPSK)
+    # Positive error should drive positive phase adjustment (clockwise rotation for exp(-j*phi)).
+    error = np.imag(corrected_sym * np.conj(decision))
+
+    # 4. Update the loop filter (PI controller)
+    integrator += beta * error
+    proportional = alpha * error
+
+    # 5. Update the phase estimate for the next symbol
+    new_phase_estimate = phase_estimate + proportional + integrator
+    # Wrap phase estimate to -pi to pi for consistent plotting and analysis
+    new_phase_estimate = (new_phase_estimate + np.pi) % (2 * np.pi) - np.pi
+    return corrected_sym, new_phase_estimate, integrator
+
+
+def apply_costas_loop(
+    symbols: np.ndarray,
+    modulator: Modulator,
+    alpha: float = 0.005,
+    beta: float = 0.0001,
+    initial_freq_offset_rad_per_symbol: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply a second-order Costas loop to correct carrier phase offset.
+
+    This function implements a digital Proportional-Plus-Integrator (PI)
+    controller to track and correct the phase of the incoming symbols.
+
+    The error detector implemented here is unified for BPSK and QPSK modulation.
+    It may not work correctly for other modulation schemes like QAM.
+
+    Args:
+        symbols: The input array of complex-valued symbols.
+        modulator: The modulator object, used for the decision-slicer.
+        alpha: The proportional gain of the PI loop filter. Controls how
+               strongly the loop reacts to the current phase error.
+        beta: The integral gain of the PI loop filter. Controls how
+              strongly the loop corrects for accumulated phase error over time.
+        initial_freq_offset_rad_per_symbol: Initial guess for the frequency
+            offset in radians per symbol. This is used to initialize the
+            integrator of the PI loop filter.
+
+    Returns:
+        A tuple containing:
+        - corrected_symbols: An array of phase-corrected complex-valued symbols.
+        - phase_estimates: The history of the phase estimate at each symbol.
+    """
+    n = len(symbols)
+    phase_estimate = 0.0  # Initial phase estimate
+    integrator = initial_freq_offset_rad_per_symbol  # Initialize integrator with frequency offset guess
+    corrected_symbols = np.zeros(n, dtype=complex)
+    phase_estimates = np.zeros(n)
+
+    for i, sym in enumerate(symbols):
+        corrected_sym, phase_estimate, integrator = _costas_loop_iteration(
+            sym, modulator, phase_estimate, integrator, alpha, beta
+        )
+        corrected_symbols[i] = corrected_sym
+        phase_estimates[i] = phase_estimate
+
+    return corrected_symbols, phase_estimates
+
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Test parameters
+    num_symbols = 1000
+    initial_phase_offset_rad = np.pi / 4  # 45 degrees
+    modulator = BPSK()
+    alpha_test = 0.1
+    beta_test = 0.01
+
+    print(f"Running Costas loop phase tracking test...")
+    print(f"Initial phase offset: {np.degrees(initial_phase_offset_rad):.2f} degrees")
+    print(f"Alpha: {alpha_test}, Beta: {beta_test}")
+
+    # Generate test symbols
+    bits = np.random.randint(0, 2, size=num_symbols * modulator.bits_per_symbol)
+    base_symbols = modulator.bits2symbols(bits)
+
+    # Apply a constant phase offset
+    # The actual phase that the loop should converge to is initial_phase_offset_rad
+    input_symbols = base_symbols * np.exp(1j * initial_phase_offset_rad)
+
+    # Apply Costas loop
+    corrected_symbols, phase_estimates = apply_costas_loop(
+        input_symbols,
+        modulator,
+        alpha=alpha_test,
+        beta=beta_test,
+        initial_freq_offset_rad_per_symbol=0.0, # No initial CFO for this simple test
+    )
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.plot(np.degrees(phase_estimates), label="Estimated Phase (degrees)")
+    plt.axhline(
+        np.degrees(initial_phase_offset_rad),
+        color="r",
+        linestyle="--",
+        label="Actual Phase Offset (degrees)",
+    )
+    plt.title("Costas Loop Phase Tracking Test")
+    plt.xlabel("Symbol Index")
+    plt.ylabel("Phase (degrees)")
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+    # Verify if it converged
+    final_phase_error = np.degrees(initial_phase_offset_rad - phase_estimates[-1])
+    print(f"Final estimated phase: {np.degrees(phase_estimates[-1]):.2f} degrees")
+    print(f"Final phase error: {final_phase_error:.2f} degrees")
+    if abs(final_phase_error) < 5: # Arbitrary small tolerance for this demo
+        print("Costas loop successfully tracked the phase.")
+    else:
+        print("Costas loop did NOT successfully track the phase (or locked to an ambiguity).")

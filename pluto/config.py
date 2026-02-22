@@ -40,9 +40,17 @@ class PipelineConfig:
 
     pulse_shaping: bool = True
     pilots: bool = True
+    costas_loop: bool = False # Not yet implementet correctly i think
     channel_coding: bool = True
     interleaving: bool = True
     cfo_correction: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate pipeline configuration. Making sure costas and pilots are not running at the same time"""
+        if self.pilots and self.costas_loop:
+            msg = "Pilots and Costas loop are mutually exclusive"
+            raise ValueError(msg)
+
 
 
 PIPELINE = PipelineConfig()
