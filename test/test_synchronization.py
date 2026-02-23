@@ -17,7 +17,7 @@ from modules.channel import (
 )
 from modules.synchronization import Synchronizer, SynchronizerConfig, generate_zadoff_chu
 from modules.modulation import Modulator, BPSK, QPSK
-from modules.costas_loop import apply_costas_loop, _costas_loop_iteration
+from modules.costas_loop import apply_costas_loop, _costas_loop_iteration, CostasConfig
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO) # Moved here for pytest debug output
@@ -157,7 +157,7 @@ class TestSynchronizer:
 # Costas Loop Tests
 # =============================================================================
 
-TEST_SYMBOLS_LEN = 500
+TEST_SYMBOLS_LEN = 1000
 COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED = 0.04
 COSTAS_DAMPING_FACTOR = 0.707
 MAX_PHASE_ERROR_RAD = 0.2 # Tolerance for phase lock (e.g., ~11.4 degrees)
@@ -169,14 +169,6 @@ BER_THRESHOLD = 1.5e-3  # For bit recovery tests
 def modulator_instance(request) -> Modulator:
     """Fixture to provide BPSK and QPSK modulator instances."""
     return request.param
-
-
-def _calculate_loop_gains(loop_noise_bandwidth_normalized: float, damping_factor: float) -> tuple[float, float]:
-    """Calculates alpha and beta from normalized loop bandwidth and damping factor."""
-    wn_normalized = loop_noise_bandwidth_normalized / (damping_factor + 1 / (4 * damping_factor))
-    alpha = (4 * damping_factor * wn_normalized) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
-    beta = (4 * wn_normalized**2) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
-    return alpha, beta
 
 def _simulate_costas_signal(
     modulator: Modulator,
@@ -216,10 +208,13 @@ class TestCostasLoop:
         mod = modulator_instance
         initial_phase = np.pi / 4  # 45 degrees offset
         noisy_symbols, base_symbols = _simulate_costas_signal(mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=100.0, seed=42, cfo_hz=0.0)
-
-        corrected_symbols, _ = apply_costas_loop(noisy_symbols, mod, 
+        costas_config = CostasConfig(
             loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
-            damping_factor=COSTAS_DAMPING_FACTOR
+            damping_factor=COSTAS_DAMPING_FACTOR,
+        )
+        corrected_symbols, _ = apply_costas_loop(
+            symbols=noisy_symbols,
+            config=costas_config
         )
 
         # Check phase error after lock (using the latter half of symbols for stable lock)
@@ -253,9 +248,13 @@ class TestCostasLoop:
         # Use a slightly longer sequence to ensure enough time for locking
         num_symbols = TEST_SYMBOLS_LEN * 2
         noisy_symbols, base_symbols = _simulate_costas_signal(mod, num_symbols, initial_phase, snr_db=20.0, seed=123, cfo_hz=0.0)
-        corrected_symbols, _ = apply_costas_loop(noisy_symbols, mod, 
+        costas_config = CostasConfig(
             loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
-            damping_factor=COSTAS_DAMPING_FACTOR
+            damping_factor=COSTAS_DAMPING_FACTOR,
+        )
+        corrected_symbols, _ = apply_costas_loop(
+            symbols=noisy_symbols,
+            config=costas_config
         )
 
         # Check if the phase error is within tolerance after LOCK_THRESHOLD_SYMBOLS
@@ -285,9 +284,13 @@ class TestCostasLoop:
         initial_phase = np.pi / 8  # Small fixed offset
         noisy_symbols, base_symbols = _simulate_costas_signal(mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=snr, seed=456, cfo_hz=0.0)
 
-        corrected_symbols, _ = apply_costas_loop(noisy_symbols, mod, 
+        costas_config = CostasConfig(
             loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
-            damping_factor=COSTAS_DAMPING_FACTOR
+            damping_factor=COSTAS_DAMPING_FACTOR,
+        )
+        corrected_symbols, _ = apply_costas_loop(
+            symbols=noisy_symbols,
+            config=costas_config
         )
 
         # Evaluate performance based on average phase error in the latter half of symbols
@@ -349,14 +352,17 @@ class TestCostasLoop:
         # Simulate signal with phase offset and AWGN
         noisy_symbols, _ = _simulate_costas_signal(mod, num_symbols, initial_phase_rad, snr_db=snr_db, seed=789)
 
-        # Convert CFO from Hz to radians per symbol for Costas loop
         cfo_rad_per_symbol = 2 * np.pi * cfo_hz / SAMPLE_RATE
 
         # Apply Costas loop to correct phase
-        corrected_symbols, phase_estimates = apply_costas_loop(noisy_symbols, mod,
+        costas_config = CostasConfig(
             loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
             damping_factor=COSTAS_DAMPING_FACTOR,
             initial_freq_offset_rad_per_symbol=cfo_rad_per_symbol,
+        )
+        corrected_symbols, phase_estimates = apply_costas_loop(
+            symbols=noisy_symbols,
+            config=costas_config,
         )
 
         # Demodulate corrected symbols to bits
@@ -412,9 +418,7 @@ def _simulate_and_track_costas_loop(
     initial_phase_rad: float,
     snr_db: float,
     seed: int,
-    alpha: float,
-    beta: float,
-    initial_freq_offset_rad_per_symbol: float = 0.0,
+    config: CostasConfig,
 ) -> dict[str, np.ndarray | float | Modulator]:
     """Simulates a Costas loop run and explicitly collects phase_estimate history.
 
@@ -436,13 +440,13 @@ def _simulate_and_track_costas_loop(
 
     n = len(noisy_symbols)
     phase_estimate = 0.0  # Initial phase estimate
-    integrator = initial_freq_offset_rad_per_symbol  # Initialize integrator with frequency offset guess
+    integrator = config.initial_freq_offset_rad_per_symbol  # Initialize integrator with frequency offset guess
     corrected_symbols = np.zeros(n, dtype=complex)
     phase_estimates = np.zeros(n)
     
     for i, sym in enumerate(noisy_symbols):
         corrected_sym, phase_estimate, integrator = _costas_loop_iteration(
-            sym, modulator, phase_estimate, integrator, alpha, beta
+            sym, phase_estimate, integrator, config.alpha, config.beta
         )
         corrected_symbols[i] = corrected_sym
         phase_estimates[i] = phase_estimate
@@ -635,17 +639,15 @@ def _run_costas_pipeline(
                 # Convert CFO from Hz to radians per symbol
                 cfo_hat_rad_per_symbol = 2 * np.pi * zc_result.cfo_hat_hz / (SAMPLE_RATE / sps)
                 
-                # Calculate alpha and beta from global constants
-                loop_noise_bandwidth_normalized, damping_factor = _calculate_loop_gains(
-                    COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
-                    COSTAS_DAMPING_FACTOR
+
+
+
+
+                costas_config = CostasConfig(
+                    loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
+                    damping_factor=COSTAS_DAMPING_FACTOR,
+                    initial_freq_offset_rad_per_symbol=cfo_hat_rad_per_symbol,
                 )
-
-                wn_normalized = loop_noise_bandwidth_normalized / (damping_factor + 1 / (4 * damping_factor))
-                alpha = (4 * damping_factor * wn_normalized) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
-                beta = (4 * wn_normalized**2) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
-
-
 
                 costas_loop_results = _simulate_and_track_costas_loop(
                     modulator,
@@ -653,9 +655,7 @@ def _run_costas_pipeline(
                     0.0, # initial_phase_rad. The phase is handled by the loop.
                     snr, # snr_db
                     seed,
-                    alpha,
-                    beta,
-                    initial_freq_offset_rad_per_symbol=cfo_hat_rad_per_symbol, # Pass CFO estimate
+                    config=costas_config,
                 )
 
                 _corrected_symbols = costas_loop_results["corrected_symbols"]
@@ -881,15 +881,14 @@ if __name__ == "__main__":
     _costas_modulator = BPSK()
 
     # Temporarily reduce num_payload_symbols for debug logging
-    original_num_payload_symbols = 2000 # Assuming original value is 2000 from function signature
-    debug_num_payload_symbols = 100
+    num_payload_symbols = 2000 # Assuming original value is 2000 from function signature
     
     # Run the full pipeline sweep
     _costas_pipeline_results = _run_costas_pipeline(
         _costas_cfo_values, 
         _costas_snr_values, 
         _costas_modulator,
-        num_payload_symbols=debug_num_payload_symbols,
+        num_payload_symbols=num_payload_symbols,
     )
 
     # Restore original num_payload_symbols (optional, as it's a local variable for this call)

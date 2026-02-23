@@ -9,6 +9,7 @@ from modules.channel_coding import CodeRates
 from modules.frame_constructor import ModulationSchemes
 from modules.modulation import BPSK, QAM, QPSK, Modulator
 from modules.pilots import PilotConfig
+from modules.costas_loop import CostasConfig
 from modules.synchronization import SynchronizerConfig
 
 if TYPE_CHECKING:
@@ -32,7 +33,7 @@ FREQ_B_TO_A = 2_450_000_000
 
 SYNC_CONFIG = SynchronizerConfig()
 PILOT_CONFIG = PilotConfig()
-
+COSTAS_CONFIG = CostasConfig()
 
 @dataclass
 class PipelineConfig:
@@ -40,7 +41,7 @@ class PipelineConfig:
 
     pulse_shaping: bool = True
     pilots: bool = True
-    costas_loop: bool = False # Not yet implementet correctly i think
+    costas_loop: bool = False # Not yet implemented correctly! Cannot be used!!!
     channel_coding: bool = True
     interleaving: bool = True
     cfo_correction: bool = True
