@@ -12,7 +12,7 @@ extended to other M-PSK schemes.
 import numpy as np
 import logging
 
-from modules.modulation import BPSK, Modulator
+from modules.modulation import BPSK, Modulator, QPSK
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,6 @@ def _costas_loop_iteration(
     corrected_sym = current_symbol * np.exp(-1j * phase_estimate)
 
     # 2. Make a hard decision (slice) on the corrected symbol
-    # For debugging: print modulator info
     logger.debug(f"Costas Iteration: mod map = {modulator.symbol_mapping}, corrected_sym = {corrected_sym}")
     
     decision = modulator.symbol_mapping[np.argmin(np.abs(corrected_sym - modulator.symbol_mapping))]
@@ -69,14 +68,16 @@ def _costas_loop_iteration(
 def apply_costas_loop(
     symbols: np.ndarray,
     modulator: Modulator,
-    alpha: float = 0.005,
-    beta: float = 0.0001,
+    loop_noise_bandwidth_normalized: float = 0.01, # Normalized to symbol rate
+    damping_factor: float = 0.707, # zeta
     initial_freq_offset_rad_per_symbol: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Apply a second-order Costas loop to correct carrier phase offset.
 
     This function implements a digital Proportional-Plus-Integrator (PI)
-    controller to track and correct the phase of the incoming symbols.
+    controller to track and correct the phase of the incoming symbols. The
+    controller gains (alpha, beta) are calculated based on desired loop noise
+    bandwidth and damping factor, normalized to the symbol rate.
 
     The error detector implemented here is unified for BPSK and QPSK modulation.
     It may not work correctly for other modulation schemes like QAM.
@@ -84,10 +85,11 @@ def apply_costas_loop(
     Args:
         symbols: The input array of complex-valued symbols.
         modulator: The modulator object, used for the decision-slicer.
-        alpha: The proportional gain of the PI loop filter. Controls how
-               strongly the loop reacts to the current phase error.
-        beta: The integral gain of the PI loop filter. Controls how
-              strongly the loop corrects for accumulated phase error over time.
+        loop_noise_bandwidth_normalized: The desired loop noise bandwidth,
+            normalized to the symbol rate (e.g., 0.01 means 1% of symbol rate).
+            This parameter helps set the responsiveness and noise rejection of the loop.
+        damping_factor: The damping factor (zeta) of the loop, typically around
+            0.707 for optimal transient response.
         initial_freq_offset_rad_per_symbol: Initial guess for the frequency
             offset in radians per symbol. This is used to initialize the
             integrator of the PI loop filter.
@@ -97,6 +99,13 @@ def apply_costas_loop(
         - corrected_symbols: An array of phase-corrected complex-valued symbols.
         - phase_estimates: The history of the phase estimate at each symbol.
     """
+    # Calculate alpha and beta from loop_noise_bandwidth_normalized and damping_factor
+    # These formulas are derived for a second-order, type-II digital PLL
+    # (PI loop filter)
+    wn_normalized = loop_noise_bandwidth_normalized / (damping_factor + 1 / (4 * damping_factor))
+    alpha = (4 * damping_factor * wn_normalized) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
+    beta = (4 * wn_normalized**2) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
+
     n = len(symbols)
     phase_estimate = 0.0  # Initial phase estimate
     integrator = initial_freq_offset_rad_per_symbol  # Initialize integrator with frequency offset guess
@@ -118,36 +127,40 @@ if __name__ == "__main__":
     import numpy as np
 
     # Test parameters
-    num_symbols = 1000
+    num_symbols = 100
     initial_phase_offset_rad = np.pi / 4  # 45 degrees
     modulator = BPSK()
-    alpha_test = 0.1
-    beta_test = 0.01
+    test_loop_noise_bandwidth_normalized = 0.05
+    test_damping_factor = 0.707
 
     print(f"Running Costas loop phase tracking test...")
     print(f"Initial phase offset: {np.degrees(initial_phase_offset_rad):.2f} degrees")
-    print(f"Alpha: {alpha_test}, Beta: {beta_test}")
+    print(f"Normalized Loop Bandwidth: {test_loop_noise_bandwidth_normalized}")
+    print(f"Damping Factor: {test_damping_factor}")
 
     # Generate test symbols
     bits = np.random.randint(0, 2, size=num_symbols * modulator.bits_per_symbol)
     base_symbols = modulator.bits2symbols(bits)
+    phase_noise = np.linspace(0, 3, len(base_symbols))
 
     # Apply a constant phase offset
     # The actual phase that the loop should converge to is initial_phase_offset_rad
-    input_symbols = base_symbols * np.exp(1j * initial_phase_offset_rad)
+
+    input_symbols = base_symbols * np.exp(1j * (initial_phase_offset_rad+phase_noise))
 
     # Apply Costas loop
     corrected_symbols, phase_estimates = apply_costas_loop(
         input_symbols,
         modulator,
-        alpha=alpha_test,
-        beta=beta_test,
+        loop_noise_bandwidth_normalized=test_loop_noise_bandwidth_normalized,
+        damping_factor=test_damping_factor,
         initial_freq_offset_rad_per_symbol=0.0, # No initial CFO for this simple test
     )
 
     # Plotting
     plt.figure(figsize=(10, 6))
     plt.plot(np.degrees(phase_estimates), label="Estimated Phase (degrees)")
+    plt.plot(np.degrees(initial_phase_offset_rad+phase_noise), label="Actual phase")
     plt.axhline(
         np.degrees(initial_phase_offset_rad),
         color="r",

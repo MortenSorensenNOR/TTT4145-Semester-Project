@@ -157,13 +157,13 @@ class TestSynchronizer:
 # Costas Loop Tests
 # =============================================================================
 
-TEST_SYMBOLS_LEN = 1000
-COSTAS_ALPHA = 0.1
-COSTAS_BETA = 0.02
-MAX_PHASE_ERROR_RAD = 0.2 # Tolerance for phase lock (e.g., ~11.45 degrees)
-COSTAS_SETTLING_SYMBOLS = 10  # Number of symbols after which Costas loop should be locked for direct tests
-COSTAS_PIPELINE_LOCK_THRESHOLD = 10 # Number of symbols for pipeline simulation to consider lock "acquired"
-
+TEST_SYMBOLS_LEN = 500
+COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED = 0.04
+COSTAS_DAMPING_FACTOR = 0.707
+MAX_PHASE_ERROR_RAD = 0.2 # Tolerance for phase lock (e.g., ~11.4 degrees)
+COSTAS_SETTLING_SYMBOLS = 16  # Number of symbols after which Costas loop should be locked for direct tests
+COSTAS_PIPELINE_LOCK_THRESHOLD = 16 # Number of symbols for pipeline simulation to consider lock "acquired"
+BER_THRESHOLD = 1.5e-3  # For bit recovery tests
 
 @pytest.fixture(params=[BPSK(), QPSK()])
 def modulator_instance(request) -> Modulator:
@@ -171,27 +171,40 @@ def modulator_instance(request) -> Modulator:
     return request.param
 
 
+def _calculate_loop_gains(loop_noise_bandwidth_normalized: float, damping_factor: float) -> tuple[float, float]:
+    """Calculates alpha and beta from normalized loop bandwidth and damping factor."""
+    wn_normalized = loop_noise_bandwidth_normalized / (damping_factor + 1 / (4 * damping_factor))
+    alpha = (4 * damping_factor * wn_normalized) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
+    beta = (4 * wn_normalized**2) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
+    return alpha, beta
+
 def _simulate_costas_signal(
     modulator: Modulator,
     num_symbols: int,
     initial_phase_rad: float,
     snr_db: float,
     seed: int,
+    cfo_hz: float = 0.0, # New parameter
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Generates modulated symbols with a phase offset and AWGN."""
+    """Generates modulated symbols with a phase offset, frequency offset, and AWGN."""
     rng = np.random.default_rng(seed)
     bits = rng.integers(0, 2, size=num_symbols * modulator.bits_per_symbol)
     base_symbols = modulator.bits2symbols(bits)
 
     # Apply initial phase offset
-    phase_shifted_symbols = base_symbols * np.exp(1j * initial_phase_rad)
+    phase_offset_symbols = base_symbols * np.exp(1j * initial_phase_rad)
+
+    # Apply frequency offset (CFO)
+    time_points = np.arange(num_symbols) / SAMPLE_RATE
+    cfo_phase_rotation = np.exp(1j * 2 * np.pi * cfo_hz * time_points)
+    phase_and_freq_shifted_symbols = phase_offset_symbols * cfo_phase_rotation
 
     # Add AWGN
     # Assuming average symbol energy is 1 for BPSK/QPSK with default modulator scaling
     symbol_energy = np.mean(np.abs(base_symbols) ** 2)
     noise_power = symbol_energy / (10 ** (snr_db / 10))
     noise = (rng.normal(0, np.sqrt(noise_power / 2), num_symbols) + 1j * rng.normal(0, np.sqrt(noise_power / 2), num_symbols))
-    noisy_symbols = phase_shifted_symbols + noise
+    noisy_symbols = phase_and_freq_shifted_symbols + noise
     return noisy_symbols, base_symbols
 
 
@@ -202,9 +215,12 @@ class TestCostasLoop:
         """Test that Costas loop can perfectly lock on a noiseless signal with phase offset."""
         mod = modulator_instance
         initial_phase = np.pi / 4  # 45 degrees offset
-        noisy_symbols, base_symbols = _simulate_costas_signal(mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=100.0, seed=42)
+        noisy_symbols, base_symbols = _simulate_costas_signal(mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=100.0, seed=42, cfo_hz=0.0)
 
-        corrected_symbols, _ = apply_costas_loop(noisy_symbols, mod, alpha=COSTAS_ALPHA, beta=COSTAS_BETA)
+        corrected_symbols, _ = apply_costas_loop(noisy_symbols, mod, 
+            loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
+            damping_factor=COSTAS_DAMPING_FACTOR
+        )
 
         # Check phase error after lock (using the latter half of symbols for stable lock)
         # We need to compute the phase difference between corrected and original symbols
@@ -236,8 +252,11 @@ class TestCostasLoop:
         mod = modulator_instance
         # Use a slightly longer sequence to ensure enough time for locking
         num_symbols = TEST_SYMBOLS_LEN * 2
-        noisy_symbols, base_symbols = _simulate_costas_signal(mod, num_symbols, initial_phase, snr_db=20.0, seed=123)
-        corrected_symbols, _ = apply_costas_loop(noisy_symbols, mod, alpha=COSTAS_ALPHA, beta=COSTAS_BETA)
+        noisy_symbols, base_symbols = _simulate_costas_signal(mod, num_symbols, initial_phase, snr_db=20.0, seed=123, cfo_hz=0.0)
+        corrected_symbols, _ = apply_costas_loop(noisy_symbols, mod, 
+            loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
+            damping_factor=COSTAS_DAMPING_FACTOR
+        )
 
         # Check if the phase error is within tolerance after LOCK_THRESHOLD_SYMBOLS
         # We'll consider the loop locked if the average absolute phase error in the
@@ -264,9 +283,12 @@ class TestCostasLoop:
         """Test Costas loop performance at various SNR levels."""
         mod = modulator_instance
         initial_phase = np.pi / 8  # Small fixed offset
-        noisy_symbols, base_symbols = _simulate_costas_signal(mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=snr, seed=456)
+        noisy_symbols, base_symbols = _simulate_costas_signal(mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=snr, seed=456, cfo_hz=0.0)
 
-        corrected_symbols, _ = apply_costas_loop(noisy_symbols, mod, alpha=COSTAS_ALPHA, beta=COSTAS_BETA)
+        corrected_symbols, _ = apply_costas_loop(noisy_symbols, mod, 
+            loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
+            damping_factor=COSTAS_DAMPING_FACTOR
+        )
 
         # Evaluate performance based on average phase error in the latter half of symbols
         phase_errors = np.angle(corrected_symbols[TEST_SYMBOLS_LEN // 2 :] * np.conj(base_symbols[TEST_SYMBOLS_LEN // 2 :]))
@@ -299,6 +321,86 @@ class TestCostasLoop:
                 pytest.fail(
                     f"Costas loop for {mod.__class__.__name__} at {snr=:.1f} dB diverged (NaN phase error)"
                 )
+
+    @pytest.mark.parametrize(
+        "snr_db, initial_phase_rad, cfo_hz",
+        [
+            (10.0, np.pi / 8, 0.0),
+            (15.0, np.pi / 3, 500.0),
+            (20.0, 2 * np.pi / 3, -1000.0),
+            (15.0, np.pi / 6, 200.0),
+        ],
+    )
+    def test_bit_recovery(
+        self,
+        modulator_instance: Modulator,
+        snr_db: float,
+        initial_phase_rad: float,
+        cfo_hz: float,
+    ) -> None:
+        """Test that Costas loop enables successful bit recovery at various channel conditions."""
+        mod = modulator_instance
+        # Use a longer sequence for better BER statistics
+        num_symbols = TEST_SYMBOLS_LEN * 15
+
+        rng = np.random.default_rng(789)
+        original_bits = rng.integers(0, 2, size=num_symbols * mod.bits_per_symbol)
+        
+        # Simulate signal with phase offset and AWGN
+        noisy_symbols, _ = _simulate_costas_signal(mod, num_symbols, initial_phase_rad, snr_db=snr_db, seed=789)
+
+        # Convert CFO from Hz to radians per symbol for Costas loop
+        cfo_rad_per_symbol = 2 * np.pi * cfo_hz / SAMPLE_RATE
+
+        # Apply Costas loop to correct phase
+        corrected_symbols, phase_estimates = apply_costas_loop(noisy_symbols, mod,
+            loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
+            damping_factor=COSTAS_DAMPING_FACTOR,
+            initial_freq_offset_rad_per_symbol=cfo_rad_per_symbol,
+        )
+
+        # Demodulate corrected symbols to bits
+        # Use only the latter half of symbols for BER calculation to allow for lock-in
+        processed_corrected_symbols = corrected_symbols[COSTAS_SETTLING_SYMBOLS:]
+        recovered_bits = mod.symbols2bits(processed_corrected_symbols)
+
+        # To resolve phase ambiguity, we compare against all possible rotations of the original symbols
+        original_symbols_all = mod.bits2symbols(original_bits)
+        processed_original_symbols_for_comparison = original_symbols_all[COSTAS_SETTLING_SYMBOLS:]
+
+        min_ber = 1.0
+        
+        # Iterate through possible phase ambiguities (0, 90, 180, 270 deg for QPSK; 0, 180 deg for BPSK)
+        # mod.qam_order corresponds to M in M-PSK (2 for BPSK, 4 for QPSK)
+        for k in range(mod.qam_order):
+            ambiguity_rotation = np.exp(1j * k * 2 * np.pi / mod.qam_order)
+            ambiguous_original_symbols = processed_original_symbols_for_comparison * ambiguity_rotation
+            ambiguous_bits = mod.symbols2bits(ambiguous_original_symbols)
+
+            # Ensure shape compatibility for comparison between ambiguous_bits and recovered_bits
+            if mod.bits_per_symbol > 1: # QPSK and higher
+                # ambiguous_bits and recovered_bits are already (N, bits_per_symbol)
+                pass # Shapes are already compatible
+            else: # BPSK
+                # recovered_bits is (N, 1). Flatten it.
+                recovered_bits_flat = recovered_bits.flatten()
+                # ambiguous_bits is (N, 1). Flatten it.
+                ambiguous_bits_flat = ambiguous_bits.flatten()
+                # Use flattened versions for comparison
+                ambiguous_bits = ambiguous_bits_flat
+                recovered_bits = recovered_bits_flat
+
+            # Now compare
+            bit_errors = np.sum(ambiguous_bits != recovered_bits)
+            total_bits_compared = ambiguous_bits.size
+            current_ber = bit_errors / total_bits_compared
+            
+            min_ber = min(min_ber, current_ber)
+            
+        if min_ber >= BER_THRESHOLD:
+            pytest.fail(
+                f"Bit Error Rate too high for {mod.__class__.__name__} at {snr_db=:.1f} dB: {min_ber:.4f} (threshold: {BER_THRESHOLD:.4f})"
+            )
     
 # =============================================================================
 # Sweep helpers (used by __main__ for detailed analysis)
@@ -310,8 +412,9 @@ def _simulate_and_track_costas_loop(
     initial_phase_rad: float,
     snr_db: float,
     seed: int,
-    alpha: float = COSTAS_ALPHA, # Updated default
-    beta: float = COSTAS_BETA, # Updated default
+    alpha: float,
+    beta: float,
+    initial_freq_offset_rad_per_symbol: float = 0.0,
 ) -> dict[str, np.ndarray | float | Modulator]:
     """Simulates a Costas loop run and explicitly collects phase_estimate history.
 
@@ -332,21 +435,24 @@ def _simulate_and_track_costas_loop(
     noisy_symbols = phase_shifted_symbols + noise
 
     n = len(noisy_symbols)
-    phase_estimate = 0.0
-    integrator = 0.0
-    phase_estimate_history = np.zeros(n, dtype=float)
+    phase_estimate = 0.0  # Initial phase estimate
+    integrator = initial_freq_offset_rad_per_symbol  # Initialize integrator with frequency offset guess
+    corrected_symbols = np.zeros(n, dtype=complex)
+    phase_estimates = np.zeros(n)
     
     for i, sym in enumerate(noisy_symbols):
-        _, phase_estimate, integrator = _costas_loop_iteration(
+        corrected_sym, phase_estimate, integrator = _costas_loop_iteration(
             sym, modulator, phase_estimate, integrator, alpha, beta
         )
-        phase_estimate_history[i] = phase_estimate
+        corrected_symbols[i] = corrected_sym
+        phase_estimates[i] = phase_estimate
 
     return {
         "modulator": modulator,
         "initial_phase_rad": initial_phase_rad,
         "snr_db": snr_db,
-        "phase_estimate_history": phase_estimate_history,
+        "corrected_symbols": corrected_symbols,
+        "phase_estimates": phase_estimates,
     }
 
 
@@ -526,13 +632,34 @@ def _run_costas_pipeline(
                 # Convert CFO from Hz to radians per symbol
                 cfo_hat_rad_per_symbol = 2 * np.pi * zc_result.cfo_hat_hz / (SAMPLE_RATE / sps)
                 
-                _corrected_symbols, phase_estimates = apply_costas_loop(
-                    rx_payload,
-                    modulator,
-                    alpha=COSTAS_ALPHA,
-                    beta=COSTAS_BETA,
-                    initial_freq_offset_rad_per_symbol=cfo_hat_rad_per_symbol,
+                # Convert CFO from Hz to radians per symbol
+                cfo_hat_rad_per_symbol = 2 * np.pi * zc_result.cfo_hat_hz / (SAMPLE_RATE / sps)
+                
+                # Calculate alpha and beta from global constants
+                loop_noise_bandwidth_normalized, damping_factor = _calculate_loop_gains(
+                    COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
+                    COSTAS_DAMPING_FACTOR
                 )
+
+                wn_normalized = loop_noise_bandwidth_normalized / (damping_factor + 1 / (4 * damping_factor))
+                alpha = (4 * damping_factor * wn_normalized) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
+                beta = (4 * wn_normalized**2) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
+
+
+
+                costas_loop_results = _simulate_and_track_costas_loop(
+                    modulator,
+                    len(rx_payload), # num_symbols
+                    0.0, # initial_phase_rad. The phase is handled by the loop.
+                    snr, # snr_db
+                    seed,
+                    alpha,
+                    beta,
+                    initial_freq_offset_rad_per_symbol=cfo_hat_rad_per_symbol, # Pass CFO estimate
+                )
+
+                _corrected_symbols = costas_loop_results["corrected_symbols"]
+                phase_estimates = costas_loop_results["phase_estimates"]
                 
                 # --- NEW: Check for actual lock success based on phase error ---
                 # Compare corrected symbols to the original payload symbols after the lock threshold
@@ -540,12 +667,9 @@ def _run_costas_pipeline(
                 # Note: payload_symbols were generated before channel impairments
                 
                 # Ensure we have enough symbols to check after lock threshold
-                if len(_corrected_symbols) <= LOCK_THRESHOLD_SYMBOLS:
-                    raise ValueError(f"Not enough corrected symbols ({len(_corrected_symbols)}) for lock-in check with threshold {LOCK_THRESHOLD_SYMBOLS}")
+                if len(_corrected_symbols) <= COSTAS_PIPELINE_LOCK_THRESHOLD:
+                    raise ValueError(f"Not enough corrected symbols ({len(_corrected_symbols)}) for lock-in check with threshold {COSTAS_PIPELINE_LOCK_THRESHOLD}")
 
-                # Calculate phase errors after the lock threshold
-                # np.angle(A * conj(B)) gives the angle from B to A
-                
                 # The payload_symbols variable refers to the original full payload.
                 # We need to slice it to match the actual length of rx_payload (and thus _corrected_symbols)
                 # This ensures the operands for the complex multiplication have compatible shapes.
@@ -553,11 +677,26 @@ def _run_costas_pipeline(
                 
                 # Calculate the actual instantaneous phase offset at the input to the Costas loop
                 actual_input_phase_offset = np.angle(rx_payload * np.conj(original_payload_segment))
+                logger.debug(f"Input phase offset to Costas loop (first 10, degrees): {np.degrees(actual_input_phase_offset[:10])}")
 
-                phase_errors = np.angle(
-                    _corrected_symbols[LOCK_THRESHOLD_SYMBOLS:] * np.conj(original_payload_segment[LOCK_THRESHOLD_SYMBOLS:])
-                )
-                mean_abs_phase_error = np.mean(np.abs(phase_errors))
+                # Slice for comparison after settling time
+                processed_corrected_symbols_for_comparison = _corrected_symbols[COSTAS_PIPELINE_LOCK_THRESHOLD:]
+                original_payload_segment_for_comparison = original_payload_segment[COSTAS_PIPELINE_LOCK_THRESHOLD:]
+
+                min_mean_abs_phase_error = float('inf')
+
+                # Iterate through possible phase ambiguities (0, 90, 180, 270 deg for QPSK; 0, 180 deg for BPSK)
+                for k in range(modulator.qam_order):
+                    ambiguity_rotation = np.exp(1j * k * 2 * np.pi / modulator.qam_order)
+                    ambiguous_original_symbols = original_payload_segment_for_comparison * ambiguity_rotation
+                    
+                    phase_errors_for_ambiguity = np.angle(
+                        processed_corrected_symbols_for_comparison * np.conj(ambiguous_original_symbols)
+                    )
+                    current_mean_abs_phase_error = np.mean(np.abs(phase_errors_for_ambiguity))
+                    min_mean_abs_phase_error = min(min_mean_abs_phase_error, current_mean_abs_phase_error)
+                
+                mean_abs_phase_error = min_mean_abs_phase_error
 
                 if mean_abs_phase_error >= MAX_PHASE_ERROR_RAD:
                     logger.warning(
@@ -741,12 +880,19 @@ if __name__ == "__main__":
     _costas_snr_values = [5.0, 10.0, 20.0]
     _costas_modulator = BPSK()
 
+    # Temporarily reduce num_payload_symbols for debug logging
+    original_num_payload_symbols = 2000 # Assuming original value is 2000 from function signature
+    debug_num_payload_symbols = 100
+    
     # Run the full pipeline sweep
     _costas_pipeline_results = _run_costas_pipeline(
         _costas_cfo_values, 
         _costas_snr_values, 
         _costas_modulator,
+        num_payload_symbols=debug_num_payload_symbols,
     )
+
+    # Restore original num_payload_symbols (optional, as it's a local variable for this call)
 
     # Print and plot summaries for Costas loop
     _print_costas_summary(_costas_pipeline_results)
