@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from modules.costas_loop import apply_costas_loop
 from modules.channel_coding import CodeRates, LDPCConfig, ldpc_get_supported_payload_lengths
 from modules.equalization import equalize_payload
 from modules.frame_constructor import FrameConstructor, FrameHeader
@@ -87,8 +86,6 @@ class FrameDecoder:
 
         # ── Decode header ────────────────────────────────────────────
         header_symbols = symbols[: self.header_n_symbols]
-        if self.pipeline.costas_loop:
-            header_symbols = apply_costas_loop(header_symbols, self.bpsk)
         header_hard = self.bpsk.symbols2bits(header_symbols).flatten()
         try:
             header = self.fc.decode_header(header_hard)
@@ -170,10 +167,7 @@ class FrameDecoder:
 
             # ── Pilot-aided phase tracking (returns data-only symbols) ─
             payload_symbols = pilot_aided_phase_track(payload_symbols, n_data, self.pilot_config, p_idx=p_idx, d_idx=d_idx)
-        elif self.pipeline.costas_loop:
-            # ── Blind phase tracking (returns data-only symbols) ──────
-            payload_symbols = apply_costas_loop(payload_symbols, modulator)
-
+        
         # ── Re-estimate noise variance from equalized payload symbols ─
         sigma_sq = estimate_noise_variance(payload_symbols, modulator.symbol_mapping)
 
