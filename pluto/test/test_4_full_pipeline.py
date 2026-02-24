@@ -37,7 +37,7 @@ def add_awgn(signal: np.ndarray, snr_db: float, verbose: bool = False, return_no
     window = 1000
     if len(signal) > window:
         # Sliding window to find max power region
-        power_profile = np.convolve(np.abs(signal)**2, np.ones(window)/window, mode='valid')
+        power_profile = np.convolve(np.abs(signal) ** 2, np.ones(window) / window, mode="valid")
         peak_idx = np.argmax(power_profile)
         # Measure power in region around peak
         start = max(0, peak_idx)
@@ -54,11 +54,13 @@ def add_awgn(signal: np.ndarray, snr_db: float, verbose: bool = False, return_no
 
     if verbose:
         # Verify actual SNR in active region
-        actual_noise_power = np.mean(np.abs(noise[active_region[0]:active_region[1]]) ** 2)
+        actual_noise_power = np.mean(np.abs(noise[active_region[0] : active_region[1]]) ** 2)
         actual_snr = 10 * np.log10(sig_power / actual_noise_power)
-        print(f"    [NOISE] sig_pwr={sig_power:.2e}, noise_pwr={actual_noise_power:.2e}, "
-              f"target_SNR={snr_db:.1f}dB, actual_SNR={actual_snr:.1f}dB, "
-              f"active_region={active_region[0]}-{active_region[1]}")
+        print(
+            f"    [NOISE] sig_pwr={sig_power:.2e}, noise_pwr={actual_noise_power:.2e}, "
+            f"target_SNR={snr_db:.1f}dB, actual_SNR={actual_snr:.1f}dB, "
+            f"active_region={active_region[0]}-{active_region[1]}"
+        )
 
     if return_noise:
         return noisy_signal, noise, active_region
@@ -155,10 +157,12 @@ def run_ber_test(
     timings["decode_total"] = time.perf_counter() - t0
 
     if timing:
-        print(f"    [TIMING] tx_build={timings['tx_build']*1000:.1f}ms, "
-              f"pluto={timings['pluto_txrx']*1000:.1f}ms, "
-              f"filter={timings['matched_filter']*1000:.1f}ms, "
-              f"decode={timings['decode_total']*1000:.1f}ms")
+        print(
+            f"    [TIMING] tx_build={timings['tx_build'] * 1000:.1f}ms, "
+            f"pluto={timings['pluto_txrx'] * 1000:.1f}ms, "
+            f"filter={timings['matched_filter'] * 1000:.1f}ms, "
+            f"decode={timings['decode_total'] * 1000:.1f}ms"
+        )
 
     if result is None:
         return {"success": False, "ber": 0.5, "errors": n_payload_bits // 2, "timings": timings}
@@ -195,10 +199,10 @@ def plot_signal_vs_noise(signal: np.ndarray, noise: np.ndarray, active_region: t
     # Clean signal (before noise)
     clean = signal[plot_start:plot_end] - noise[plot_start:plot_end]
     ax = axes[0]
-    ax.plot(t, np.real(clean), 'b-', linewidth=0.5, alpha=0.7, label='I')
-    ax.plot(t, np.imag(clean), 'r-', linewidth=0.5, alpha=0.7, label='Q')
-    ax.axvline(start, color='g', linestyle='--', alpha=0.5, label='Active region')
-    ax.axvline(end, color='g', linestyle='--', alpha=0.5)
+    ax.plot(t, np.real(clean), "b-", linewidth=0.5, alpha=0.7, label="I")
+    ax.plot(t, np.imag(clean), "r-", linewidth=0.5, alpha=0.7, label="Q")
+    ax.axvline(start, color="g", linestyle="--", alpha=0.5, label="Active region")
+    ax.axvline(end, color="g", linestyle="--", alpha=0.5)
     ax.set_title(f"Clean Signal (before noise)")
     ax.set_ylabel("Amplitude")
     ax.legend()
@@ -206,10 +210,10 @@ def plot_signal_vs_noise(signal: np.ndarray, noise: np.ndarray, active_region: t
 
     # Noise only
     ax = axes[1]
-    ax.plot(t, np.real(noise[plot_start:plot_end]), 'b-', linewidth=0.5, alpha=0.7, label='I')
-    ax.plot(t, np.imag(noise[plot_start:plot_end]), 'r-', linewidth=0.5, alpha=0.7, label='Q')
-    ax.axvline(start, color='g', linestyle='--', alpha=0.5)
-    ax.axvline(end, color='g', linestyle='--', alpha=0.5)
+    ax.plot(t, np.real(noise[plot_start:plot_end]), "b-", linewidth=0.5, alpha=0.7, label="I")
+    ax.plot(t, np.imag(noise[plot_start:plot_end]), "r-", linewidth=0.5, alpha=0.7, label="Q")
+    ax.axvline(start, color="g", linestyle="--", alpha=0.5)
+    ax.axvline(end, color="g", linestyle="--", alpha=0.5)
     noise_std = np.std(noise[start:end])
     ax.set_title(f"Noise (σ={noise_std:.4f})")
     ax.set_ylabel("Amplitude")
@@ -218,10 +222,10 @@ def plot_signal_vs_noise(signal: np.ndarray, noise: np.ndarray, active_region: t
 
     # Noisy signal
     ax = axes[2]
-    ax.plot(t, np.real(signal[plot_start:plot_end]), 'b-', linewidth=0.5, alpha=0.7, label='I')
-    ax.plot(t, np.imag(signal[plot_start:plot_end]), 'r-', linewidth=0.5, alpha=0.7, label='Q')
-    ax.axvline(start, color='g', linestyle='--', alpha=0.5)
-    ax.axvline(end, color='g', linestyle='--', alpha=0.5)
+    ax.plot(t, np.real(signal[plot_start:plot_end]), "b-", linewidth=0.5, alpha=0.7, label="I")
+    ax.plot(t, np.imag(signal[plot_start:plot_end]), "r-", linewidth=0.5, alpha=0.7, label="Q")
+    ax.axvline(start, color="g", linestyle="--", alpha=0.5)
+    ax.axvline(end, color="g", linestyle="--", alpha=0.5)
     ax.set_title(f"Noisy Signal (SNR={snr_db:.1f} dB)")
     ax.set_xlabel("Sample")
     ax.set_ylabel("Amplitude")
@@ -233,7 +237,9 @@ def plot_signal_vs_noise(signal: np.ndarray, noise: np.ndarray, active_region: t
     return fig
 
 
-def plot_constellation_and_eye(rx_filtered: np.ndarray, sync_result, mod_scheme: ModulationSchemes, snr_db: float, title: str):
+def plot_constellation_and_eye(
+    rx_filtered: np.ndarray, sync_result, mod_scheme: ModulationSchemes, snr_db: float, title: str
+):
     """Plot constellation and eye diagram for a single test."""
     pilot_config = PilotConfig()
 
@@ -285,8 +291,8 @@ def plot_constellation_and_eye(rx_filtered: np.ndarray, sync_result, mod_scheme:
     for i in range(n_traces):
         start = i * SPS
         if start + eye_len <= len(rx_payload):
-            ax.plot(t_eye, np.real(rx_payload[start:start + eye_len]), 'b-', alpha=0.05, linewidth=0.5)
-    ax.axvline(0, color='r', linestyle='--', alpha=0.5)
+            ax.plot(t_eye, np.real(rx_payload[start : start + eye_len]), "b-", alpha=0.05, linewidth=0.5)
+    ax.axvline(0, color="r", linestyle="--", alpha=0.5)
     ax.set_title(f"Eye Diagram (I)")
     ax.set_xlabel("Symbol Period")
     ax.set_ylabel("Amplitude")
@@ -298,8 +304,8 @@ def plot_constellation_and_eye(rx_filtered: np.ndarray, sync_result, mod_scheme:
     for i in range(n_traces):
         start = i * SPS
         if start + eye_len <= len(rx_payload):
-            ax.plot(t_eye, np.imag(rx_payload[start:start + eye_len]), 'b-', alpha=0.05, linewidth=0.5)
-    ax.axvline(0, color='r', linestyle='--', alpha=0.5)
+            ax.plot(t_eye, np.imag(rx_payload[start : start + eye_len]), "b-", alpha=0.05, linewidth=0.5)
+    ax.axvline(0, color="r", linestyle="--", alpha=0.5)
     ax.set_title(f"Eye Diagram (Q)")
     ax.set_xlabel("Symbol Period")
     ax.set_ylabel("Amplitude")
@@ -308,7 +314,7 @@ def plot_constellation_and_eye(rx_filtered: np.ndarray, sync_result, mod_scheme:
 
     # Constellation
     ax = axes[2]
-    symbols = payload_data_only[:min(n_traces, len(payload_data_only))]
+    symbols = payload_data_only[: min(n_traces, len(payload_data_only))]
     modulator = get_modulator(mod_scheme)
     constellation = modulator.symbol_mapping / np.sqrt(np.mean(np.abs(modulator.symbol_mapping) ** 2))
     ax.scatter(np.real(symbols), np.imag(symbols), alpha=0.3, s=5, label="RX")
@@ -357,7 +363,7 @@ def main():
     plot_data = {}  # Store one result per modulation for plotting
 
     for mod_scheme in mod_schemes:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Testing {mod_scheme.name}")
         print("=" * 60)
 
@@ -368,10 +374,18 @@ def main():
 
             for trial in range(n_trials):
                 # Print timing/noise info only on first trial of first SNR per modulation
-                first_snr = (snr_db == snr_values[0])
+                first_snr = snr_db == snr_values[0]
                 result = run_ber_test(
-                    mod_scheme, snr_db, n_payload_bits,
-                    sdr, h_rrc, sync, fc, pilot_config, pipeline, cfo_hz,
+                    mod_scheme,
+                    snr_db,
+                    n_payload_bits,
+                    sdr,
+                    h_rrc,
+                    sync,
+                    fc,
+                    pilot_config,
+                    pipeline,
+                    cfo_hz,
                     verbose=(trial == 0 and first_snr),
                     timing=(trial == 0 and first_snr),
                 )
@@ -397,18 +411,22 @@ def main():
     # Plot BER vs SNR
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    markers = {'BPSK': 'o', 'QPSK': 's', 'QAM16': '^'}
-    colors = {'BPSK': 'blue', 'QPSK': 'green', 'QAM16': 'red'}
+    markers = {"BPSK": "o", "QPSK": "s", "QAM16": "^"}
+    colors = {"BPSK": "blue", "QPSK": "green", "QAM16": "red"}
 
     for mod_scheme in mod_schemes:
         bers = ber_results[mod_scheme]
         # Replace zeros with small value for log plot
         bers_plot = [max(b, 1e-5) for b in bers]
-        ax.semilogy(snr_values, bers_plot,
-                   marker=markers[mod_scheme.name],
-                   color=colors[mod_scheme.name],
-                   label=mod_scheme.name,
-                   linewidth=2, markersize=8)
+        ax.semilogy(
+            snr_values,
+            bers_plot,
+            marker=markers[mod_scheme.name],
+            color=colors[mod_scheme.name],
+            label=mod_scheme.name,
+            linewidth=2,
+            markersize=8,
+        )
 
     ax.set_xlabel("SNR (dB)", fontsize=12)
     ax.set_ylabel("Bit Error Rate (BER)", fontsize=12)
@@ -424,8 +442,7 @@ def main():
     diag_snr = -4.0
     tx_bits = np.random.randint(0, 2, n_payload_bits)
     frame_symbols, _ = build_test_frame(
-        tx_bits, fc, sync_config, pilot_config, pipeline,
-        ModulationSchemes.QPSK, CodeRates.HALF_RATE
+        tx_bits, fc, sync_config, pilot_config, pipeline, ModulationSchemes.QPSK, CodeRates.HALF_RATE
     )
     tx_signal = upsample_and_filter(frame_symbols, SPS, h_rrc)
     zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
@@ -446,11 +463,7 @@ def main():
     # Plot constellation/eye for each modulation at mid-range SNR
     for mod_scheme, (result, snr_db) in plot_data.items():
         fig = plot_constellation_and_eye(
-            result["rx_filtered"],
-            result["sync_result"],
-            mod_scheme,
-            snr_db,
-            f"{mod_scheme.name}"
+            result["rx_filtered"], result["sync_result"], mod_scheme, snr_db, f"{mod_scheme.name}"
         )
         if fig:
             filename = f"pipeline_{mod_scheme.name}_snr{int(snr_db):+d}dB.png"

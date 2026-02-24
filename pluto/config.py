@@ -35,13 +35,14 @@ SYNC_CONFIG = SynchronizerConfig()
 PILOT_CONFIG = PilotConfig()
 COSTAS_CONFIG = CostasConfig()
 
+
 @dataclass
 class PipelineConfig:
     """Toggle individual pipeline stages on/off for testing."""
 
     pulse_shaping: bool = True
     pilots: bool = True
-    costas_loop: bool = False # Not yet implemented correctly! Cannot be used!!!
+    costas_loop: bool = False  # Not yet implemented correctly! Cannot be used!!!
     channel_coding: bool = True
     interleaving: bool = True
     cfo_correction: bool = True
@@ -51,7 +52,6 @@ class PipelineConfig:
         if self.pilots and self.costas_loop:
             msg = "Pilots and Costas loop are mutually exclusive"
             raise ValueError(msg)
-
 
 
 PIPELINE = PipelineConfig()

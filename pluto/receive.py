@@ -12,16 +12,27 @@ from dataclasses import dataclass
 import numpy as np
 
 from modules.channel_coding import CodeRates, LDPCConfig, ldpc_get_supported_payload_lengths
+from modules.costas_loop import CostasConfig, apply_costas_loop
 from modules.equalization import equalize_payload
 from modules.frame_constructor import FrameConstructor, FrameHeader
 from modules.modulation import BPSK, estimate_noise_variance
 from modules.pilots import PilotConfig, data_indices, n_total_symbols, pilot_aided_phase_track, pilot_indices
-from modules.costas_loop import CostasConfig, apply_costas_loop
 from modules.pulse_shaping import rrc_filter
 from modules.synchronization import SynchronizationResult, Synchronizer
 from modules.util import bits_to_bytes, bits_to_text
 from pluto import SDRReceiver
-from pluto.config import COSTAS_CONFIG, PILOT_CONFIG, PIPELINE, PipelineConfig, RRC_ALPHA, RRC_NUM_TAPS, SAMPLE_RATE, SPS, SYNC_CONFIG, get_modulator
+from pluto.config import (
+    COSTAS_CONFIG,
+    PILOT_CONFIG,
+    PIPELINE,
+    RRC_ALPHA,
+    RRC_NUM_TAPS,
+    SAMPLE_RATE,
+    SPS,
+    SYNC_CONFIG,
+    PipelineConfig,
+    get_modulator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +100,11 @@ class FrameDecoder:
 
         # ── Decode header ────────────────────────────────────────────
         header_symbols = symbols[: self.header_n_symbols]
-        
+
         # ── Apply costas phase correction (only implemented for BPSK at the moment)──
         if self.pipeline.costas_loop:
             header_symbols, _ = apply_costas_loop(symbols=header_symbols, config=COSTAS_CONFIG)
-        
+
         header_hard = self.bpsk.symbols2bits(header_symbols).flatten()
         try:
             header = self.fc.decode_header(header_hard)
@@ -138,7 +149,7 @@ class FrameDecoder:
 
         # ── Apply costas phase correction ─────────────────────────────
         # Apply here when implemented for QPSK as well and then remove from header above
-        
+
         # ── Amplitude normalization (from known-power BPSK header) ────
         if len(symbols) >= self.header_n_symbols:
             header_power = np.mean(np.abs(symbols[: self.header_n_symbols]) ** 2)
@@ -177,8 +188,14 @@ class FrameDecoder:
             payload_symbols = equalize_payload(payload_symbols, n_data, self.pilot_config, sigma_sq, p_idx=p_idx)
 
             # ── Pilot-aided phase tracking (returns data-only symbols) ─
-            payload_symbols = pilot_aided_phase_track(payload_symbols, n_data, self.pilot_config, p_idx=p_idx, d_idx=d_idx)
-        
+            payload_symbols = pilot_aided_phase_track(
+                payload_symbols,
+                n_data,
+                self.pilot_config,
+                p_idx=p_idx,
+                d_idx=d_idx,
+            )
+
         # ── Re-estimate noise variance from equalized payload symbols ─
         sigma_sq = estimate_noise_variance(payload_symbols, modulator.symbol_mapping)
 
@@ -346,7 +363,15 @@ def create_decoder(pipeline: PipelineConfig | None = None) -> tuple[FrameDecoder
     h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS) if pipeline.pulse_shaping else None
     sync = Synchronizer(SYNC_CONFIG, sps=effective_sps, rrc_taps=h_rrc)
     fc = FrameConstructor()
-    decoder = FrameDecoder(sync, fc, sample_rate=SAMPLE_RATE, sps=effective_sps, pilot_config=PILOT_CONFIG, costas_config=COSTAS_CONFIG, pipeline=pipeline)
+    decoder = FrameDecoder(
+        sync,
+        fc,
+        sample_rate=SAMPLE_RATE,
+        sps=effective_sps,
+        pilot_config=PILOT_CONFIG,
+        costas_config=COSTAS_CONFIG,
+        pipeline=pipeline,
+    )
     return decoder, h_rrc
 
 
@@ -357,7 +382,12 @@ if __name__ == "__main__":
     from pluto.config import CENTER_FREQ, RX_BUFFER_SIZE
 
     parser = argparse.ArgumentParser(description="Receive frames from PlutoSDR")
-    parser.add_argument("--cfo-offset", type=int, default=0, help="CFO offset in Hz to add to RX LO (compensate for TX oscillator drift)")
+    parser.add_argument(
+        "--cfo-offset",
+        type=int,
+        default=0,
+        help="CFO offset in Hz to add to RX LO (compensate for TX oscillator drift)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")

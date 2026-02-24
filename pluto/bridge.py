@@ -122,6 +122,7 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
     # Pre-warm LDPC cache for all supported payload sizes to avoid 100-400ms JIT delays
     logger.info("TX: warming LDPC cache...")
     from modules.channel_coding import ldpc_get_supported_payload_lengths
+
     for k in ldpc_get_supported_payload_lengths(CODING_RATE):
         # Build a dummy frame to trigger cache population
         dummy_bits = np.zeros(int(k) - 16, dtype=np.uint8)  # -16 for CRC
@@ -164,6 +165,7 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
     # Pre-warm LDPC decode cache
     logger.info("RX: warming LDPC cache...")
     from modules.channel_coding import ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths, LDPCConfig
+
     for k in ldpc_get_supported_payload_lengths(CODING_RATE):
         config = LDPCConfig(k=int(k), code_rate=CODING_RATE)
         dummy_msg = np.zeros(int(k), dtype=int)
@@ -198,7 +200,9 @@ def main() -> None:
     parser.add_argument("--node", choices=["A", "B"], required=True, help="Node identity (A or B)")
     parser.add_argument("--tun", default="pluto0", help="TUN device name (default: pluto0)")
     parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)")
-    parser.add_argument("--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)")
+    parser.add_argument(
+        "--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")

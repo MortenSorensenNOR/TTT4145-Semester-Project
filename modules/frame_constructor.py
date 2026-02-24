@@ -63,15 +63,15 @@ class FrameHeaderConfig:
 
     def __post_init__(self):
         self.header_total_size = (
-            self.payload_length_bits +
-            self.src_bits +
-            self.dst_bits +
-            self.frame_type_bits +
-            self.mod_scheme_bits +
-            self.coding_rate_bits +
-            self.sequence_number_bits +
-            self.reserved_bits +
-            self.crc_bits
+            self.payload_length_bits
+            + self.src_bits
+            + self.dst_bits
+            + self.frame_type_bits
+            + self.mod_scheme_bits
+            + self.coding_rate_bits
+            + self.sequence_number_bits
+            + self.reserved_bits
+            + self.crc_bits
         )
 
 
@@ -93,10 +93,7 @@ def _closest_payload_length(length: int, code_rate: CodeRates) -> int:
 class FrameHeaderConstructor:
     """Encode and decode frame header fields."""
 
-    def __init__(
-        self,
-        config: FrameHeaderConfig
-    ) -> None:
+    def __init__(self, config: FrameHeaderConfig) -> None:
         """Initialize fixed bit widths for each frame header field."""
         self.length_bits = config.payload_length_bits
         self.src_bits = config.src_bits
@@ -116,7 +113,7 @@ class FrameHeaderConstructor:
         padded = data_bits.zfill((len(data_bits) + 7) // 8 * 8)
         crc = 0x00
         for i in range(0, len(padded), 8):
-            byte = int(padded[i:i+8], 2)
+            byte = int(padded[i : i + 8], 2)
             crc ^= byte
             for _ in range(8):
                 if crc & 0x80:
@@ -160,7 +157,7 @@ class FrameHeaderConstructor:
             self.frame_type_bits,
             self.mod_scheme_bits,
             self.coding_rate_bits,
-            self.sequence_number_bits
+            self.sequence_number_bits,
         ]
         fields: list[list[int]] = []
         for width in field_widths:
@@ -168,13 +165,9 @@ class FrameHeaderConstructor:
             fields.append(bits.tolist() if isinstance(bits, np.ndarray) else bits)
             offset += width
 
-        (length_bits, 
-         src_bits, 
-         dst_bits, 
-         frame_type_bits, 
-         mod_scheme_bits, 
-         coding_rate_bits, 
-         sequence_number_bits) = fields
+        (length_bits, src_bits, dst_bits, frame_type_bits, mod_scheme_bits, coding_rate_bits, sequence_number_bits) = (
+            fields
+        )
 
         offset += self.reserved_bits
         crc_field = header[offset : offset + self.crc_bits]
@@ -191,7 +184,8 @@ class FrameHeaderConstructor:
 
         # Verify CRC
         data_str = "".join(
-            str(b) for b in (
+            str(b)
+            for b in (
                 length_bits
                 + src_bits
                 + dst_bits
@@ -279,9 +273,7 @@ class FrameConstructor:
 
         if not channel_coding or header.coding_rate == CodeRates.NONE:
             n = self.payload_coded_n_bits(header, channel_coding=False)
-            payload_encoded = np.concatenate(
-                [payload_with_crc, np.zeros(n - len(payload_with_crc), dtype=int)]
-            )
+            payload_encoded = np.concatenate([payload_with_crc, np.zeros(n - len(payload_with_crc), dtype=int)])
             return (header_encoded, payload_encoded)
 
         k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)

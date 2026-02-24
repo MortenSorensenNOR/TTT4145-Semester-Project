@@ -9,7 +9,7 @@ from pluto.config import CENTER_FREQ, SAMPLE_RATE, RX_BUFFER_SIZE
 def measure_cfo_fft(samples: np.ndarray, sample_rate: float) -> float:
     """Estimate CFO using FFT peak detection."""
     # Use a large FFT for fine resolution
-    n_fft = 2 ** 16
+    n_fft = 2**16
 
     # Window the signal
     window = np.hanning(len(samples))

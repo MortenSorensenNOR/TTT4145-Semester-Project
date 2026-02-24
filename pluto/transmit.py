@@ -35,7 +35,7 @@ _h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
 def max_payload_bits(coding_rate: CodeRates = CODING_RATE) -> int:
     """Maximum number of payload bits for the given coding rate."""
     if not PIPELINE.channel_coding:
-        return (2**10 - 1)  # header length field limit
+        return 2**10 - 1  # header length field limit
     max_k = int(max(ldpc_get_supported_payload_lengths(coding_rate)))
     return max_k - FrameConstructor.PAYLOAD_CRC_BITS
 

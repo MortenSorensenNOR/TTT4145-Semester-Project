@@ -162,9 +162,9 @@ class TestComponentTiming:
 
         # Test representative configs for each block size
         test_configs = [
-            (324, CodeRates.HALF_RATE),         # n=648
-            (648, CodeRates.HALF_RATE),         # n=1296
-            (972, CodeRates.HALF_RATE),         # n=1944
+            (324, CodeRates.HALF_RATE),  # n=648
+            (648, CodeRates.HALF_RATE),  # n=1296
+            (972, CodeRates.HALF_RATE),  # n=1944
         ]
 
         # Clear cache to measure cold performance
@@ -207,9 +207,7 @@ class TestComponentTiming:
 
         # Now time different iteration counts
         for max_iter in [10, 25, 50]:
-            elapsed_ms, _ = time_function(
-                ldpc_decode, noise_llrs, config, max_iterations=max_iter, iterations=5
-            )
+            elapsed_ms, _ = time_function(ldpc_decode, noise_llrs, config, max_iterations=max_iter, iterations=5)
             report.add(f"max_iter={max_iter}", elapsed_ms)
 
         report.print(sort_by_duration=False)
@@ -239,9 +237,7 @@ class TestComponentTiming:
         # Time synchronization for different signal lengths
         for length_factor in [1, 2, 4]:
             test_signal = np.tile(filtered, length_factor)
-            elapsed_ms, _ = time_function(
-                synchronizer.detect_preamble, test_signal, sample_rate, iterations=3
-            )
+            elapsed_ms, _ = time_function(synchronizer.detect_preamble, test_signal, sample_rate, iterations=3)
             report.add(f"signal_len={len(test_signal)}", elapsed_ms)
 
         report.print()
@@ -254,9 +250,7 @@ class TestComponentTiming:
 
         for n_symbols in [100, 500, 1000, 2000]:
             symbols = rng.standard_normal(n_symbols) + 1j * rng.standard_normal(n_symbols)
-            elapsed_ms, _ = time_function(
-                upsample_and_filter, symbols, sps, rrc_taps, iterations=10
-            )
+            elapsed_ms, _ = time_function(upsample_and_filter, symbols, sps, rrc_taps, iterations=10)
             report.add(f"{n_symbols} symbols", elapsed_ms)
 
         report.print(sort_by_duration=False)
@@ -267,9 +261,7 @@ class TestComponentTiming:
 
         for n_samples in [1000, 5000, 10000, 20000]:
             rx_signal = rng.standard_normal(n_samples) + 1j * rng.standard_normal(n_samples)
-            elapsed_ms, _ = time_function(
-                signal.convolve, rx_signal, rrc_taps, mode="same", iterations=10
-            )
+            elapsed_ms, _ = time_function(signal.convolve, rx_signal, rrc_taps, mode="same", iterations=10)
             report.add(f"{n_samples} samples", elapsed_ms)
 
         report.print(sort_by_duration=False)
@@ -304,9 +296,7 @@ class TestComponentTiming:
             noisy = symbols + rng.normal(0, 0.1, len(symbols)) * (1 + 1j)
 
             # Time soft decoding
-            elapsed_ms, _ = time_function(
-                mod.symbols2bits_soft, noisy, sigma_sq=0.1, iterations=100
-            )
+            elapsed_ms, _ = time_function(mod.symbols2bits_soft, noisy, sigma_sq=0.1, iterations=100)
             report.add(f"{name} soft decode", elapsed_ms)
 
         report.print()
@@ -369,9 +359,7 @@ class TestComponentTiming:
         data_symbols = rng.standard_normal(n_data) + 1j * rng.standard_normal(n_data)
 
         # Time pilot insertion
-        elapsed_ms, symbols_with_pilots = time_function(
-            insert_pilots, data_symbols, pilot_config, iterations=100
-        )
+        elapsed_ms, symbols_with_pilots = time_function(insert_pilots, data_symbols, pilot_config, iterations=100)
         report.add("insert_pilots", elapsed_ms)
 
         # Add phase rotation for phase tracking test
@@ -379,9 +367,7 @@ class TestComponentTiming:
         rotated = symbols_with_pilots * np.exp(1j * phase)
 
         # Time phase tracking
-        elapsed_ms, _ = time_function(
-            pilot_aided_phase_track, rotated, n_data, pilot_config, iterations=100
-        )
+        elapsed_ms, _ = time_function(pilot_aided_phase_track, rotated, n_data, pilot_config, iterations=100)
         report.add("pilot_aided_phase_track", elapsed_ms)
 
         report.print()
@@ -396,13 +382,9 @@ class TestComponentTiming:
 
         # Simulate channel distortion
         h = 0.8 + 0.2j  # Simple flat fading
-        distorted = symbols_with_pilots * h + rng.normal(0, 0.1, len(symbols_with_pilots)) * (
-            1 + 1j
-        )
+        distorted = symbols_with_pilots * h + rng.normal(0, 0.1, len(symbols_with_pilots)) * (1 + 1j)
 
-        elapsed_ms, _ = time_function(
-            equalize_payload, distorted, n_data, pilot_config, sigma_sq=0.01, iterations=100
-        )
+        elapsed_ms, _ = time_function(equalize_payload, distorted, n_data, pilot_config, sigma_sq=0.01, iterations=100)
         report.add(f"equalize_payload (n_data={n_data})", elapsed_ms)
 
         report.print()
@@ -666,23 +648,17 @@ class TestScalingBehavior:
 
         # High SNR LLRs - will converge in few iterations
         good_llrs = (2 * codeword.astype(np.float64) - 1) * 10  # Very clean
-        elapsed_ms, _ = time_function(
-            ldpc_decode, good_llrs, config, max_iterations=50, iterations=10
-        )
+        elapsed_ms, _ = time_function(ldpc_decode, good_llrs, config, max_iterations=50, iterations=10)
         report.add("High SNR (converges early)", elapsed_ms)
 
         # Medium SNR LLRs - may converge
         medium_llrs = (2 * codeword.astype(np.float64) - 1) * 2 + rng.normal(0, 1, config.n)
-        elapsed_ms, _ = time_function(
-            ldpc_decode, medium_llrs, config, max_iterations=50, iterations=10
-        )
+        elapsed_ms, _ = time_function(ldpc_decode, medium_llrs, config, max_iterations=50, iterations=10)
         report.add("Medium SNR (may converge)", elapsed_ms)
 
         # Pure noise - will NOT converge, runs all 50 iterations
         noise_llrs = rng.normal(0, 1, config.n)
-        elapsed_ms, _ = time_function(
-            ldpc_decode, noise_llrs, config, max_iterations=50, iterations=10
-        )
+        elapsed_ms, _ = time_function(ldpc_decode, noise_llrs, config, max_iterations=50, iterations=10)
         report.add("Pure noise (forced 50 iter)", elapsed_ms)
 
         report.print(sort_by_duration=False)
@@ -706,9 +682,7 @@ class TestScalingBehavior:
         noise_llrs = rng.normal(0, 1, config.n)
 
         for max_iter in [10, 25, 50, 100]:
-            elapsed_ms, _ = time_function(
-                ldpc_decode, noise_llrs, config, max_iterations=max_iter, iterations=5
-            )
+            elapsed_ms, _ = time_function(ldpc_decode, noise_llrs, config, max_iterations=max_iter, iterations=5)
             report.add(f"max_iter={max_iter}", elapsed_ms)
 
         report.print(sort_by_duration=False)
@@ -729,15 +703,15 @@ class TestScalingBehavior:
         # Test all three block sizes with multiple code rates
         test_configs = [
             # n=648 (small block)
-            (324, CodeRates.HALF_RATE),         # k=324, n=648, r=1/2
-            (540, CodeRates.FIVE_SIXTH_RATE),   # k=540, n=648, r=5/6
+            (324, CodeRates.HALF_RATE),  # k=324, n=648, r=1/2
+            (540, CodeRates.FIVE_SIXTH_RATE),  # k=540, n=648, r=5/6
             # n=1296 (medium block)
-            (648, CodeRates.HALF_RATE),         # k=648, n=1296, r=1/2
-            (972, CodeRates.THREE_QUARTER_RATE),# k=972, n=1296, r=3/4
+            (648, CodeRates.HALF_RATE),  # k=648, n=1296, r=1/2
+            (972, CodeRates.THREE_QUARTER_RATE),  # k=972, n=1296, r=3/4
             # n=1944 (large block)
-            (972, CodeRates.HALF_RATE),         # k=972, n=1944, r=1/2
+            (972, CodeRates.HALF_RATE),  # k=972, n=1944, r=1/2
             (1296, CodeRates.TWO_THIRDS_RATE),  # k=1296, n=1944, r=2/3
-            (1458, CodeRates.THREE_QUARTER_RATE),# k=1458, n=1944, r=3/4
+            (1458, CodeRates.THREE_QUARTER_RATE),  # k=1458, n=1944, r=3/4
         ]
 
         for k, code_rate in test_configs:
@@ -745,9 +719,7 @@ class TestScalingBehavior:
             # Pure noise - forces full iterations
             noise_llrs = rng.normal(0, 1, config.n)
 
-            elapsed_ms, _ = time_function(
-                ldpc_decode, noise_llrs, config, max_iterations=50, iterations=3
-            )
+            elapsed_ms, _ = time_function(ldpc_decode, noise_llrs, config, max_iterations=50, iterations=3)
             rate_str = code_rate.name.replace("_RATE", "").replace("_", "/").lower()
             report.add(f"k={k:4d} n={config.n} r={rate_str}", elapsed_ms)
 
@@ -761,15 +733,11 @@ class TestScalingBehavior:
             rx_signal = rng.standard_normal(n_samples) + 1j * rng.standard_normal(n_samples)
 
             # Direct convolution (scipy default for small signals)
-            elapsed_direct, _ = time_function(
-                signal.convolve, rx_signal, rrc_taps, mode="same", iterations=5
-            )
+            elapsed_direct, _ = time_function(signal.convolve, rx_signal, rrc_taps, mode="same", iterations=5)
             report.add(f"n={n_samples} (direct)", elapsed_direct)
 
             # FFT convolution
-            elapsed_fft, _ = time_function(
-                signal.fftconvolve, rx_signal, rrc_taps, mode="same", iterations=5
-            )
+            elapsed_fft, _ = time_function(signal.fftconvolve, rx_signal, rrc_taps, mode="same", iterations=5)
             report.add(f"n={n_samples} (fft)", elapsed_fft)
 
         report.print(sort_by_duration=False)
@@ -794,9 +762,7 @@ class TestScalingBehavior:
 
         for multiplier in [1, 2, 4, 8]:
             test_signal = np.tile(filtered_base, multiplier)
-            elapsed_ms, _ = time_function(
-                synchronizer.detect_preamble, test_signal, sample_rate, iterations=3
-            )
+            elapsed_ms, _ = time_function(synchronizer.detect_preamble, test_signal, sample_rate, iterations=3)
             report.add(f"len={len(test_signal)}", elapsed_ms)
 
         report.print(sort_by_duration=False)

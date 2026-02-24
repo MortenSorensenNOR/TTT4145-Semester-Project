@@ -61,7 +61,7 @@ def main():
 
     if len(rx_bits) != len(tx_bits):
         print(f"Length mismatch: TX={len(tx_bits)}, RX={len(rx_bits)}")
-        rx_bits = rx_bits[:len(tx_bits)]
+        rx_bits = rx_bits[: len(tx_bits)]
 
     errors = np.sum(tx_bits != rx_bits)
     ber = errors / len(tx_bits)
@@ -92,9 +92,9 @@ def main():
     t = np.arange(n_plot) / SPS
 
     ax1 = fig.add_subplot(3, 2, 1)
-    ax1.plot(t, np.real(tx_baseband[:n_plot]), 'b-', linewidth=0.8, label="TX")
-    ax1.plot(t, np.real(rx_baseband[:n_plot]), 'r-', linewidth=0.8, alpha=0.7, label="RX")
-    ax1.plot(np.arange(0, n_plot, SPS) / SPS, np.real(tx_symbols_norm[:n_plot//SPS]), 'bo', markersize=4)
+    ax1.plot(t, np.real(tx_baseband[:n_plot]), "b-", linewidth=0.8, label="TX")
+    ax1.plot(t, np.real(rx_baseband[:n_plot]), "r-", linewidth=0.8, alpha=0.7, label="RX")
+    ax1.plot(np.arange(0, n_plot, SPS) / SPS, np.real(tx_symbols_norm[: n_plot // SPS]), "bo", markersize=4)
     ax1.set_title("In-Phase (I) Component")
     ax1.set_xlabel("Symbol")
     ax1.set_ylabel("Amplitude")
@@ -102,9 +102,9 @@ def main():
     ax1.grid(True, alpha=0.3)
 
     ax2 = fig.add_subplot(3, 2, 2)
-    ax2.plot(t, np.imag(tx_baseband[:n_plot]), 'b-', linewidth=0.8, label="TX")
-    ax2.plot(t, np.imag(rx_baseband[:n_plot]), 'r-', linewidth=0.8, alpha=0.7, label="RX")
-    ax2.plot(np.arange(0, n_plot, SPS) / SPS, np.imag(tx_symbols_norm[:n_plot//SPS]), 'bo', markersize=4)
+    ax2.plot(t, np.imag(tx_baseband[:n_plot]), "b-", linewidth=0.8, label="TX")
+    ax2.plot(t, np.imag(rx_baseband[:n_plot]), "r-", linewidth=0.8, alpha=0.7, label="RX")
+    ax2.plot(np.arange(0, n_plot, SPS) / SPS, np.imag(tx_symbols_norm[: n_plot // SPS]), "bo", markersize=4)
     ax2.set_title("Quadrature (Q) Component")
     ax2.set_xlabel("Symbol")
     ax2.set_ylabel("Amplitude")
@@ -120,8 +120,8 @@ def main():
     for i in range(n_eye_symbols):
         start = i * SPS
         if start + eye_len <= len(rx_baseband):
-            ax3.plot(t_eye, np.real(rx_baseband[start:start + eye_len]), 'b-', alpha=0.1, linewidth=0.5)
-    ax3.axvline(0, color='r', linestyle='--', alpha=0.5)
+            ax3.plot(t_eye, np.real(rx_baseband[start : start + eye_len]), "b-", alpha=0.1, linewidth=0.5)
+    ax3.axvline(0, color="r", linestyle="--", alpha=0.5)
     ax3.set_title("Eye Diagram - In-Phase (I)")
     ax3.set_xlabel("Symbol Period")
     ax3.set_ylabel("Amplitude")
@@ -132,8 +132,8 @@ def main():
     for i in range(n_eye_symbols):
         start = i * SPS
         if start + eye_len <= len(rx_baseband):
-            ax4.plot(t_eye, np.imag(rx_baseband[start:start + eye_len]), 'b-', alpha=0.1, linewidth=0.5)
-    ax4.axvline(0, color='r', linestyle='--', alpha=0.5)
+            ax4.plot(t_eye, np.imag(rx_baseband[start : start + eye_len]), "b-", alpha=0.1, linewidth=0.5)
+    ax4.axvline(0, color="r", linestyle="--", alpha=0.5)
     ax4.set_title("Eye Diagram - Quadrature (Q)")
     ax4.set_xlabel("Symbol Period")
     ax4.set_ylabel("Amplitude")

@@ -18,8 +18,10 @@ def rrc_filter(sps: int, alpha: float, num_taps: int = 101) -> np.ndarray:
     if alpha > 0:
         special_val = 1 / (4 * alpha)
         special_mask = np.abs(np.abs(t) - special_val) < RRC_SPECIAL_POINT_TOLERANCE
-        special_case = alpha / np.sqrt(2) * (
-            (1 + 2 / np.pi) * np.sin(np.pi / (4 * alpha)) + (1 - 2 / np.pi) * np.cos(np.pi / (4 * alpha))
+        special_case = (
+            alpha
+            / np.sqrt(2)
+            * ((1 + 2 / np.pi) * np.sin(np.pi / (4 * alpha)) + (1 - 2 / np.pi) * np.cos(np.pi / (4 * alpha)))
         )
     else:
         special_mask = np.zeros_like(t, dtype=bool)

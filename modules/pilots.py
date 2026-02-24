@@ -43,7 +43,7 @@ def insert_pilots(data_symbols: np.ndarray, config: PilotConfig) -> np.ndarray:
         dst += 1
         block_end = min(src + config.spacing, n_data)
         block_len = block_end - src
-        out[dst : dst + block_len] = data_symbols[src : block_end]
+        out[dst : dst + block_len] = data_symbols[src:block_end]
         src = block_end
         dst += block_len
 

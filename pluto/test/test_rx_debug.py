@@ -51,11 +51,11 @@ def main():
 
             if len(filtered) >= short_len:
                 # Correlate with short ZC
-                corr = np.abs(np.correlate(filtered[:short_len * 4], np.repeat(short_zc, SPS), mode="valid"))
+                corr = np.abs(np.correlate(filtered[: short_len * 4], np.repeat(short_zc, SPS), mode="valid"))
                 max_corr = np.max(corr) if len(corr) > 0 else 0
 
                 # Normalize
-                sig_power = np.mean(np.abs(filtered[:short_len * 4]) ** 2)
+                sig_power = np.mean(np.abs(filtered[: short_len * 4]) ** 2)
                 ref_power = np.mean(np.abs(np.repeat(short_zc, SPS)) ** 2)
                 norm_corr = max_corr / (np.sqrt(sig_power * ref_power) * len(short_zc) * SPS + 1e-12)
 

@@ -85,8 +85,8 @@ def plot_sync_result(result: dict, title: str):
     cfo_est = result["cfo_estimated"]
     cfo_inj = result["cfo_injected"]
     n = np.arange(min(5000, len(rx)))
-    phase_uncorrected = np.angle(rx[:len(n)])
-    phase_corrected = np.angle(rx[:len(n)] * np.exp(-1j * 2 * np.pi * cfo_est / SAMPLE_RATE * n))
+    phase_uncorrected = np.angle(rx[: len(n)])
+    phase_corrected = np.angle(rx[: len(n)] * np.exp(-1j * 2 * np.pi * cfo_est / SAMPLE_RATE * n))
     ax.plot(np.unwrap(phase_uncorrected), label="Before CFO correction", alpha=0.7)
     ax.plot(np.unwrap(phase_corrected), label="After CFO correction", alpha=0.7)
     ax.set_title(f"Phase (injected={cfo_inj:+.0f} Hz, estimated={cfo_est:+.0f} Hz)")
@@ -105,7 +105,7 @@ def test_with_cfo_offset(tx_lo: int, rx_lo: int, h_rrc: np.ndarray, sync: Synchr
     sdr = setup_pluto(freq_hz=tx_lo)
     sdr.rx_lo = int(rx_lo)
 
-    print(f"\nTX_LO={tx_lo/1e6:.3f} MHz, RX_LO={rx_lo/1e6:.3f} MHz")
+    print(f"\nTX_LO={tx_lo / 1e6:.3f} MHz, RX_LO={rx_lo / 1e6:.3f} MHz")
     print(f"Injected CFO: {injected_cfo:+d} Hz")
 
     result = run_sync_test(sdr, h_rrc, sync, injected_cfo)
@@ -135,7 +135,7 @@ def main():
 
     for i, offset in enumerate(cfo_offsets):
         print(f"\n{'=' * 60}")
-        print(f"TEST {i+1}: CFO = {offset:+d} Hz")
+        print(f"TEST {i + 1}: CFO = {offset:+d} Hz")
         print("=" * 60)
         result = test_with_cfo_offset(CENTER_FREQ, CENTER_FREQ - offset, h_rrc, sync)
         label = f"{offset:+d} Hz" if offset != 0 else "Baseline"

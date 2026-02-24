@@ -17,10 +17,11 @@ from modules.modulation import BPSK, Modulator, QPSK
 
 logger = logging.getLogger(__name__)
 
+
 def _calculate_loop_parameters(
-    loop_noise_bandwidth_normalized: float = 0.01, # Normalized to symbol rate
-    damping_factor: float = 0.707, # zeta 1/sqrt(2)
-    initial_freq_offset_rad_per_symbol: float = 0.0
+    loop_noise_bandwidth_normalized: float = 0.01,  # Normalized to symbol rate
+    damping_factor: float = 0.707,  # zeta 1/sqrt(2)
+    initial_freq_offset_rad_per_symbol: float = 0.0,
 ) -> tuple[float, float]:
 
     wn_normalized = loop_noise_bandwidth_normalized / (damping_factor + 1 / (4 * damping_factor))
@@ -33,11 +34,15 @@ def _calculate_loop_parameters(
 @dataclass(frozen=True)
 class CostasConfig:
     """Configuration for Costas loop phase estimation."""
-    loop_noise_bandwidth_normalized: float = 0.01 # Normalized to symbol rate
-    damping_factor: float = 0.707 # zeta 1/sqrt(2)
+
+    loop_noise_bandwidth_normalized: float = 0.01  # Normalized to symbol rate
+    damping_factor: float = 0.707  # zeta 1/sqrt(2)
     initial_freq_offset_rad_per_symbol: float = 0.0
 
-    alpha, beta = _calculate_loop_parameters(loop_noise_bandwidth_normalized, damping_factor, initial_freq_offset_rad_per_symbol)
+    alpha, beta = _calculate_loop_parameters(
+        loop_noise_bandwidth_normalized, damping_factor, initial_freq_offset_rad_per_symbol
+    )
+
 
 def _costas_loop_iteration(
     current_symbol: complex,
@@ -67,12 +72,11 @@ def _costas_loop_iteration(
 
     # 2. Make a hard decision (slice) on the corrected symbol
 
-    
-    #decision = modulator.symbol_mapping[np.argmin(np.abs(corrected_sym - modulator.symbol_mapping))]
-    #logger.debug(f"Costas Iteration: decision = {decision}")
+    # decision = modulator.symbol_mapping[np.argmin(np.abs(corrected_sym - modulator.symbol_mapping))]
+    # logger.debug(f"Costas Iteration: decision = {decision}")
 
     # 3. Calculate the phase error (unified for BPSK/QPSK)
-    error = np.imag(corrected_sym)*np.sign(np.real(corrected_sym))
+    error = np.imag(corrected_sym) * np.sign(np.real(corrected_sym))
 
     # 4. Update the loop filter (PI controller)
     integrator += beta * error
@@ -86,10 +90,7 @@ def _costas_loop_iteration(
 
 
 def apply_costas_loop(
-    symbols: np.ndarray,
-    config: CostasConfig,
-    current_phase_estimate: float = 0,
-    current_frequency_offset: float = 0
+    symbols: np.ndarray, config: CostasConfig, current_phase_estimate: float = 0, current_frequency_offset: float = 0
 ) -> tuple[np.ndarray, np.ndarray]:
     """Apply a second-order Costas loop to correct carrier phase offset.
 
@@ -122,7 +123,7 @@ def apply_costas_loop(
     # These formulas are derived for a second-order, type-II digital PLL
     # (PI loop filter)
     n = len(symbols)
-    phase_estimate = current_phase_estimate # Initial phase estimate
+    phase_estimate = current_phase_estimate  # Initial phase estimate
     integrator = current_frequency_offset  # Initialize integrator with frequency offset guess
     corrected_symbols = np.zeros(n, dtype=complex)
     phase_estimates = np.zeros(n, dtype=float)
@@ -158,18 +159,15 @@ if __name__ == "__main__":
     # Apply a constant phase offset
     # The actual phase that the loop should converge to is initial_phase_offset_rad
 
-    input_symbols = base_symbols * np.exp(1j * (initial_phase_offset_rad+phase_noise))
-    
+    input_symbols = base_symbols * np.exp(1j * (initial_phase_offset_rad + phase_noise))
+
     # Apply Costas loop
-    corrected_symbols, phase_estimates = apply_costas_loop(
-        symbols=input_symbols,
-        config=costas_config
-    )
+    corrected_symbols, phase_estimates = apply_costas_loop(symbols=input_symbols, config=costas_config)
 
     # Plotting
     plt.figure(figsize=(10, 6))
     plt.plot(np.degrees(phase_estimates), label="Estimated Phase (degrees)")
-    plt.plot(np.degrees(initial_phase_offset_rad+phase_noise), label="Actual phase")
+    plt.plot(np.degrees(initial_phase_offset_rad + phase_noise), label="Actual phase")
     plt.axhline(
         np.degrees(initial_phase_offset_rad),
         color="r",
@@ -187,7 +185,7 @@ if __name__ == "__main__":
     final_phase_error = np.degrees(initial_phase_offset_rad - phase_estimates[-1])
     print(f"Final estimated phase: {np.degrees(phase_estimates[-1]):.2f} degrees")
     print(f"Final phase error: {final_phase_error:.2f} degrees")
-    if abs(final_phase_error) < 5: # Arbitrary small tolerance for this demo
+    if abs(final_phase_error) < 5:  # Arbitrary small tolerance for this demo
         print("Costas loop successfully tracked the phase.")
     else:
         print("Costas loop did NOT successfully track the phase (or locked to an ambiguity).")
