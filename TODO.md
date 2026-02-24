@@ -51,7 +51,7 @@ Already available (patched firmware):
 Still needed:
 - [ ] `scipy` for FFT/convolution (or reimplement with NumPy)
 - [ ] `pyldpc` compiled for ARM (or alternative LDPC library)
-- [ ] Native IIO bindings (libiio Python bindings or direct sysfs access)
+- [x] Native IIO bindings (libiio Python bindings or direct sysfs access)
 
 ## Files to Modify/Create
 
