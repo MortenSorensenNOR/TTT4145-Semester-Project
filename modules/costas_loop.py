@@ -103,16 +103,10 @@ def apply_costas_loop(
 
     Args:
         symbols: The input array of complex-valued symbols.
-<<<<<<< HEAD
-        config: The Costas loop configuration containing loop filter gains.
-        current_phase_estimate: Initial phase estimate in radians.
-        current_frequency_offset: Initial frequency offset used to seed
-            the loop filter integrator.
-=======
+
         config: CostasConfig object with loop parameters.
         current_phase_estimate: Initial phase estimate in radians.
         current_frequency_offset: Initial frequency offset in radians per symbol.
->>>>>>> bc9a695 (removed function call in costas to decrease runtime)
 
     Returns:
         A tuple containing:
@@ -132,11 +126,7 @@ def apply_costas_loop(
     alpha, beta = config.alpha, config.beta
 
     for i, sym in enumerate(symbols):
-<<<<<<< HEAD
-        corrected_sym, phase_estimate, integrator = _costas_loop_iteration(
-            sym, phase_estimate, integrator, config.alpha, config.beta,
-        )
-=======
+
         # 1. Correct phase of the current symbol
         corrected_sym = sym * np.exp(-1j * phase_estimate)
 
@@ -153,7 +143,6 @@ def apply_costas_loop(
         # 5. Wrap phase estimate to -pi to pi for consistent plotting and analysis
         phase_estimate = (phase_estimate + np.pi) % (2 * np.pi) - np.pi
         
->>>>>>> bc9a695 (removed function call in costas to decrease runtime)
         corrected_symbols[i] = corrected_sym
         phase_estimates[i] = phase_estimate
 
