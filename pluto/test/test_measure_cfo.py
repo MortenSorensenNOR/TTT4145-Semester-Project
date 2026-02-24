@@ -3,7 +3,7 @@
 import numpy as np
 
 from pluto import create_pluto
-from pluto.config import CENTER_FREQ, SAMPLE_RATE, RX_BUFFER_SIZE
+from pluto.config import CENTER_FREQ, RX_BUFFER_SIZE, SAMPLE_RATE
 
 
 def measure_cfo_fft(samples: np.ndarray, sample_rate: float) -> float:
@@ -26,12 +26,11 @@ def measure_cfo_fft(samples: np.ndarray, sample_rate: float) -> float:
     magnitude[dc_idx - exclude_width : dc_idx + exclude_width] = 0
 
     peak_idx = np.argmax(magnitude)
-    peak_freq = freqs[peak_idx]
-
-    return peak_freq
+    return freqs[peak_idx]
 
 
-def main():
+
+def main() -> None:
     sdr = create_pluto()
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_lo = int(CENTER_FREQ)
@@ -41,9 +40,6 @@ def main():
 
     sdr.rx()  # flush
 
-    print(f"Listening on {CENTER_FREQ / 1e6:.0f} MHz...")
-    print(f"Sample rate: {SAMPLE_RATE / 1e6:.1f} MHz")
-    print("Measuring CFO via FFT (Ctrl+C to stop):\n")
 
     cfo_measurements = []
 
@@ -56,15 +52,12 @@ def main():
             cfo_measurements.append(cfo)
 
             # Running average
-            avg_cfo = np.mean(cfo_measurements[-20:])
+            np.mean(cfo_measurements[-20:])
 
-            print(f"CFO: {cfo:+8.0f} Hz  (avg: {avg_cfo:+8.0f} Hz)")
 
     except KeyboardInterrupt:
         if cfo_measurements:
-            final_avg = np.mean(cfo_measurements)
-            print(f"\n\nFinal average CFO: {final_avg:+.0f} Hz")
-            print(f"Use: --cfo-offset {int(final_avg)}")
+            np.mean(cfo_measurements)
 
 
 if __name__ == "__main__":

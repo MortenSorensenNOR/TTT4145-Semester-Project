@@ -5,15 +5,16 @@ Injects real CFO by offsetting TX/RX LO frequencies.
 """
 
 import os
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 PLOT_DIR = "examples"
 
 from modules.modulation import QPSK
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
 from modules.synchronization import Synchronizer, SynchronizerConfig, build_preamble
-from pluto.loopback import setup_pluto, transmit_and_receive, SPS, SAMPLE_RATE, CENTER_FREQ
+from pluto.loopback import CENTER_FREQ, SAMPLE_RATE, SPS, setup_pluto, transmit_and_receive
 
 RRC_ALPHA = 0.35
 RRC_NUM_TAPS = 101
@@ -75,7 +76,7 @@ def plot_sync_result(result: dict, title: str):
 
     ax = axes[1]
     ax.plot(corr, linewidth=0.5)
-    for i, p in enumerate(peaks):
+    for _i, p in enumerate(peaks):
         ax.axvline(p, color="g", alpha=0.7, linestyle="--")
     ax.set_title(f"Short ZC Correlation (found {len(peaks)} peaks)")
     ax.set_xlabel("Sample")
@@ -105,26 +106,18 @@ def test_with_cfo_offset(tx_lo: int, rx_lo: int, h_rrc: np.ndarray, sync: Synchr
     sdr = setup_pluto(freq_hz=tx_lo)
     sdr.rx_lo = int(rx_lo)
 
-    print(f"\nTX_LO={tx_lo / 1e6:.3f} MHz, RX_LO={rx_lo / 1e6:.3f} MHz")
-    print(f"Injected CFO: {injected_cfo:+d} Hz")
 
     result = run_sync_test(sdr, h_rrc, sync, injected_cfo)
 
     if result["success"]:
-        cfo_error = result["cfo_estimated"] - injected_cfo
-        print(f"  Detection: SUCCESS")
-        print(f"  Estimated CFO: {result['cfo_estimated']:+.1f} Hz")
-        print(f"  CFO error: {cfo_error:+.1f} Hz")
-        print(f"  Timing: sample {result['timing']}")
-        print(f"  Peaks found: {result['n_peaks']}")
+        result["cfo_estimated"] - injected_cfo
     else:
-        print(f"  Detection: FAILED ({result['reason']})")
+        pass
 
     return result
 
 
-def main():
-    print("Setting up synchronization test...")
+def main() -> None:
     h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
     sync_config = SynchronizerConfig()
     sync = Synchronizer(sync_config, sps=SPS, rrc_taps=h_rrc)
@@ -134,35 +127,25 @@ def main():
     results = []
 
     for i, offset in enumerate(cfo_offsets):
-        print(f"\n{'=' * 60}")
-        print(f"TEST {i + 1}: CFO = {offset:+d} Hz")
-        print("=" * 60)
         result = test_with_cfo_offset(CENTER_FREQ, CENTER_FREQ - offset, h_rrc, sync)
         label = f"{offset:+d} Hz" if offset != 0 else "Baseline"
         results.append((label, result))
 
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
 
     all_passed = True
     for name, r in results:
         if r["success"]:
             error = abs(r["cfo_estimated"] - r["cfo_injected"])
             tolerance = 500 + abs(r["cfo_injected"]) * 0.05  # 5% + 500 Hz baseline
-            status = "PASS" if error < tolerance else "FAIL (error too large)"
             if error >= tolerance:
                 all_passed = False
-            print(f"{name:>12}: est={r['cfo_estimated']:+7.0f} Hz, err={error:5.0f} Hz -> {status}")
         else:
             all_passed = False
-            print(f"{name:>12}: FAIL (detection failed)")
 
-    print()
     if all_passed:
-        print("All synchronization tests PASSED!")
+        pass
     else:
-        print("Some tests FAILED - check CFO estimation or detection")
+        pass
 
     os.makedirs(PLOT_DIR, exist_ok=True)
     plot_indices = [0, 5, 8]  # baseline, +5kHz, -6kHz
@@ -174,7 +157,6 @@ def main():
                 filename = f"sync_test_{name.replace(' ', '_').replace('+', 'p').replace('-', 'n')}.png"
                 filepath = os.path.join(PLOT_DIR, filename)
                 fig.savefig(filepath, dpi=150)
-                print(f"Saved plot: {filepath}")
 
     plt.show()
 

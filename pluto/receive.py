@@ -244,10 +244,7 @@ class FrameDecoder:
             raw = (2**10 - 1) + FrameConstructor.PAYLOAD_CRC_BITS
             max_data_symbols = raw + (-raw % 12)
 
-        if self.pipeline.pilots:
-            max_payload = n_total_symbols(max_data_symbols, self.pilot_config)
-        else:
-            max_payload = max_data_symbols
+        max_payload = n_total_symbols(max_data_symbols, self.pilot_config) if self.pipeline.pilots else max_data_symbols
         return (max_preamble + max_header + max_payload) * self.sps
 
     def _payload_n_symbols(self, header: FrameHeader) -> int | None:

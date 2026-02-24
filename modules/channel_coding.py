@@ -39,6 +39,7 @@ class CodeRates(Enum):
 
         Returns:
             The code rate as a float (e.g., 0.5 for HALF_RATE, 0.833... for FIVE_SIXTH_RATE).
+
         """
         num, denom = self.rate_fraction
         return num / denom

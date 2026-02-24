@@ -9,11 +9,12 @@ The implementation is specifically designed for QPSK modulation but can be
 extended to other M-PSK schemes.
 """
 
-from dataclasses import dataclass
-import numpy as np
 import logging
+from dataclasses import dataclass
 
-from modules.modulation import BPSK, Modulator, QPSK
+import numpy as np
+
+from modules.modulation import BPSK
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class CostasConfig:
     initial_freq_offset_rad_per_symbol: float = 0.0
 
     alpha, beta = _calculate_loop_parameters(
-        loop_noise_bandwidth_normalized, damping_factor, initial_freq_offset_rad_per_symbol
+        loop_noise_bandwidth_normalized, damping_factor, initial_freq_offset_rad_per_symbol,
     )
 
 
@@ -66,6 +67,7 @@ def _costas_loop_iteration(
         - corrected_symbol: The phase-corrected symbol.
         - new_phase_estimate: The updated phase estimate.
         - new_integrator: The updated integrator state.
+
     """
     # 1. Correct phase of the current symbol
     corrected_sym = current_symbol * np.exp(-1j * phase_estimate)
@@ -90,7 +92,7 @@ def _costas_loop_iteration(
 
 
 def apply_costas_loop(
-    symbols: np.ndarray, config: CostasConfig, current_phase_estimate: float = 0, current_frequency_offset: float = 0
+    symbols: np.ndarray, config: CostasConfig, current_phase_estimate: float = 0, current_frequency_offset: float = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Apply a second-order Costas loop to correct carrier phase offset.
 
@@ -118,6 +120,7 @@ def apply_costas_loop(
         A tuple containing:
         - corrected_symbols: An array of phase-corrected complex-valued symbols.
         - phase_estimates: The history of the phase estimate at each symbol.
+
     """
     # Calculate alpha and beta from loop_noise_bandwidth_normalized and damping_factor
     # These formulas are derived for a second-order, type-II digital PLL
@@ -130,7 +133,7 @@ def apply_costas_loop(
 
     for i, sym in enumerate(symbols):
         corrected_sym, phase_estimate, integrator = _costas_loop_iteration(
-            sym, phase_estimate, integrator, config.alpha, config.beta
+            sym, phase_estimate, integrator, config.alpha, config.beta,
         )
         corrected_symbols[i] = corrected_sym
         phase_estimates[i] = phase_estimate
@@ -149,7 +152,6 @@ if __name__ == "__main__":
     costas_config = CostasConfig()
     modulator = BPSK()
 
-    print(f"Running Costas loop phase tracking test...")
 
     # Generate test symbols
     bits = np.random.randint(0, 2, size=num_symbols * modulator.bits_per_symbol)
@@ -183,9 +185,7 @@ if __name__ == "__main__":
 
     # Verify if it converged
     final_phase_error = np.degrees(initial_phase_offset_rad - phase_estimates[-1])
-    print(f"Final estimated phase: {np.degrees(phase_estimates[-1]):.2f} degrees")
-    print(f"Final phase error: {final_phase_error:.2f} degrees")
     if abs(final_phase_error) < 5:  # Arbitrary small tolerance for this demo
-        print("Costas loop successfully tracked the phase.")
+        pass
     else:
-        print("Costas loop did NOT successfully track the phase (or locked to an ambiguity).")
+        pass

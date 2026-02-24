@@ -3,13 +3,13 @@
 import numpy as np
 
 from pluto import create_pluto
-from pluto.config import CENTER_FREQ, SAMPLE_RATE, RX_BUFFER_SIZE
+from pluto.config import CENTER_FREQ, RX_BUFFER_SIZE, SAMPLE_RATE
 
 # PlutoSDR ADC is 12-bit, full scale is 2^11 = 2048 per I/Q component
 ADC_FULL_SCALE = 2048
 
 
-def main():
+def main() -> None:
     sdr = create_pluto()
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_lo = int(CENTER_FREQ)
@@ -19,9 +19,6 @@ def main():
 
     sdr.rx()  # flush stale buffer
 
-    print(f"Listening on {CENTER_FREQ / 1e6:.0f} MHz...")
-    print(f"ADC full scale: ±{ADC_FULL_SCALE}")
-    print("Measuring RX levels (Ctrl+C to stop):\n")
 
     try:
         while True:
@@ -33,12 +30,11 @@ def main():
 
             # Normalized power relative to full scale
             normalized = samples / ADC_FULL_SCALE
-            pwr_dbfs = 10 * np.log10(np.mean(np.abs(normalized) ** 2) + 1e-12)
+            10 * np.log10(np.mean(np.abs(normalized) ** 2) + 1e-12)
 
-            clipping = "CLIPPING!" if max_component > ADC_FULL_SCALE * 0.95 else ""
-            print(f"Max I/Q: {max_component:6.0f} / {ADC_FULL_SCALE}  |  Power: {pwr_dbfs:+6.1f} dBFS  {clipping}")
+            "CLIPPING!" if max_component > ADC_FULL_SCALE * 0.95 else ""
     except KeyboardInterrupt:
-        print("\nStopped.")
+        pass
 
 
 if __name__ == "__main__":

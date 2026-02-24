@@ -2,21 +2,21 @@
 
 import numpy as np
 
+from modules.pulse_shaping import rrc_filter
+from modules.synchronization import Synchronizer
 from pluto import create_pluto
 from pluto.config import (
     CENTER_FREQ,
-    SAMPLE_RATE,
-    RX_BUFFER_SIZE,
-    SYNC_CONFIG,
-    SPS,
     RRC_ALPHA,
     RRC_NUM_TAPS,
+    RX_BUFFER_SIZE,
+    SAMPLE_RATE,
+    SPS,
+    SYNC_CONFIG,
 )
-from modules.pulse_shaping import rrc_filter
-from modules.synchronization import Synchronizer
 
 
-def main():
+def main() -> None:
     # Setup SDR
     sdr = create_pluto()
     sdr.sample_rate = int(SAMPLE_RATE)
@@ -31,9 +31,6 @@ def main():
 
     sdr.rx()  # flush
 
-    print(f"Listening on {CENTER_FREQ / 1e6:.0f} MHz...")
-    print(f"Preamble correlation threshold: {sync.config.peak_threshold}")
-    print("Checking for preambles (Ctrl+C to stop):\n")
 
     try:
         while True:
@@ -57,16 +54,13 @@ def main():
                 # Normalize
                 sig_power = np.mean(np.abs(filtered[: short_len * 4]) ** 2)
                 ref_power = np.mean(np.abs(np.repeat(short_zc, SPS)) ** 2)
-                norm_corr = max_corr / (np.sqrt(sig_power * ref_power) * len(short_zc) * SPS + 1e-12)
+                max_corr / (np.sqrt(sig_power * ref_power) * len(short_zc) * SPS + 1e-12)
 
-                status = "DETECTED!" if result.success else ""
-                print(f"Max correlation: {norm_corr:.4f} (threshold: {sync.config.peak_threshold})  {status}")
 
                 if result.success:
-                    print(f"  -> CFO estimate: {result.cfo_hat_hz:+.1f} Hz")
-                    print(f"  -> Long ZC start: {result.long_zc_start}")
+                    pass
     except KeyboardInterrupt:
-        print("\nStopped.")
+        pass
 
 
 if __name__ == "__main__":

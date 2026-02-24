@@ -5,14 +5,15 @@ Plots received vs ideal constellations and computes EVM.
 """
 
 import os
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 PLOT_DIR = "examples"
 
-from modules.modulation import BPSK, QPSK, QAM
+from modules.modulation import BPSK, QAM, QPSK
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
-from pluto.loopback import setup_pluto, transmit_and_receive, SPS, SAMPLE_RATE
+from pluto.loopback import SPS, setup_pluto, transmit_and_receive
 
 RRC_ALPHA = 0.35
 RRC_NUM_TAPS = 101
@@ -66,17 +67,14 @@ def test_constellation(modulator, name: str, h_rrc: np.ndarray, sdr) -> tuple[np
 
     phase_offset = estimate_phase_offset(rx_symbols, tx_symbols_norm)
     rx_symbols = rx_symbols * np.exp(-1j * phase_offset)
-    print(f"{name}: phase offset = {np.degrees(phase_offset):.1f}°")
 
     constellation = modulator.symbol_mapping / np.sqrt(np.mean(np.abs(modulator.symbol_mapping) ** 2))
     evm = compute_evm(rx_symbols, constellation)
 
-    print(f"{name}: EVM = {evm:.2f}%")
     return rx_symbols, evm
 
 
-def main():
-    print("Setting up PlutoSDR for loopback test...")
+def main() -> None:
     sdr = setup_pluto()
     h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
 
@@ -86,9 +84,9 @@ def main():
         (QAM(16), "QAM16"),
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    _fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
-    for ax, (modulator, name) in zip(axes, modulators):
+    for ax, (modulator, name) in zip(axes, modulators, strict=False):
         rx_symbols, evm = test_constellation(modulator, name, h_rrc, sdr)
 
         constellation = modulator.symbol_mapping / np.sqrt(np.mean(np.abs(modulator.symbol_mapping) ** 2))
@@ -107,7 +105,6 @@ def main():
     plt.tight_layout()
     filepath = os.path.join(PLOT_DIR, "constellation_test.png")
     plt.savefig(filepath, dpi=150)
-    print(f"Saved plot to {filepath}")
     plt.show()
 
 

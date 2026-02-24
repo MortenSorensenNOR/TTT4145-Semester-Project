@@ -5,14 +5,15 @@ Uses QPSK modulation with RRC pulse shaping.
 """
 
 import os
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 PLOT_DIR = "examples"
 
 from modules.modulation import QPSK
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
-from pluto.loopback import setup_pluto, transmit_and_receive, SPS
+from pluto.loopback import SPS, setup_pluto, transmit_and_receive
 
 RRC_ALPHA = 0.35
 RRC_NUM_TAPS = 101
@@ -24,8 +25,7 @@ def estimate_phase_offset(rx_symbols: np.ndarray, tx_symbols: np.ndarray) -> flo
     return np.angle(np.sum(rx_symbols * np.conj(tx_symbols)))
 
 
-def main():
-    print("Setting up PlutoSDR for data roundtrip test...")
+def main() -> None:
     sdr = setup_pluto()
     h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
     qpsk = QPSK()
@@ -39,7 +39,6 @@ def main():
     frame = np.concatenate([guard, tx_symbols, guard])
     tx_signal = upsample_and_filter(frame, SPS, h_rrc)
 
-    print(f"Transmitting {N_BITS} bits ({n_symbols} QPSK symbols)...")
     rx_raw = transmit_and_receive(sdr, tx_signal, rx_delay_ms=50, n_captures=3)
     rx_filtered = np.convolve(rx_raw, h_rrc, mode="same")
 
@@ -55,31 +54,23 @@ def main():
 
     phase_offset = estimate_phase_offset(rx_symbols_raw, tx_symbols_norm)
     rx_symbols = rx_symbols_raw * np.exp(-1j * phase_offset)
-    print(f"Phase offset: {np.degrees(phase_offset):.1f}°")
 
     rx_bits = qpsk.symbols2bits(rx_symbols).flatten()
 
     if len(rx_bits) != len(tx_bits):
-        print(f"Length mismatch: TX={len(tx_bits)}, RX={len(rx_bits)}")
         rx_bits = rx_bits[: len(tx_bits)]
 
     errors = np.sum(tx_bits != rx_bits)
     ber = errors / len(tx_bits)
 
-    print(f"TX bits: {len(tx_bits)}")
-    print(f"RX bits: {len(rx_bits)}")
-    print(f"Bit errors: {errors}")
-    print(f"BER: {ber:.6f}")
 
-    if ber == 0:
-        print("SUCCESS: All bits recovered correctly!")
-    elif ber < 0.01:
-        print("GOOD: BER < 1% (minor errors)")
+    if ber == 0 or ber < 0.01:
+        pass
     else:
-        print("WARNING: High BER detected")
+        pass
 
     # Align TX signal for comparison (need to account for filtering delay)
-    filter_delay = (RRC_NUM_TAPS - 1) // 2
+    (RRC_NUM_TAPS - 1) // 2
     tx_baseband = upsample_and_filter(tx_symbols_norm, SPS, h_rrc)
     rx_baseband = rx_filtered[offset : offset + len(tx_baseband)]
     rx_baseband = rx_baseband / np.sqrt(np.mean(np.abs(rx_baseband) ** 2))
@@ -166,7 +157,6 @@ def main():
     plt.tight_layout()
     filepath = os.path.join(PLOT_DIR, "data_roundtrip_test.png")
     plt.savefig(filepath, dpi=150)
-    print(f"Saved plot: {filepath}")
     plt.show()
 
 

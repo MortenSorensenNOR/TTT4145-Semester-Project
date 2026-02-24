@@ -164,7 +164,7 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
 
     # Pre-warm LDPC decode cache
     logger.info("RX: warming LDPC cache...")
-    from modules.channel_coding import ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths, LDPCConfig
+    from modules.channel_coding import LDPCConfig, ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths
 
     for k in ldpc_get_supported_payload_lengths(CODING_RATE):
         config = LDPCConfig(k=int(k), code_rate=CODING_RATE)
@@ -174,7 +174,7 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
         ldpc_decode(llr, config, max_iterations=1)
     logger.info("RX: LDPC cache ready")
 
-    def on_frame(result):
+    def on_frame(result) -> None:
         data = result.payload_bytes
         # Validate minimum IP packet: 20+ bytes, version nibble is 4 (IPv4) or 6 (IPv6)
         if len(data) < 20:
@@ -201,7 +201,7 @@ def main() -> None:
     parser.add_argument("--tun", default="pluto0", help="TUN device name (default: pluto0)")
     parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)")
     parser.add_argument(
-        "--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)"
+        "--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)",
     )
     args = parser.parse_args()
 

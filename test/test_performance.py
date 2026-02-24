@@ -1,5 +1,4 @@
-"""
-Performance timing tests for identifying bottlenecks in the radio communication pipeline.
+"""Performance timing tests for identifying bottlenecks in the radio communication pipeline.
 
 Run all performance tests:
     uv run pytest test/test_performance.py -v -s
@@ -12,9 +11,9 @@ Run single test:
 """
 
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Generator
 
 import numpy as np
 import pytest
@@ -25,20 +24,19 @@ from modules.channel_coding import (
     CodeRates,
     Golay,
     LDPCConfig,
+    _decode_cache,
+    _encoding_cache,
+    _h_cache,
     ldpc_clear_cache,
     ldpc_decode,
     ldpc_encode,
-    _h_cache,
-    _encoding_cache,
-    _decode_cache,
 )
 from modules.costas_loop import apply_costas_loop
 from modules.equalization import equalize_payload
-from modules.modulation import BPSK, QPSK, QAM
+from modules.modulation import BPSK, QAM, QPSK
 from modules.pilots import PilotConfig, insert_pilots, pilot_aided_phase_track
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
-from modules.synchronization import Synchronizer, SynchronizerConfig, build_preamble
-
+from modules.synchronization import Synchronizer, SynchronizerConfig
 
 # ============================================================================
 # Timing Infrastructure
@@ -70,7 +68,6 @@ class TimingReport:
     def print(self, sort_by_duration: bool = True) -> None:
         """Print timing report with percentage bars."""
         if not self.entries:
-            print(f"\n{self.title}: No timing entries")
             return
 
         total = self.total_ms
@@ -78,27 +75,18 @@ class TimingReport:
         if sort_by_duration:
             entries = sorted(entries, key=lambda e: e.duration_ms, reverse=True)
 
-        width = 70
         name_width = 40
-        print()
-        print("=" * width)
-        print(self.title)
-        print("=" * width)
 
         for entry in entries:
             pct = (entry.duration_ms / total * 100) if total > 0 else 0
             bar_len = int(pct / 100 * 25)
-            bar = "#" * bar_len
-            name = entry.name[:name_width].ljust(name_width)
-            print(f"{name} {entry.duration_ms:8.3f} ms ({pct:5.1f}%) {bar}")
+            "#" * bar_len
+            entry.name[:name_width].ljust(name_width)
 
-        print("-" * width)
-        print(f"{'TOTAL'.ljust(name_width)} {total:8.3f} ms (100.0%)")
-        print("=" * width)
 
 
 @contextmanager
-def timed_section(report: TimingReport, name: str) -> Generator[None, None, None]:
+def timed_section(report: TimingReport, name: str) -> Generator[None]:
     """Context manager for timing a code section and adding to report."""
     start = time.perf_counter()
     try:
@@ -155,7 +143,7 @@ def pilot_config():
 class TestComponentTiming:
     """Time individual components in isolation."""
 
-    def test_ldpc_encode_timing(self, rng):
+    def test_ldpc_encode_timing(self, rng) -> None:
         """Time LDPC encoding: cold cache (first call) vs warm cache (subsequent)."""
         cold_report = TimingReport("LDPC ENCODE TIMING - COLD CACHE (matrix construction)")
         warm_report = TimingReport("LDPC ENCODE TIMING - WARM CACHE (encoding only)")
@@ -185,9 +173,8 @@ class TestComponentTiming:
 
         cold_report.print(sort_by_duration=False)
         warm_report.print(sort_by_duration=False)
-        print("\nNote: Cold cache includes G/H matrix construction (one-time cost).")
 
-    def test_ldpc_decode_timing(self, rng):
+    def test_ldpc_decode_timing(self, rng) -> None:
         """Time LDPC decoding with JIT warmup.
 
         Uses pure noise LLRs to prevent early convergence, ensuring
@@ -212,7 +199,7 @@ class TestComponentTiming:
 
         report.print(sort_by_duration=False)
 
-    def test_synchronization_timing(self, synchronizer, rrc_taps, rng):
+    def test_synchronization_timing(self, synchronizer, rrc_taps, rng) -> None:
         """Time preamble detection."""
         report = TimingReport("SYNCHRONIZATION TIMING")
 
@@ -242,7 +229,7 @@ class TestComponentTiming:
 
         report.print()
 
-    def test_pulse_shaping_timing(self, rrc_taps, rng):
+    def test_pulse_shaping_timing(self, rrc_taps, rng) -> None:
         """Time pulse shaping for different symbol counts."""
         report = TimingReport("PULSE SHAPING TIMING")
 
@@ -255,7 +242,7 @@ class TestComponentTiming:
 
         report.print(sort_by_duration=False)
 
-    def test_matched_filter_timing(self, rrc_taps, rng):
+    def test_matched_filter_timing(self, rrc_taps, rng) -> None:
         """Time matched filtering for different signal lengths."""
         report = TimingReport("MATCHED FILTER TIMING")
 
@@ -270,7 +257,7 @@ class TestComponentTiming:
     # Tier 2: Medium Priority
     # ========================================================================
 
-    def test_modulation_timing(self, rng):
+    def test_modulation_timing(self, rng) -> None:
         """Time modulation/demodulation for different schemes."""
         report = TimingReport("MODULATION TIMING")
 
@@ -301,7 +288,7 @@ class TestComponentTiming:
 
         report.print()
 
-    def test_channel_model_timing(self, rng):
+    def test_channel_model_timing(self, rng) -> None:
         """Time channel model with different impairments."""
         report = TimingReport("CHANNEL MODEL TIMING")
 
@@ -351,7 +338,7 @@ class TestComponentTiming:
     # Tier 3: Lower Priority (usually fast)
     # ========================================================================
 
-    def test_pilot_operations_timing(self, pilot_config, rng):
+    def test_pilot_operations_timing(self, pilot_config, rng) -> None:
         """Time pilot insertion and phase tracking."""
         report = TimingReport("PILOT OPERATIONS TIMING")
 
@@ -372,7 +359,7 @@ class TestComponentTiming:
 
         report.print()
 
-    def test_equalization_timing(self, pilot_config, rng):
+    def test_equalization_timing(self, pilot_config, rng) -> None:
         """Time channel equalization."""
         report = TimingReport("EQUALIZATION TIMING")
 
@@ -389,7 +376,7 @@ class TestComponentTiming:
 
         report.print()
 
-    def test_costas_loop_timing(self, rng):
+    def test_costas_loop_timing(self, rng) -> None:
         """Time Costas loop phase tracking."""
         report = TimingReport("COSTAS LOOP TIMING")
 
@@ -408,7 +395,7 @@ class TestComponentTiming:
 
         report.print(sort_by_duration=False)
 
-    def test_golay_timing(self, rng):
+    def test_golay_timing(self, rng) -> None:
         """Time Golay encoding/decoding."""
         report = TimingReport("GOLAY (24,12) TIMING")
 
@@ -443,7 +430,7 @@ class TestComponentTiming:
 class TestPipelineTiming:
     """Time complete TX/RX flows."""
 
-    def test_full_tx_pipeline(self, rng, rrc_taps, pilot_config):
+    def test_full_tx_pipeline(self, rng, rrc_taps, pilot_config) -> None:
         """Time step-by-step TX breakdown."""
         report = TimingReport("TX PIPELINE TIMING BREAKDOWN")
 
@@ -470,12 +457,11 @@ class TestPipelineTiming:
 
         # Step 4: Pulse shaping
         with timed_section(report, "Pulse shaping (upsample + RRC)"):
-            tx_signal = upsample_and_filter(symbols_with_pilots, sps, rrc_taps)
+            upsample_and_filter(symbols_with_pilots, sps, rrc_taps)
 
         report.print()
-        print(f"Output signal length: {len(tx_signal)} samples")
 
-    def test_full_rx_pipeline(self, rng, rrc_taps, pilot_config, synchronizer):
+    def test_full_rx_pipeline(self, rng, rrc_taps, pilot_config, synchronizer) -> None:
         """Time step-by-step RX breakdown (mirrors pluto/receive.py)."""
         report = TimingReport("RX PIPELINE TIMING BREAKDOWN")
 
@@ -520,7 +506,7 @@ class TestPipelineTiming:
             sync_result = synchronizer.detect_preamble(filtered, sample_rate)
 
         if not sync_result.success:
-            print("WARNING: Synchronization failed, timing may be inaccurate")
+            pass
 
         # Step 3: CFO correction
         with timed_section(report, "CFO correction"):
@@ -558,11 +544,11 @@ class TestPipelineTiming:
             llrs_flat = llrs.flatten()
             if len(llrs_flat) < ldpc_config.n:
                 llrs_flat = np.pad(llrs_flat, (0, ldpc_config.n - len(llrs_flat)))
-            decoded = ldpc_decode(llrs_flat[: ldpc_config.n], ldpc_config, max_iterations=50)
+            ldpc_decode(llrs_flat[: ldpc_config.n], ldpc_config, max_iterations=50)
 
         report.print()
 
-    def test_tx_vs_rx_comparison(self, rng, rrc_taps, pilot_config, synchronizer):
+    def test_tx_vs_rx_comparison(self, rng, rrc_taps, pilot_config, synchronizer) -> None:
         """Compare TX and RX timing to show asymmetry."""
         k = 324
         ldpc_config = LDPCConfig(k=k, code_rate=CodeRates.HALF_RATE)
@@ -584,7 +570,7 @@ class TestPipelineTiming:
         preamble = synchronizer.preamble
         full_frame = np.concatenate([preamble, symbols_with_pilots])
         tx_signal = upsample_and_filter(full_frame, sps, rrc_taps)
-        tx_time_ms = (time.perf_counter() - tx_start) * 1000
+        (time.perf_counter() - tx_start) * 1000
 
         # Apply channel
         channel = ChannelModel(ChannelConfig(snr_db=15.0, cfo_hz=50.0, seed=42))
@@ -608,17 +594,9 @@ class TestPipelineTiming:
         llrs_flat = llrs.flatten()
         if len(llrs_flat) < ldpc_config.n:
             llrs_flat = np.pad(llrs_flat, (0, ldpc_config.n - len(llrs_flat)))
-        decoded = ldpc_decode(llrs_flat[: ldpc_config.n], ldpc_config, max_iterations=50)
-        rx_time_ms = (time.perf_counter() - rx_start) * 1000
+        ldpc_decode(llrs_flat[: ldpc_config.n], ldpc_config, max_iterations=50)
+        (time.perf_counter() - rx_start) * 1000
 
-        print()
-        print("=" * 50)
-        print("TX vs RX TIMING COMPARISON")
-        print("=" * 50)
-        print(f"TX pipeline:  {tx_time_ms:8.3f} ms")
-        print(f"RX pipeline:  {rx_time_ms:8.3f} ms")
-        print(f"RX/TX ratio:  {rx_time_ms / tx_time_ms:8.2f}x")
-        print("=" * 50)
 
 
 # ============================================================================
@@ -629,7 +607,7 @@ class TestPipelineTiming:
 class TestScalingBehavior:
     """Test how timing scales with input parameters."""
 
-    def test_ldpc_decode_early_vs_forced(self, rng):
+    def test_ldpc_decode_early_vs_forced(self, rng) -> None:
         """Compare LDPC decode time: early convergence vs forced full iterations.
 
         This test demonstrates why we must use noise-only LLRs for accurate
@@ -662,9 +640,8 @@ class TestScalingBehavior:
         report.add("Pure noise (forced 50 iter)", elapsed_ms)
 
         report.print(sort_by_duration=False)
-        print("\nNote: 'Pure noise' timing represents worst-case (max iterations).")
 
-    def test_ldpc_decode_scaling(self, rng):
+    def test_ldpc_decode_scaling(self, rng) -> None:
         """Time LDPC decode vs iteration count.
 
         Uses pure noise LLRs to force full iterations (no early convergence).
@@ -687,7 +664,7 @@ class TestScalingBehavior:
 
         report.print(sort_by_duration=False)
 
-    def test_ldpc_decode_payload_scaling(self, rng):
+    def test_ldpc_decode_payload_scaling(self, rng) -> None:
         """Time LDPC decode vs payload size and code rate.
 
         Uses pure noise LLRs to force full iterations.
@@ -725,7 +702,7 @@ class TestScalingBehavior:
 
         report.print(sort_by_duration=False)
 
-    def test_fft_convolution_scaling(self, rrc_taps, rng):
+    def test_fft_convolution_scaling(self, rrc_taps, rng) -> None:
         """Compare direct vs FFT convolution scaling."""
         report = TimingReport("CONVOLUTION SCALING (direct vs FFT)")
 
@@ -742,7 +719,7 @@ class TestScalingBehavior:
 
         report.print(sort_by_duration=False)
 
-    def test_synchronizer_signal_length_scaling(self, synchronizer, rrc_taps, rng):
+    def test_synchronizer_signal_length_scaling(self, synchronizer, rrc_taps, rng) -> None:
         """Time synchronization vs signal length."""
         report = TimingReport("SYNCHRONIZATION SCALING (signal length)")
 
@@ -776,14 +753,14 @@ class TestScalingBehavior:
 class TestMemoryUsage:
     """Measure memory usage of cached structures."""
 
-    def test_ldpc_cache_memory(self, rng):
+    def test_ldpc_cache_memory(self, rng) -> None:
         """Measure memory used by LDPC encoder/decoder caches."""
 
         def get_array_memory(arr) -> int:
             """Get memory in bytes for numpy array or sparse matrix."""
             if hasattr(arr, "nbytes"):
                 return arr.nbytes
-            elif hasattr(arr, "data"):  # sparse matrix
+            if hasattr(arr, "data"):  # sparse matrix
                 return arr.data.nbytes + arr.indices.nbytes + arr.indptr.nbytes
             return 0
 
@@ -791,10 +768,9 @@ class TestMemoryUsage:
             """Format bytes as human-readable string."""
             if b < 1024:
                 return f"{b} B"
-            elif b < 1024 * 1024:
+            if b < 1024 * 1024:
                 return f"{b / 1024:.1f} KB"
-            else:
-                return f"{b / (1024 * 1024):.2f} MB"
+            return f"{b / (1024 * 1024):.2f} MB"
 
         # Clear caches first
         ldpc_clear_cache()
@@ -818,10 +794,6 @@ class TestMemoryUsage:
             (1620, CodeRates.FIVE_SIXTH_RATE),
         ]
 
-        print()
-        print("=" * 70)
-        print("LDPC CACHE MEMORY USAGE")
-        print("=" * 70)
 
         total_h = 0
         total_encoding = 0
@@ -832,7 +804,7 @@ class TestMemoryUsage:
             message = rng.integers(0, 2, size=k).astype(np.int8)
 
             # Trigger cache population
-            codeword = ldpc_encode(message, config)
+            ldpc_encode(message, config)
             noise_llrs = rng.normal(0, 1, config.n)
             _ = ldpc_decode(noise_llrs, config, max_iterations=5)
 
@@ -856,25 +828,12 @@ class TestMemoryUsage:
                         dec_mem += get_array_memory(item)
             total_decode += dec_mem
 
-            rate_str = code_rate.name.replace("_RATE", "").replace("_", "/").lower()
-            config_total = h_mem + enc_mem + dec_mem
-            print(f"\nConfig: k={k}, n={config.n}, rate={rate_str}")
-            print(f"  H matrix:       {format_bytes(h_mem):>10}")
-            print(f"  Encoding (G,H): {format_bytes(enc_mem):>10}")
-            print(f"  Decode structs: {format_bytes(dec_mem):>10}")
-            print(f"  Config total:   {format_bytes(config_total):>10}")
+            code_rate.name.replace("_RATE", "").replace("_", "/").lower()
+            h_mem + enc_mem + dec_mem
 
-        grand_total = total_h + total_encoding + total_decode
-        print()
-        print("-" * 70)
-        print(f"ALL H MATRICES:     {format_bytes(total_h):>10}")
-        print(f"ALL ENCODING:       {format_bytes(total_encoding):>10}")
-        print(f"ALL DECODE:         {format_bytes(total_decode):>10}")
-        print(f"GRAND TOTAL:        {format_bytes(grand_total):>10}")
-        print("=" * 70)
+        total_h + total_encoding + total_decode
 
         # Cache size counts
-        print(f"\nCache entries: H={len(_h_cache)}, encoding={len(_encoding_cache)}, decode={len(_decode_cache)}")
 
 
 # ============================================================================
@@ -885,7 +844,7 @@ class TestMemoryUsage:
 class TestPerformanceSummary:
     """Generate a summary of all component timings."""
 
-    def test_all_components_summary(self, rng, rrc_taps, pilot_config, synchronizer):
+    def test_all_components_summary(self, rng, rrc_taps, pilot_config, synchronizer) -> None:
         """Quick summary of all major components."""
         report = TimingReport("ALL COMPONENTS SUMMARY (single run)")
 

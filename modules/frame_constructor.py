@@ -116,10 +116,7 @@ class FrameHeaderConstructor:
             byte = int(padded[i : i + 8], 2)
             crc ^= byte
             for _ in range(8):
-                if crc & 0x80:
-                    crc = ((crc << 1) ^ 0x07) & 0xFF
-                else:
-                    crc = (crc << 1) & 0xFF
+                crc = (crc << 1 ^ 7) & 255 if crc & 128 else crc << 1 & 255
         return crc
 
     def encode(self, header: FrameHeader) -> np.ndarray:
@@ -312,10 +309,7 @@ class FrameConstructor:
     ) -> np.ndarray:
         """Decode an LDPC-encoded payload using parameters from a decoded header."""
         if not channel_coding or header.coding_rate == CodeRates.NONE:
-            if soft:
-                payload_bits = (payload_encoded < 0).astype(int)
-            else:
-                payload_bits = payload_encoded.astype(int)
+            payload_bits = (payload_encoded < 0).astype(int) if soft else payload_encoded.astype(int)
             data_bits = payload_bits[: header.length]
             crc_bits = payload_bits[header.length : header.length + self.PAYLOAD_CRC_BITS]
             received_crc = _bits_to_int(crc_bits.astype(int).tolist())

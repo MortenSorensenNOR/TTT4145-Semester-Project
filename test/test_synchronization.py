@@ -15,9 +15,9 @@ from modules.channel import (
     ChannelConfig,
     ChannelModel,
 )
+from modules.costas_loop import CostasConfig, _costas_loop_iteration, apply_costas_loop
+from modules.modulation import BPSK, QPSK, Modulator
 from modules.synchronization import Synchronizer, SynchronizerConfig, generate_zadoff_chu
-from modules.modulation import Modulator, BPSK, QPSK
-from modules.costas_loop import apply_costas_loop, _costas_loop_iteration, CostasConfig
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)  # Moved here for pytest debug output
@@ -198,7 +198,7 @@ def _simulate_costas_signal(
     symbol_energy = np.mean(np.abs(base_symbols) ** 2)
     noise_power = symbol_energy / (10 ** (snr_db / 10))
     noise = rng.normal(0, np.sqrt(noise_power / 2), num_symbols) + 1j * rng.normal(
-        0, np.sqrt(noise_power / 2), num_symbols
+        0, np.sqrt(noise_power / 2), num_symbols,
     )
     noisy_symbols = phase_and_freq_shifted_symbols + noise
     return noisy_symbols, base_symbols
@@ -212,7 +212,7 @@ class TestCostasLoop:
         mod = modulator_instance
         initial_phase = np.pi / 4  # 45 degrees offset
         noisy_symbols, base_symbols = _simulate_costas_signal(
-            mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=100.0, seed=42, cfo_hz=0.0
+            mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=100.0, seed=42, cfo_hz=0.0,
         )
         costas_config = CostasConfig(
             loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
@@ -241,7 +241,7 @@ class TestCostasLoop:
 
         if final_phase_error >= MAX_PHASE_ERROR_RAD:
             pytest.fail(
-                f"Final phase error too large for {modulator_instance.__class__.__name__}: {final_phase_error:.3f} rad"
+                f"Final phase error too large for {modulator_instance.__class__.__name__}: {final_phase_error:.3f} rad",
             )
 
     @pytest.mark.parametrize("initial_phase", [np.pi / 8, np.pi / 3, 2 * np.pi / 3, 5 * np.pi / 6])
@@ -251,7 +251,7 @@ class TestCostasLoop:
         # Use a slightly longer sequence to ensure enough time for locking
         num_symbols = TEST_SYMBOLS_LEN * 2
         noisy_symbols, base_symbols = _simulate_costas_signal(
-            mod, num_symbols, initial_phase, snr_db=20.0, seed=123, cfo_hz=0.0
+            mod, num_symbols, initial_phase, snr_db=20.0, seed=123, cfo_hz=0.0,
         )
         costas_config = CostasConfig(
             loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
@@ -263,7 +263,7 @@ class TestCostasLoop:
         # We'll consider the loop locked if the average absolute phase error in the
         # symbols after COSTAS_SETTLING_SYMBOLS is below the tolerance.
         phase_errors = np.angle(
-            corrected_symbols[COSTAS_SETTLING_SYMBOLS:] * np.conj(base_symbols[COSTAS_SETTLING_SYMBOLS:])
+            corrected_symbols[COSTAS_SETTLING_SYMBOLS:] * np.conj(base_symbols[COSTAS_SETTLING_SYMBOLS:]),
         )
 
         # Resolve phase ambiguity before calculating mean error
@@ -278,7 +278,7 @@ class TestCostasLoop:
 
         if mean_abs_phase_error >= MAX_PHASE_ERROR_RAD:
             pytest.fail(
-                f"Costas loop for {modulator_instance.__class__.__name__} failed to lock quickly for initial_phase={initial_phase:.2f} rad (mean phase error: {mean_abs_phase_error:.3f} rad)"
+                f"Costas loop for {modulator_instance.__class__.__name__} failed to lock quickly for initial_phase={initial_phase:.2f} rad (mean phase error: {mean_abs_phase_error:.3f} rad)",
             )
 
     @pytest.mark.parametrize("snr", [15.0, 10.0, 5.0, 0.0])
@@ -287,7 +287,7 @@ class TestCostasLoop:
         mod = modulator_instance
         initial_phase = np.pi / 8  # Small fixed offset
         noisy_symbols, base_symbols = _simulate_costas_signal(
-            mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=snr, seed=456, cfo_hz=0.0
+            mod, TEST_SYMBOLS_LEN, initial_phase, snr_db=snr, seed=456, cfo_hz=0.0,
         )
 
         costas_config = CostasConfig(
@@ -298,7 +298,7 @@ class TestCostasLoop:
 
         # Evaluate performance based on average phase error in the latter half of symbols
         phase_errors = np.angle(
-            corrected_symbols[TEST_SYMBOLS_LEN // 2 :] * np.conj(base_symbols[TEST_SYMBOLS_LEN // 2 :])
+            corrected_symbols[TEST_SYMBOLS_LEN // 2 :] * np.conj(base_symbols[TEST_SYMBOLS_LEN // 2 :]),
         )
 
         # Resolve phase ambiguity before calculating mean error
@@ -316,19 +316,18 @@ class TestCostasLoop:
         if snr >= 10.0:
             if mean_abs_phase_error >= MAX_PHASE_ERROR_RAD:
                 pytest.fail(
-                    f"Costas loop for {mod.__class__.__name__} at {snr=:.1f} dB failed to maintain lock (mean phase error: {mean_abs_phase_error:.3f} rad)"
+                    f"Costas loop for {mod.__class__.__name__} at {snr=:.1f} dB failed to maintain lock (mean phase error: {mean_abs_phase_error:.3f} rad)",
                 )
         elif snr >= 5.0:  # Between 5dB and 10dB, performance might degrade, allow larger error
             if mean_abs_phase_error >= (MAX_PHASE_ERROR_RAD * 2):
                 pytest.fail(
-                    f"Costas loop for {mod.__class__.__name__} at {snr=:.1f} dB showed excessive phase error (mean phase error: {mean_abs_phase_error:.3f} rad)"
+                    f"Costas loop for {mod.__class__.__name__} at {snr=:.1f} dB showed excessive phase error (mean phase error: {mean_abs_phase_error:.3f} rad)",
                 )
-        else:  # Below 5dB, it's expected to struggle more, just ensure it doesn't completely diverge with NaN
-            if np.isnan(mean_abs_phase_error):
-                pytest.fail(f"Costas loop for {mod.__class__.__name__} at {snr=:.1f} dB diverged (NaN phase error)")
+        elif np.isnan(mean_abs_phase_error):
+            pytest.fail(f"Costas loop for {mod.__class__.__name__} at {snr=:.1f} dB diverged (NaN phase error)")
 
     @pytest.mark.parametrize(
-        "snr_db, initial_phase_rad, cfo_hz",
+        ("snr_db", "initial_phase_rad", "cfo_hz"),
         [
             (10.0, np.pi / 8, 0.0),
             (15.0, np.pi / 3, 500.0),
@@ -362,7 +361,7 @@ class TestCostasLoop:
             damping_factor=COSTAS_DAMPING_FACTOR,
             initial_freq_offset_rad_per_symbol=cfo_rad_per_symbol,
         )
-        corrected_symbols, phase_estimates = apply_costas_loop(
+        corrected_symbols, _phase_estimates = apply_costas_loop(
             symbols=noisy_symbols,
             config=costas_config,
         )
@@ -407,7 +406,7 @@ class TestCostasLoop:
 
         if min_ber >= BER_THRESHOLD:
             pytest.fail(
-                f"Bit Error Rate too high for {mod.__class__.__name__} at {snr_db=:.1f} dB: {min_ber:.4f} (threshold: {BER_THRESHOLD:.4f})"
+                f"Bit Error Rate too high for {mod.__class__.__name__} at {snr_db=:.1f} dB: {min_ber:.4f} (threshold: {BER_THRESHOLD:.4f})",
             )
 
 
@@ -440,7 +439,7 @@ def _simulate_and_track_costas_loop(
     symbol_energy = np.mean(np.abs(base_symbols) ** 2)
     noise_power = symbol_energy / (10 ** (snr_db / 10))
     noise = rng.normal(0, np.sqrt(noise_power / 2), num_symbols) + 1j * rng.normal(
-        0, np.sqrt(noise_power / 2), num_symbols
+        0, np.sqrt(noise_power / 2), num_symbols,
     )
     noisy_symbols = phase_shifted_symbols + noise
 
@@ -452,7 +451,7 @@ def _simulate_and_track_costas_loop(
 
     for i, sym in enumerate(noisy_symbols):
         corrected_sym, phase_estimate, integrator = _costas_loop_iteration(
-            sym, phase_estimate, integrator, config.alpha, config.beta
+            sym, phase_estimate, integrator, config.alpha, config.beta,
         )
         corrected_symbols[i] = corrected_sym
         phase_estimates[i] = phase_estimate
@@ -568,14 +567,13 @@ def _run_costas_pipeline(
     modulator: Modulator,
     num_payload_symbols: int = 2000,
 ) -> list[dict[str, object]]:
-    """
-    Run a sweep simulating the full pipeline: ZC sync -> Costas loop.
-    """
+    """Run a sweep simulating the full pipeline: ZC sync -> Costas loop."""
     results: list[dict[str, object]] = []
     rng = np.random.default_rng(42)
     sps = 1  # For simplicity, assuming symbol rate processing after timing recovery
     if sps != 1:
-        raise NotImplementedError("This simulation assumes sps=1 for the Costas loop part.")
+        msg = "This simulation assumes sps=1 for the Costas loop part."
+        raise NotImplementedError(msg)
 
     for cfo in cfo_values:
         for snr in snr_values:
@@ -631,7 +629,7 @@ def _run_costas_pipeline(
                 logger.debug(
                     f"Payload segment too short or invalid for (CFO={cfo}, SNR={snr}). "
                     f"payload_start_idx={payload_start_idx}, payload_end_idx={payload_end_idx}, "
-                    f"len(rx_frame)={len(rx_frame)}"
+                    f"len(rx_frame)={len(rx_frame)}",
                 )
                 results.append(res)
                 continue
@@ -671,8 +669,9 @@ def _run_costas_pipeline(
 
                 # Ensure we have enough symbols to check after lock threshold
                 if len(_corrected_symbols) <= COSTAS_PIPELINE_LOCK_THRESHOLD:
+                    msg = f"Not enough corrected symbols ({len(_corrected_symbols)}) for lock-in check with threshold {COSTAS_PIPELINE_LOCK_THRESHOLD}"
                     raise ValueError(
-                        f"Not enough corrected symbols ({len(_corrected_symbols)}) for lock-in check with threshold {COSTAS_PIPELINE_LOCK_THRESHOLD}"
+                        msg,
                     )
 
                 # The payload_symbols variable refers to the original full payload.
@@ -683,7 +682,7 @@ def _run_costas_pipeline(
                 # Calculate the actual instantaneous phase offset at the input to the Costas loop
                 actual_input_phase_offset = np.angle(rx_payload * np.conj(original_payload_segment))
                 logger.debug(
-                    f"Input phase offset to Costas loop (first 10, degrees): {np.degrees(actual_input_phase_offset[:10])}"
+                    f"Input phase offset to Costas loop (first 10, degrees): {np.degrees(actual_input_phase_offset[:10])}",
                 )
 
                 # Slice for comparison after settling time
@@ -698,7 +697,7 @@ def _run_costas_pipeline(
                     ambiguous_original_symbols = original_payload_segment_for_comparison * ambiguity_rotation
 
                     phase_errors_for_ambiguity = np.angle(
-                        processed_corrected_symbols_for_comparison * np.conj(ambiguous_original_symbols)
+                        processed_corrected_symbols_for_comparison * np.conj(ambiguous_original_symbols),
                     )
                     current_mean_abs_phase_error = np.mean(np.abs(phase_errors_for_ambiguity))
                     min_mean_abs_phase_error = min(min_mean_abs_phase_error, current_mean_abs_phase_error)
@@ -708,12 +707,12 @@ def _run_costas_pipeline(
                 if mean_abs_phase_error >= MAX_PHASE_ERROR_RAD:
                     logger.warning(
                         f"Costas loop failed to lock to spec for (CFO={cfo}, SNR={snr}). "
-                        f"Mean phase error: {mean_abs_phase_error:.3f} rad exceeds tolerance {MAX_PHASE_ERROR_RAD:.3f} rad"
+                        f"Mean phase error: {mean_abs_phase_error:.3f} rad exceeds tolerance {MAX_PHASE_ERROR_RAD:.3f} rad",
                     )
                     res["met_lock_spec"] = False  # Add a new field to indicate if it met spec
                 else:
                     logger.debug(
-                        f"Costas loop successfully locked to spec for (CFO={cfo}, SNR={snr}). Mean abs phase error: {mean_abs_phase_error:.3f} rad."
+                        f"Costas loop successfully locked to spec for (CFO={cfo}, SNR={snr}). Mean abs phase error: {mean_abs_phase_error:.3f} rad.",
                     )
                     res["met_lock_spec"] = True  # Met spec
 
@@ -744,13 +743,13 @@ def _run_costas_pipeline(
                         "residual_cfo_hz": residual_freq_hz,
                         "residual_cfo_error_hz": residual_cfo_error_hz,
                         "mean_abs_phase_error": mean_abs_phase_error,
-                    }
+                    },
                 )
 
             except Exception as e:
                 res["costas_success"] = False
                 res["reason"] = f"Error during Costas loop processing: {e}"
-                logger.error(f"Costas loop error for (CFO={cfo}, SNR={snr}): {e}")
+                logger.exception(f"Costas loop error for (CFO={cfo}, SNR={snr}): {e}")
             finally:
                 results.append(res)  # Always append result, even if Costas failed
 
@@ -769,10 +768,10 @@ def _print_costas_summary(results: list[dict[str, object]]) -> None:
         snr_ok = [r for r in successful_costas if r["snr_sweep"] == snr]
         met_spec_count = sum(1 for r in snr_ok if r.get("met_lock_spec", False))  # Count trials that met the lock spec
         residual_cfo_errs = [
-            abs(cast(float, r["residual_cfo_error_hz"])) for r in snr_ok if r.get("met_lock_spec", False)
+            abs(cast("float", r["residual_cfo_error_hz"])) for r in snr_ok if r.get("met_lock_spec", False)
         ]
         mean_abs_phase_errors = [
-            cast(float, r["mean_abs_phase_error"]) for r in snr_ok if r.get("met_lock_spec", False)
+            cast("float", r["mean_abs_phase_error"]) for r in snr_ok if r.get("met_lock_spec", False)
         ]
 
         # Handle cases where no trials met the spec to avoid division by zero for mean/max
@@ -810,12 +809,12 @@ def _plot_costas_results(costas_results: list[dict[str, object]]) -> None:
         logger.info("No successful Costas loop results to plot.")
         return
 
-    unique_cfos = sorted(list(set(r["cfo_sweep"] for r in costas_ok)))
-    unique_snrs = sorted(list(set(r["snr_sweep"] for r in costas_ok)))
+    unique_cfos = sorted({r["cfo_sweep"] for r in costas_ok})
+    unique_snrs = sorted({r["snr_sweep"] for r in costas_ok})
 
     # Create a grid of subplots
     fig, axes = plt.subplots(
-        len(unique_cfos), len(unique_snrs), figsize=(12, 10), sharex=True, sharey=True, squeeze=False
+        len(unique_cfos), len(unique_snrs), figsize=(12, 10), sharex=True, sharey=True, squeeze=False,
     )
 
     # Plot for each (CFO, SNR) combination

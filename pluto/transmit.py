@@ -75,10 +75,7 @@ def build_tx_signal_from_bits(
     preamble = build_preamble(SYNC_CONFIG)
     frame = np.concatenate([preamble, header_symbols, payload_symbols])
 
-    if PIPELINE.pulse_shaping:
-        tx_signal = upsample_and_filter(frame, SPS, _h_rrc)
-    else:
-        tx_signal = frame
+    tx_signal = upsample_and_filter(frame, SPS, _h_rrc) if PIPELINE.pulse_shaping else frame
     zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
     return np.concatenate([zeros, tx_signal, zeros])
 
