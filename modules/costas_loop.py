@@ -95,18 +95,24 @@ def apply_costas_loop(
 
     This function implements a digital Proportional-Plus-Integrator (PI)
     controller to track and correct the phase of the incoming symbols. The
-    controller gains (alpha, beta) are calculated based on desired loop noise
-    bandwidth and damping factor, normalized to the symbol rate.
+    controller gains (alpha, beta) are calculated from the parameters in the
+    `config` object.
 
     The error detector implemented here is unified for BPSK and QPSK modulation.
     It may not work correctly for other modulation schemes like QAM.
 
     Args:
         symbols: The input array of complex-valued symbols.
+<<<<<<< HEAD
         config: The Costas loop configuration containing loop filter gains.
         current_phase_estimate: Initial phase estimate in radians.
         current_frequency_offset: Initial frequency offset used to seed
             the loop filter integrator.
+=======
+        config: CostasConfig object with loop parameters.
+        current_phase_estimate: Initial phase estimate in radians.
+        current_frequency_offset: Initial frequency offset in radians per symbol.
+>>>>>>> bc9a695 (removed function call in costas to decrease runtime)
 
     Returns:
         A tuple containing:
@@ -123,10 +129,31 @@ def apply_costas_loop(
     corrected_symbols = np.zeros(n, dtype=complex)
     phase_estimates = np.zeros(n, dtype=float)
 
+    alpha, beta = config.alpha, config.beta
+
     for i, sym in enumerate(symbols):
+<<<<<<< HEAD
         corrected_sym, phase_estimate, integrator = _costas_loop_iteration(
             sym, phase_estimate, integrator, config.alpha, config.beta,
         )
+=======
+        # 1. Correct phase of the current symbol
+        corrected_sym = sym * np.exp(-1j * phase_estimate)
+
+        # 2. Calculate the phase error (unified for BPSK/QPSK)
+        error = np.imag(corrected_sym) * np.sign(np.real(corrected_sym))
+
+        # 3. Update the loop filter (PI controller)
+        integrator += beta * error
+        proportional = alpha * error
+
+        # 4. Update the phase estimate for the next symbol
+        phase_estimate += proportional + integrator
+        
+        # 5. Wrap phase estimate to -pi to pi for consistent plotting and analysis
+        phase_estimate = (phase_estimate + np.pi) % (2 * np.pi) - np.pi
+        
+>>>>>>> bc9a695 (removed function call in costas to decrease runtime)
         corrected_symbols[i] = corrected_sym
         phase_estimates[i] = phase_estimate
 
