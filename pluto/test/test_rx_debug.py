@@ -17,6 +17,7 @@ from pluto.config import (
 
 
 def main() -> None:
+    """Run RX debug session with live frame decoding output."""
     # Setup SDR
     sdr = create_pluto()
     sdr.sample_rate = int(SAMPLE_RATE)

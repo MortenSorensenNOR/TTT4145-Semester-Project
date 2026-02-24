@@ -46,12 +46,15 @@ class PipelineConfig:
     channel_coding: bool = True
     interleaving: bool = True
     cfo_correction: bool = True
+    pilot_config: PilotConfig | None = None
 
     def __post_init__(self) -> None:
         """Validate pipeline configuration. Making sure costas and pilots are not running at the same time."""
         if self.pilots and self.costas_loop:
             msg = "Pilots and Costas loop are mutually exclusive"
             raise ValueError(msg)
+        if self.pilot_config is None:
+            self.pilot_config = PilotConfig()
 
 
 PIPELINE = PipelineConfig()

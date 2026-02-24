@@ -107,6 +107,11 @@ class Synchronizer:
 
         self.preamble = build_preamble(config)
 
+    @property
+    def template_short(self) -> np.ndarray:
+        """Return the short ZC correlation template."""
+        return self._template_short
+
     def detect_preamble(self, rx: np.ndarray, sample_rate: float) -> SynchronizationResult:
         """Detect preamble and estimate CFO and timing.
 

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from modules.channel_coding import LDPCConfig, ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths
 from modules.util import bytes_to_bits
 from pluto import create_pluto
 from pluto.config import (
@@ -39,7 +40,7 @@ from pluto.config import (
     RX_BUFFER_SIZE,
     SAMPLE_RATE,
 )
-from pluto.receive import create_decoder, run_receiver
+from pluto.receive import FrameResult, create_decoder, run_receiver
 from pluto.transmit import build_tx_signal_from_bits, max_payload_bits
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,9 @@ SIOCSIFMTU = 0x8922
 # From linux/if.h
 IFF_UP = 0x1
 IFF_RUNNING = 0x40
+
+# Minimum valid IP packet size (IPv4 header without options)
+MIN_IP_PACKET_SIZE = 20
 
 
 @dataclass
@@ -121,8 +125,6 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
 
     # Pre-warm LDPC cache for all supported payload sizes to avoid 100-400ms JIT delays
     logger.info("TX: warming LDPC cache...")
-    from modules.channel_coding import ldpc_get_supported_payload_lengths
-
     for k in ldpc_get_supported_payload_lengths(CODING_RATE):
         # Build a dummy frame to trigger cache population
         dummy_bits = np.zeros(int(k) - 16, dtype=np.uint8)  # -16 for CRC
@@ -164,8 +166,6 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
 
     # Pre-warm LDPC decode cache
     logger.info("RX: warming LDPC cache...")
-    from modules.channel_coding import LDPCConfig, ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths
-
     for k in ldpc_get_supported_payload_lengths(CODING_RATE):
         config = LDPCConfig(k=int(k), code_rate=CODING_RATE)
         dummy_msg = np.zeros(int(k), dtype=int)
@@ -174,10 +174,10 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
         ldpc_decode(llr, config, max_iterations=1)
     logger.info("RX: LDPC cache ready")
 
-    def on_frame(result) -> None:
+    def on_frame(result: FrameResult) -> None:
         data = result.payload_bytes
         # Validate minimum IP packet: 20+ bytes, version nibble is 4 (IPv4) or 6 (IPv6)
-        if len(data) < 20:
+        if len(data) < MIN_IP_PACKET_SIZE:
             logger.debug("RX: dropping short frame (%d bytes)", len(data))
             return
         version = (data[0] >> 4) & 0xF
@@ -191,7 +191,7 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
             logger.exception("RX: TUN write failed")
 
     logger.info("RX thread started")
-    run_receiver(sdr, decoder, h_rrc, RX_BUFFER_SIZE, on_frame, pipeline=PIPELINE)  # type: ignore[arg-type]
+    run_receiver(sdr, decoder, h_rrc, RX_BUFFER_SIZE, on_frame)  # type: ignore[arg-type]
 
 
 def main() -> None:

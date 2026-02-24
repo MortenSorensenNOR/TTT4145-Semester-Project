@@ -12,6 +12,7 @@ class Modulator(Protocol):
     """Protocol for modulation schemes."""
 
     bits_per_symbol: int
+    qam_order: int
     symbol_mapping: np.ndarray
 
     def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:

@@ -4,17 +4,17 @@ Verifies BPSK, QPSK, and QAM16 constellations appear correctly after TX->RX.
 Plots received vs ideal constellations and computes EVM.
 """
 
-import os
+from pathlib import Path
 
+import adi
 import matplotlib.pyplot as plt
 import numpy as np
-
-PLOT_DIR = "examples"
 
 from modules.modulation import BPSK, QAM, QPSK
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
 from pluto.loopback import SPS, setup_pluto, transmit_and_receive
 
+PLOT_DIR = "examples/data"
 RRC_ALPHA = 0.35
 RRC_NUM_TAPS = 101
 N_SYMBOLS = 500
@@ -47,9 +47,12 @@ def normalize_and_extract(rx_filtered: np.ndarray, n_symbols: int, sps: int) -> 
     return symbols
 
 
-def test_constellation(modulator, name: str, h_rrc: np.ndarray, sdr) -> tuple[np.ndarray, float]:
+def test_constellation(
+    modulator: BPSK | QPSK | QAM, h_rrc: np.ndarray, sdr: adi.Pluto,
+) -> tuple[np.ndarray, float]:
     """Test a single modulation scheme and return (rx_symbols, evm)."""
-    bits = np.random.randint(0, 2, N_SYMBOLS * modulator.bits_per_symbol)
+    rng = np.random.default_rng()
+    bits = rng.integers(0, 2, N_SYMBOLS * modulator.bits_per_symbol)
     tx_symbols = modulator.bits2symbols(bits)
     tx_symbols_norm = tx_symbols / np.sqrt(np.mean(np.abs(tx_symbols) ** 2))
 
@@ -75,6 +78,7 @@ def test_constellation(modulator, name: str, h_rrc: np.ndarray, sdr) -> tuple[np
 
 
 def main() -> None:
+    """Run constellation verification test for all modulation schemes."""
     sdr = setup_pluto()
     h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
 
@@ -87,7 +91,7 @@ def main() -> None:
     _fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
     for ax, (modulator, name) in zip(axes, modulators, strict=False):
-        rx_symbols, evm = test_constellation(modulator, name, h_rrc, sdr)
+        rx_symbols, evm = test_constellation(modulator, h_rrc, sdr)
 
         constellation = modulator.symbol_mapping / np.sqrt(np.mean(np.abs(modulator.symbol_mapping) ** 2))
         ax.scatter(np.real(rx_symbols), np.imag(rx_symbols), alpha=0.5, s=10, label="RX")
@@ -98,12 +102,12 @@ def main() -> None:
         ax.set_xlim(-1.5, 1.5)
         ax.set_ylim(-1.5, 1.5)
         ax.set_aspect("equal")
-        ax.grid(True, alpha=0.3)
+        ax.grid(visible=True, alpha=0.3)
         ax.legend()
 
-    os.makedirs(PLOT_DIR, exist_ok=True)
+    Path(PLOT_DIR).mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
-    filepath = os.path.join(PLOT_DIR, "constellation_test.png")
+    filepath = Path(PLOT_DIR) / "constellation_test.png"
     plt.savefig(filepath, dpi=150)
     plt.show()
 

@@ -16,3 +16,5 @@ pyrightconfig.json
 
 # Hypothesis test database
 .hypothesis/
+
+CLAUDE.md

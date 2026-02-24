@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 def _calculate_loop_parameters(
     loop_noise_bandwidth_normalized: float = 0.01,  # Normalized to symbol rate
     damping_factor: float = 0.707,  # zeta 1/sqrt(2)
-    initial_freq_offset_rad_per_symbol: float = 0.0,
 ) -> tuple[float, float]:
 
     wn_normalized = loop_noise_bandwidth_normalized / (damping_factor + 1 / (4 * damping_factor))
@@ -39,10 +38,14 @@ class CostasConfig:
     loop_noise_bandwidth_normalized: float = 0.01  # Normalized to symbol rate
     damping_factor: float = 0.707  # zeta 1/sqrt(2)
     initial_freq_offset_rad_per_symbol: float = 0.0
+    alpha: float = 0.0
+    beta: float = 0.0
 
-    alpha, beta = _calculate_loop_parameters(
-        loop_noise_bandwidth_normalized, damping_factor, initial_freq_offset_rad_per_symbol,
-    )
+    def __post_init__(self) -> None:
+        """Compute and set loop filter gains from bandwidth and damping factor."""
+        a, b = _calculate_loop_parameters(self.loop_noise_bandwidth_normalized, self.damping_factor)
+        object.__setattr__(self, "alpha", a)
+        object.__setattr__(self, "beta", b)
 
 
 def _costas_loop_iteration(
@@ -52,11 +55,10 @@ def _costas_loop_iteration(
     alpha: float,
     beta: float,
 ) -> tuple[complex, float, float]:
-    """Performs a single iteration of the Costas loop.
+    """Perform a single iteration of the Costas loop.
 
     Args:
         current_symbol: The incoming complex-valued symbol.
-        modulator: The modulator object, used for the decision-slicer.
         phase_estimate: The current phase estimate (rad).
         integrator: The current state of the loop filter's integrator.
         alpha: The proportional gain of the PI loop filter.
@@ -72,19 +74,14 @@ def _costas_loop_iteration(
     # 1. Correct phase of the current symbol
     corrected_sym = current_symbol * np.exp(-1j * phase_estimate)
 
-    # 2. Make a hard decision (slice) on the corrected symbol
-
-    # decision = modulator.symbol_mapping[np.argmin(np.abs(corrected_sym - modulator.symbol_mapping))]
-    # logger.debug(f"Costas Iteration: decision = {decision}")
-
-    # 3. Calculate the phase error (unified for BPSK/QPSK)
+    # 2. Calculate the phase error (unified for BPSK/QPSK)
     error = np.imag(corrected_sym) * np.sign(np.real(corrected_sym))
 
-    # 4. Update the loop filter (PI controller)
+    # 3. Update the loop filter (PI controller)
     integrator += beta * error
     proportional = alpha * error
 
-    # 5. Update the phase estimate for the next symbol
+    # 4. Update the phase estimate for the next symbol
     new_phase_estimate = phase_estimate + proportional + integrator
     # Wrap phase estimate to -pi to pi for consistent plotting and analysis
     new_phase_estimate = (new_phase_estimate + np.pi) % (2 * np.pi) - np.pi
@@ -106,15 +103,10 @@ def apply_costas_loop(
 
     Args:
         symbols: The input array of complex-valued symbols.
-        modulator: The modulator object, used for the decision-slicer.
-        loop_noise_bandwidth_normalized: The desired loop noise bandwidth,
-            normalized to the symbol rate (e.g., 0.01 means 1% of symbol rate).
-            This parameter helps set the responsiveness and noise rejection of the loop.
-        damping_factor: The damping factor (zeta) of the loop, typically around
-            0.707 for optimal transient response.
-        initial_freq_offset_rad_per_symbol: Initial guess for the frequency
-            offset in radians per symbol. This is used to initialize the
-            integrator of the PI loop filter.
+        config: The Costas loop configuration containing loop filter gains.
+        current_phase_estimate: Initial phase estimate in radians.
+        current_frequency_offset: Initial frequency offset used to seed
+            the loop filter integrator.
 
     Returns:
         A tuple containing:
@@ -154,7 +146,8 @@ if __name__ == "__main__":
 
 
     # Generate test symbols
-    bits = np.random.randint(0, 2, size=num_symbols * modulator.bits_per_symbol)
+    rng = np.random.default_rng()
+    bits = rng.integers(0, 2, size=num_symbols * modulator.bits_per_symbol)
     base_symbols = modulator.bits2symbols(bits)
     phase_noise = np.linspace(0, 3, len(base_symbols))
 
@@ -179,13 +172,14 @@ if __name__ == "__main__":
     plt.title("Costas Loop Phase Tracking Test")
     plt.xlabel("Symbol Index")
     plt.ylabel("Phase (degrees)")
-    plt.grid(True)
+    plt.grid(visible=True)
     plt.legend()
     plt.show()
 
     # Verify if it converged
+    CONVERGENCE_TOLERANCE_DEG = 5
     final_phase_error = np.degrees(initial_phase_offset_rad - phase_estimates[-1])
-    if abs(final_phase_error) < 5:  # Arbitrary small tolerance for this demo
+    if abs(final_phase_error) < CONVERGENCE_TOLERANCE_DEG:
         pass
     else:
         pass

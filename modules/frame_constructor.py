@@ -61,7 +61,8 @@ class FrameHeaderConfig:
     crc_bits: int = 8
     header_total_size: int = field(init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Compute the total header size from all field widths."""
         self.header_total_size = (
             self.payload_length_bits
             + self.src_bits
@@ -116,7 +117,7 @@ class FrameHeaderConstructor:
             byte = int(padded[i : i + 8], 2)
             crc ^= byte
             for _ in range(8):
-                crc = (crc << 1 ^ 7) & 255 if crc & 128 else crc << 1 & 255
+                crc = (crc << 1 ^ poly) & 255 if crc & 128 else crc << 1 & 255
         return crc
 
     def encode(self, header: FrameHeader) -> np.ndarray:

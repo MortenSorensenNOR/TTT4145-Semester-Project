@@ -10,6 +10,7 @@ ADC_FULL_SCALE = 2048
 
 
 def main() -> None:
+    """Measure and display RX signal power levels."""
     sdr = create_pluto()
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_lo = int(CENTER_FREQ)

@@ -4,7 +4,9 @@ Provides basic TX/RX helpers for loopback testing with a single frequency.
 """
 
 import time
+from typing import cast
 
+import adi
 import numpy as np
 
 from pluto import create_pluto
@@ -23,7 +25,7 @@ def setup_pluto(
     sample_rate: int = SAMPLE_RATE,
     tx_gain: float = TX_GAIN,
     rx_gain: float = RX_GAIN,
-):
+) -> adi.Pluto:
     """Configure PlutoSDR for loopback testing with a single LO frequency."""
     sdr = create_pluto()
     sdr.sample_rate = int(sample_rate)
@@ -39,7 +41,7 @@ def setup_pluto(
 
 
 def transmit_and_receive(
-    sdr,
+    sdr: adi.Pluto,
     tx_signal: np.ndarray,
     rx_delay_ms: float = 50,
     n_captures: int = 3,
@@ -60,10 +62,8 @@ def transmit_and_receive(
     time.sleep(rx_delay_ms / 1000)
     sdr.rx()  # flush stale buffer
 
-    captures = []
-    for _ in range(n_captures):
-        captures.append(sdr.rx())
+    captures = [sdr.rx() for _ in range(n_captures)]
 
     sdr.tx_destroy_buffer()
 
-    return np.concatenate(captures)
+    return np.concatenate(cast("list[np.ndarray]", captures))

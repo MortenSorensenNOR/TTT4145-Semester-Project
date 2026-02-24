@@ -311,7 +311,7 @@ def _plot_results(
         bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.5},
     )
     plt.tight_layout()
-    plt.savefig("examples/ber_vs_ebn0.png", dpi=150, bbox_inches="tight")
+    plt.savefig("examples/data/ber_vs_ebn0.png", dpi=150, bbox_inches="tight")
     plt.show()
 
 

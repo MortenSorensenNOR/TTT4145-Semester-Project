@@ -304,7 +304,7 @@ class TestFullPipeline:
 
         sync = Synchronizer(sync_config, sps=self.SPS, rrc_taps=rrc)
         fc = FrameConstructor()
-        decoder = FrameDecoder(sync, fc, sample_rate=self.SAMPLE_RATE, sps=self.SPS, pilot_config=PilotConfig())
+        decoder = FrameDecoder(sync, fc, sample_rate=self.SAMPLE_RATE, sps=self.SPS)
 
         result = decoder.try_decode(rx_filtered, abs_offset=0)
         return result.text if result is not None else None

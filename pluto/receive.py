@@ -5,25 +5,35 @@ Pipeline: SDR -> matched filter -> sync -> CFO correct -> phase correct
        -> soft demod -> channel decode -> text
 """
 
+from __future__ import annotations
+
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 import numpy as np
 
 from modules.channel_coding import CodeRates, LDPCConfig, ldpc_get_supported_payload_lengths
-from modules.costas_loop import CostasConfig, apply_costas_loop
+from modules.costas_loop import apply_costas_loop
 from modules.equalization import equalize_payload
 from modules.frame_constructor import FrameConstructor, FrameHeader
 from modules.modulation import BPSK, estimate_noise_variance
-from modules.pilots import PilotConfig, data_indices, n_total_symbols, pilot_aided_phase_track, pilot_indices
+from modules.pilots import (
+    PilotConfig,
+    data_indices,
+    n_total_symbols,
+    pilot_aided_phase_track,
+    pilot_indices,
+)
 from modules.pulse_shaping import rrc_filter
 from modules.synchronization import SynchronizationResult, Synchronizer
 from modules.util import bits_to_bytes, bits_to_text
 from pluto import SDRReceiver
 from pluto.config import (
     COSTAS_CONFIG,
-    PILOT_CONFIG,
     PIPELINE,
     RRC_ALPHA,
     RRC_NUM_TAPS,
@@ -66,8 +76,6 @@ class FrameDecoder:
         fc: FrameConstructor,
         sample_rate: float,
         sps: int,
-        pilot_config: PilotConfig | None = None,
-        costas_config: CostasConfig | None = None,
         pipeline: PipelineConfig | None = None,
     ) -> None:
         """Initialize with fixed radio parameters."""
@@ -75,9 +83,8 @@ class FrameDecoder:
         self.fc = fc
         self.sample_rate = sample_rate
         self.sps = sps
-        self.pilot_config = pilot_config or PilotConfig()
-        self.costas_config = costas_config or CostasConfig()
         self.pipeline = pipeline or PipelineConfig()
+        self.pilot_config = self.pipeline.pilot_config
         self.bpsk = BPSK()
         self.header_n_symbols = fc.header_encoded_n_bits
 
@@ -181,17 +188,18 @@ class FrameDecoder:
 
         if self.pipeline.pilots:
             # ── Pre-compute pilot/data indices (shared by equalization and phase tracking) ──
-            p_idx = pilot_indices(n_data, self.pilot_config)
-            d_idx = data_indices(n_data, self.pilot_config)
+            pilot_cfg = cast("PilotConfig", self.pilot_config)
+            p_idx = pilot_indices(n_data, pilot_cfg)
+            d_idx = data_indices(n_data, pilot_cfg)
 
             # ── Equalize first (before any amplitude modification) ────
-            payload_symbols = equalize_payload(payload_symbols, n_data, self.pilot_config, sigma_sq, p_idx=p_idx)
+            payload_symbols = equalize_payload(payload_symbols, n_data, pilot_cfg, sigma_sq, p_idx=p_idx)
 
             # ── Pilot-aided phase tracking (returns data-only symbols) ─
             payload_symbols = pilot_aided_phase_track(
                 payload_symbols,
                 n_data,
-                self.pilot_config,
+                pilot_cfg,
                 p_idx=p_idx,
                 d_idx=d_idx,
             )
@@ -244,7 +252,7 @@ class FrameDecoder:
             raw = (2**10 - 1) + FrameConstructor.PAYLOAD_CRC_BITS
             max_data_symbols = raw + (-raw % 12)
 
-        max_payload = n_total_symbols(max_data_symbols, self.pilot_config) if self.pipeline.pilots else max_data_symbols
+        max_payload = n_total_symbols(max_data_symbols, cast("PilotConfig", self.pilot_config)) if self.pipeline.pilots else max_data_symbols
         return (max_preamble + max_header + max_payload) * self.sps
 
     def _payload_n_symbols(self, header: FrameHeader) -> int | None:
@@ -253,12 +261,98 @@ class FrameDecoder:
             modulator = get_modulator(header.mod_scheme)
             n_coded = self.fc.payload_coded_n_bits(header, channel_coding=self.pipeline.channel_coding)
             n_data = n_coded // modulator.bits_per_symbol
-            if self.pipeline.pilots:
-                return n_total_symbols(n_data, self.pilot_config)
-            return n_data
         except ValueError:
             logger.debug("Invalid payload parameters from header")
             return None
+        else:
+            if self.pipeline.pilots:
+                return n_total_symbols(n_data, cast("PilotConfig", self.pilot_config))
+            return n_data
+
+
+@dataclass
+class _MatchedFilter:
+    """Overlap-save matched filter state for incremental RRC filtering."""
+
+    h_rrc: np.ndarray
+    overlap: int
+    state: np.ndarray
+
+    @classmethod
+    def create(cls, h_rrc: np.ndarray) -> _MatchedFilter:
+        """Build a new matched filter from RRC taps."""
+        overlap = len(h_rrc) - 1
+        return cls(h_rrc=h_rrc, overlap=overlap, state=np.zeros(overlap, dtype=complex))
+
+    def apply(self, rx: np.ndarray) -> np.ndarray:
+        """Apply the overlap-save matched filter and update state."""
+        chunk = np.concatenate([self.state, rx])
+        filtered = np.convolve(chunk, self.h_rrc, mode="valid")
+        self.state = rx[-self.overlap :]
+        return filtered
+
+
+@dataclass
+class _RxBuffer:
+    """Pre-allocated receive buffer with overlap management."""
+
+    buf: np.ndarray
+    capacity: int
+    length: int
+    abs_offset: int
+    max_frame_samples: int
+
+    @classmethod
+    def create(cls, max_frame_samples: int, rx_buffer_size: int) -> _RxBuffer:
+        """Build a new receive buffer."""
+        capacity = max_frame_samples + rx_buffer_size
+        return cls(
+            buf=np.zeros(capacity, dtype=complex),
+            capacity=capacity,
+            length=0,
+            abs_offset=0,
+            max_frame_samples=max_frame_samples,
+        )
+
+    def append(self, new_filtered: np.ndarray) -> None:
+        """Append filtered samples, compacting if the buffer is full."""
+        n_new = len(new_filtered)
+        if self.length + n_new > self.capacity:
+            keep = self.max_frame_samples
+            self.buf[:keep] = self.buf[self.length - keep : self.length]
+            self.abs_offset += self.length - keep
+            self.length = keep
+        self.buf[self.length : self.length + n_new] = new_filtered
+        self.length += n_new
+
+    def consume(self, n: int) -> None:
+        """Remove the first *n* samples from the buffer."""
+        consumed = min(n, self.length)
+        remaining = self.length - consumed
+        if remaining > 0:
+            self.buf[:remaining] = self.buf[consumed : self.length]
+        self.length = remaining
+        self.abs_offset += consumed
+
+    def trim_overlap(self) -> None:
+        """Trim the buffer to keep at most one max-frame of overlap."""
+        if self.length > self.max_frame_samples:
+            trim = self.length - self.max_frame_samples
+            self.buf[: self.max_frame_samples] = self.buf[trim : self.length]
+            self.length = self.max_frame_samples
+            self.abs_offset += trim
+
+
+def _default_frame_callback(result: FrameResult) -> None:
+    """Log a successfully decoded frame."""
+    logger.info(
+        "RX: %r  (mod=%s, rate=%s, CFO=%+.0f Hz, bits=%d)",
+        result.text,
+        result.header.mod_scheme.name,
+        result.header.coding_rate.name,
+        result.cfo_hz,
+        result.header.length,
+    )
 
 
 def run_receiver(
@@ -267,41 +361,16 @@ def run_receiver(
     h_rrc: np.ndarray | None,
     rx_buffer_size: int,
     on_frame: Callable[[FrameResult], None] | None = None,
-    pipeline: PipelineConfig | None = None,
 ) -> None:
     """Continuously receive, matched-filter, and decode frames from the SDR.
 
     Runs an overlap-save matched filter feeding a multi-frame detection
     loop until interrupted by KeyboardInterrupt or SDR failure.
     """
-    pipeline = pipeline or PIPELINE
-    if on_frame is None:
-
-        def _log_frame(result: FrameResult) -> None:
-            logger.info(
-                "RX: %r  (mod=%s, rate=%s, CFO=%+.0f Hz, bits=%d)",
-                result.text,
-                result.header.mod_scheme.name,
-                result.header.coding_rate.name,
-                result.cfo_hz,
-                result.header.length,
-            )
-
-        on_frame = _log_frame
-
-    max_frame_samples = decoder.max_frame_samples
-    use_filter = pipeline.pulse_shaping and h_rrc is not None
-
-    # Overlap-save state for incremental matched filtering
-    if use_filter:
-        filter_overlap = len(h_rrc) - 1
-        filter_state = np.zeros(filter_overlap, dtype=complex)
-
-    # Pre-allocated receive buffer
-    buf_capacity = max_frame_samples + rx_buffer_size
-    rx_buf = np.zeros(buf_capacity, dtype=complex)
-    buf_len = 0
-    abs_offset = 0
+    on_frame = on_frame or _default_frame_callback
+    use_filter = decoder.pipeline.pulse_shaping and h_rrc is not None
+    mf = _MatchedFilter.create(cast("np.ndarray", h_rrc)) if use_filter else None
+    rxbuf = _RxBuffer.create(decoder.max_frame_samples, rx_buffer_size)
 
     try:
         while True:
@@ -311,44 +380,18 @@ def run_receiver(
                 logger.exception("RX: SDR read failed")
                 break
 
-            if use_filter:
-                # ── Incremental matched filter (overlap-save) ─────────
-                chunk = np.concatenate([filter_state, rx])
-                new_filtered = np.convolve(chunk, h_rrc, mode="valid")
-                filter_state = rx[-filter_overlap:]
-            else:
-                new_filtered = rx
+            new_filtered = mf.apply(rx) if mf is not None else rx
+            rxbuf.append(new_filtered)
 
-            # Append to pre-allocated buffer
-            n_new = len(new_filtered)
-            if buf_len + n_new > buf_capacity:
-                keep = max_frame_samples
-                rx_buf[:keep] = rx_buf[buf_len - keep : buf_len]
-                abs_offset += buf_len - keep
-                buf_len = keep
-            rx_buf[buf_len : buf_len + n_new] = new_filtered
-            buf_len += n_new
-
-            # ── Multi-frame detection loop ────────────────────────────
+            # Multi-frame detection loop
             while True:
-                frame_result = decoder.try_decode(rx_buf[:buf_len], abs_offset)
-                if frame_result is not None:
-                    on_frame(frame_result)
-                    consumed = min(frame_result.consumed_samples, buf_len)
-                    remaining = buf_len - consumed
-                    if remaining > 0:
-                        rx_buf[:remaining] = rx_buf[consumed:buf_len]
-                    buf_len = remaining
-                    abs_offset += consumed
-                else:
+                frame_result = decoder.try_decode(rxbuf.buf[: rxbuf.length], rxbuf.abs_offset)
+                if frame_result is None:
                     break
+                on_frame(frame_result)
+                rxbuf.consume(frame_result.consumed_samples)
 
-            # Keep overlap for frames that may straddle buffer boundaries
-            if buf_len > max_frame_samples:
-                trim = buf_len - max_frame_samples
-                rx_buf[:max_frame_samples] = rx_buf[trim:buf_len]
-                buf_len = max_frame_samples
-                abs_offset += trim
+            rxbuf.trim_overlap()
     except KeyboardInterrupt:
         pass
 
@@ -365,8 +408,6 @@ def create_decoder(pipeline: PipelineConfig | None = None) -> tuple[FrameDecoder
         fc,
         sample_rate=SAMPLE_RATE,
         sps=effective_sps,
-        pilot_config=PILOT_CONFIG,
-        costas_config=COSTAS_CONFIG,
         pipeline=pipeline,
     )
     return decoder, h_rrc

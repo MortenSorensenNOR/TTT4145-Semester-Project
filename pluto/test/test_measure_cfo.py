@@ -31,6 +31,7 @@ def measure_cfo_fft(samples: np.ndarray, sample_rate: float) -> float:
 
 
 def main() -> None:
+    """Measure and display CFO between TX and RX oscillators."""
     sdr = create_pluto()
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_lo = int(CENTER_FREQ)

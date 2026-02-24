@@ -4,27 +4,31 @@ Tests preamble detection, timing recovery, and CFO estimation.
 Injects real CFO by offsetting TX/RX LO frequencies.
 """
 
-import os
+from pathlib import Path
 
+import adi
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-
-PLOT_DIR = "examples"
 
 from modules.modulation import QPSK
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
 from modules.synchronization import Synchronizer, SynchronizerConfig, build_preamble
 from pluto.loopback import CENTER_FREQ, SAMPLE_RATE, SPS, setup_pluto, transmit_and_receive
 
+PLOT_DIR = "examples/data"
 RRC_ALPHA = 0.35
 RRC_NUM_TAPS = 101
 N_PAYLOAD_SYMBOLS = 200
 
 
-def run_sync_test(sdr, h_rrc: np.ndarray, sync: Synchronizer, injected_cfo: float = 0) -> dict:
+def run_sync_test(
+    sdr: adi.Pluto, h_rrc: np.ndarray, sync: Synchronizer, injected_cfo: float = 0,
+) -> dict:
     """Run a single sync test and return results."""
+    rng = np.random.default_rng()
     qpsk = QPSK()
-    payload_bits = np.random.randint(0, 2, N_PAYLOAD_SYMBOLS * 2)
+    payload_bits = rng.integers(0, 2, N_PAYLOAD_SYMBOLS * 2)
     payload_symbols = qpsk.bits2symbols(payload_bits)
 
     preamble = build_preamble(sync.config)
@@ -53,14 +57,14 @@ def run_sync_test(sdr, h_rrc: np.ndarray, sync: Synchronizer, injected_cfo: floa
     }
 
 
-def plot_sync_result(result: dict, title: str):
+def plot_sync_result(result: dict, title: str) -> mpl.figure.Figure:
     """Plot the synchronization process."""
     rx = result["rx_filtered"]
     sync = result["sync"]
     peaks = result["peak_indices"]
     timing = result["timing"]
 
-    template_short = sync._template_short
+    template_short = sync.template_short
     corr = np.abs(np.correlate(rx, template_short, mode="same"))
 
     fig, axes = plt.subplots(3, 1, figsize=(12, 8))
@@ -99,13 +103,14 @@ def plot_sync_result(result: dict, title: str):
     return fig
 
 
-def test_with_cfo_offset(tx_lo: int, rx_lo: int, h_rrc: np.ndarray, sync: Synchronizer):
+def test_with_cfo_offset(
+    tx_lo: int, rx_lo: int, h_rrc: np.ndarray, sync: Synchronizer,
+) -> dict:
     """Test synchronization with specific TX/RX LO settings."""
     injected_cfo = tx_lo - rx_lo  # CFO as seen by receiver
 
     sdr = setup_pluto(freq_hz=tx_lo)
     sdr.rx_lo = int(rx_lo)
-
 
     result = run_sync_test(sdr, h_rrc, sync, injected_cfo)
 
@@ -118,22 +123,22 @@ def test_with_cfo_offset(tx_lo: int, rx_lo: int, h_rrc: np.ndarray, sync: Synchr
 
 
 def main() -> None:
+    """Run synchronization tests with various CFO offsets over PlutoSDR loopback."""
     h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
     sync_config = SynchronizerConfig()
     sync = Synchronizer(sync_config, sps=SPS, rrc_taps=h_rrc)
 
-    # Max unambiguous CFO ≈ 1/(2*N_short*T_s) = 1/(2*19*4µs) ≈ 6.6 kHz
+    # Max unambiguous CFO ~ 1/(2*N_short*T_s) = 1/(2*19*4us) ~ 6.6 kHz
     cfo_offsets = [0, 1000, -1000, 3000, -3000, 5000, -5000, 6000, -6000]
     results = []
 
-    for i, offset in enumerate(cfo_offsets):
+    for _i, offset in enumerate(cfo_offsets):
         result = test_with_cfo_offset(CENTER_FREQ, CENTER_FREQ - offset, h_rrc, sync)
         label = f"{offset:+d} Hz" if offset != 0 else "Baseline"
         results.append((label, result))
 
-
     all_passed = True
-    for name, r in results:
+    for _name, r in results:
         if r["success"]:
             error = abs(r["cfo_estimated"] - r["cfo_injected"])
             tolerance = 500 + abs(r["cfo_injected"]) * 0.05  # 5% + 500 Hz baseline
@@ -147,7 +152,7 @@ def main() -> None:
     else:
         pass
 
-    os.makedirs(PLOT_DIR, exist_ok=True)
+    Path(PLOT_DIR).mkdir(parents=True, exist_ok=True)
     plot_indices = [0, 5, 8]  # baseline, +5kHz, -6kHz
     for i in plot_indices:
         if i < len(results):
@@ -155,7 +160,7 @@ def main() -> None:
             if r["success"]:
                 fig = plot_sync_result(r, f"CFO Test: {name}")
                 filename = f"sync_test_{name.replace(' ', '_').replace('+', 'p').replace('-', 'n')}.png"
-                filepath = os.path.join(PLOT_DIR, filename)
+                filepath = Path(PLOT_DIR) / filename
                 fig.savefig(filepath, dpi=150)
 
     plt.show()

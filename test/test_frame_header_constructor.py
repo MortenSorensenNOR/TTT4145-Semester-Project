@@ -62,20 +62,19 @@ def _make_header(
     length: int,
     src: int,
     dst: int,
+    *,
     mod_scheme: ModulationSchemes,
     coding_rate: CodeRates,
-    frame_type: int = 0,
-    sequence_number: int = 0,
 ) -> FrameHeader:
     """Create a FrameHeader with the given fields and zero CRC."""
     return FrameHeader(
         length=length,
         src=src,
         dst=dst,
-        frame_type=frame_type,
+        frame_type=0,
         mod_scheme=mod_scheme,
         coding_rate=coding_rate,
-        sequence_number=sequence_number,
+        sequence_number=0,
         crc=0,
     )
 
@@ -101,7 +100,7 @@ class TestFrameHeaderConstructor:
         coding_rate: CodeRates,
     ) -> None:
         """Encode then decode a header and verify all fields match."""
-        header = _make_header(length, src, dst, mod_scheme, coding_rate)
+        header = _make_header(length, src, dst, mod_scheme=mod_scheme, coding_rate=coding_rate)
         encoded = self.header_constructor.encode(header)
         decoded = self.header_constructor.decode(np.array(encoded))
 
@@ -124,7 +123,7 @@ class TestFrameHeaderConstructor:
         dst = data.draw(st.integers(min_value=0, max_value=DST_MAX))
         mod_scheme = data.draw(st.sampled_from(ModulationSchemes))
         coding_rate = data.draw(st.sampled_from(CodeRates))
-        header = _make_header(length, src, dst, mod_scheme, coding_rate)
+        header = _make_header(length, src, dst, mod_scheme=mod_scheme, coding_rate=coding_rate)
         encoded = self.header_constructor.encode(header)
 
         padding_bit_pos = PADDING_BIT_POS
@@ -178,7 +177,7 @@ class TestFrameHeaderWithChannel:
         coding_rate: CodeRates,
     ) -> None:
         """Header should survive high SNR AWGN channel."""
-        header = _make_header(length, src, dst, mod_scheme, coding_rate)
+        header = _make_header(length, src, dst, mod_scheme=mod_scheme, coding_rate=coding_rate)
         encoded_bits = self.header_constructor.encode(header)
 
         tx_symbols = _bits_to_bpsk(encoded_bits)

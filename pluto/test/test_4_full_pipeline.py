@@ -4,35 +4,82 @@ End-to-end test with framing, channel coding, and data recovery.
 Measures BER vs SNR for different modulation schemes.
 """
 
-import os
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
+import adi
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-
-PLOT_DIR = "examples"
 
 from modules.channel_coding import CodeRates
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
 from modules.modulation import BPSK
 from modules.pilots import PilotConfig, data_indices, insert_pilots
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
-from modules.synchronization import Synchronizer, SynchronizerConfig, build_preamble
+from modules.synchronization import (
+    SynchronizationResult,
+    Synchronizer,
+    SynchronizerConfig,
+    build_preamble,
+)
 from pluto.config import PipelineConfig, get_modulator
 from pluto.loopback import CENTER_FREQ, SAMPLE_RATE, SPS, setup_pluto, transmit_and_receive
 from pluto.receive import FrameDecoder
 
+PLOT_DIR = "examples/data"
 RRC_ALPHA = 0.35
 RRC_NUM_TAPS = 101
 GUARD_SAMPLES = 500
+PLOT_SNR_THRESHOLD = 4
 
 
-def add_awgn(signal: np.ndarray, snr_db: float, verbose: bool = False, return_noise: bool = False):
+@dataclass
+class FrameBuildParams:
+    """Parameters needed to build a test frame."""
+
+    fc: FrameConstructor
+    sync_config: SynchronizerConfig
+    pilot_config: PilotConfig
+    pipeline: PipelineConfig
+
+
+@dataclass
+class TestCase:
+    """Parameters for a single BER test run."""
+
+    mod_scheme: ModulationSchemes
+    snr_db: float
+    n_payload_bits: int
+
+
+@dataclass
+class RadioContext:
+    """Radio-related objects needed for BER testing."""
+
+    sdr: adi.Pluto
+    h_rrc: np.ndarray
+    sync: Synchronizer
+    fc: FrameConstructor
+    pilot_config: PilotConfig
+    pipeline: PipelineConfig
+
+
+def add_awgn(
+    signal: np.ndarray,
+    snr_db: float,
+    *,
+    verbose: bool = False,
+    return_noise: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray, tuple[int, int]]:
     """Add AWGN noise to achieve target SNR (in dB).
 
     Measures signal power from the strongest portion (where the frame is),
     not the entire buffer which includes quiet regions.
     """
+    rng = np.random.default_rng()
+
     # Find the active region by looking at where power is significant
     window = 1000
     if len(signal) > window:
@@ -49,7 +96,7 @@ def add_awgn(signal: np.ndarray, snr_db: float, verbose: bool = False, return_no
         active_region = (0, len(signal))
 
     noise_power = sig_power / (10 ** (snr_db / 10))
-    noise = np.sqrt(noise_power / 2) * (np.random.randn(len(signal)) + 1j * np.random.randn(len(signal)))
+    noise = np.sqrt(noise_power / 2) * (rng.standard_normal(len(signal)) + 1j * rng.standard_normal(len(signal)))
     noisy_signal = signal + noise
 
     if verbose:
@@ -64,10 +111,7 @@ def add_awgn(signal: np.ndarray, snr_db: float, verbose: bool = False, return_no
 
 def build_test_frame(
     payload_bits: np.ndarray,
-    fc: FrameConstructor,
-    sync_config: SynchronizerConfig,
-    pilot_config: PilotConfig,
-    pipeline: PipelineConfig,
+    params: FrameBuildParams,
     mod_scheme: ModulationSchemes = ModulationSchemes.QPSK,
     coding_rate: CodeRates = CodeRates.HALF_RATE,
 ) -> tuple[np.ndarray, FrameHeader]:
@@ -82,59 +126,62 @@ def build_test_frame(
         sequence_number=0,
     )
 
-    header_encoded, payload_encoded = fc.encode(
+    header_encoded, payload_encoded = params.fc.encode(
         header,
         payload_bits,
-        channel_coding=pipeline.channel_coding,
-        interleaving=pipeline.interleaving,
+        channel_coding=params.pipeline.channel_coding,
+        interleaving=params.pipeline.interleaving,
     )
 
     bpsk = BPSK()
     header_symbols = bpsk.bits2symbols(header_encoded)
     payload_symbols = get_modulator(mod_scheme).bits2symbols(payload_encoded)
 
-    if pipeline.pilots:
-        payload_symbols = insert_pilots(payload_symbols, pilot_config)
+    if params.pipeline.pilots:
+        payload_symbols = insert_pilots(payload_symbols, params.pilot_config)
 
-    preamble = build_preamble(sync_config)
+    preamble = build_preamble(params.sync_config)
     frame = np.concatenate([preamble, header_symbols, payload_symbols])
 
     return frame, header
 
 
 def run_ber_test(
-    mod_scheme: ModulationSchemes,
-    snr_db: float,
-    n_payload_bits: int,
-    sdr,
-    h_rrc: np.ndarray,
-    sync: Synchronizer,
-    fc: FrameConstructor,
-    pilot_config: PilotConfig,
-    pipeline: PipelineConfig,
-    cfo_hz: int = 0,
+    test_case: TestCase,
+    radio: RadioContext,
+    *,
     verbose: bool = False,
     timing: bool = False,
 ) -> dict:
     """Run a single BER test at given SNR."""
+    rng = np.random.default_rng()
     timings = {}
+    mod_scheme = test_case.mod_scheme
+    snr_db = test_case.snr_db
+    n_payload_bits = test_case.n_payload_bits
 
     t0 = time.perf_counter()
-    tx_bits = np.random.randint(0, 2, n_payload_bits)
+    tx_bits = rng.integers(0, 2, n_payload_bits)
 
-    sync_config = sync.config
+    sync_config = radio.sync.config
+    build_params = FrameBuildParams(
+        fc=radio.fc,
+        sync_config=sync_config,
+        pilot_config=radio.pilot_config,
+        pipeline=radio.pipeline,
+    )
     frame_symbols, _header = build_test_frame(
-        tx_bits, fc, sync_config, pilot_config, pipeline, mod_scheme, CodeRates.HALF_RATE,
+        tx_bits, build_params, mod_scheme, CodeRates.HALF_RATE,
     )
 
-    tx_signal = upsample_and_filter(frame_symbols, SPS, h_rrc)
+    tx_signal = upsample_and_filter(frame_symbols, SPS, radio.h_rrc)
     zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
     tx_signal = np.concatenate([zeros, tx_signal, zeros])
     timings["tx_build"] = time.perf_counter() - t0
 
     # Transmit and receive through Pluto
     t0 = time.perf_counter()
-    rx_raw = transmit_and_receive(sdr, tx_signal, rx_delay_ms=50, n_captures=5)
+    rx_raw = transmit_and_receive(radio.sdr, tx_signal, rx_delay_ms=50, n_captures=5)
     timings["pluto_txrx"] = time.perf_counter() - t0
 
     # Add AWGN noise
@@ -143,11 +190,12 @@ def run_ber_test(
     timings["add_noise"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    rx_filtered = np.convolve(rx_noisy, h_rrc, mode="same")
+    rx_filtered = np.convolve(rx_noisy, radio.h_rrc, mode="same")
     timings["matched_filter"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    decoder = FrameDecoder(sync, fc, SAMPLE_RATE, SPS, pilot_config, pipeline)
+    radio.pipeline.pilot_config = radio.pilot_config
+    decoder = FrameDecoder(radio.sync, radio.fc, SAMPLE_RATE, SPS, radio.pipeline)
     result = decoder.try_decode(rx_filtered, abs_offset=0)
     timings["decode_total"] = time.perf_counter() - t0
 
@@ -175,7 +223,9 @@ def run_ber_test(
     }
 
 
-def plot_signal_vs_noise(signal: np.ndarray, noise: np.ndarray, active_region: tuple, snr_db: float):
+def plot_signal_vs_noise(
+    signal: np.ndarray, noise: np.ndarray, active_region: tuple[int, int], snr_db: float,
+) -> mpl.figure.Figure:
     """Plot signal and noise to visually verify noise levels."""
     start, end = active_region
     # Show a portion around the active region
@@ -196,7 +246,7 @@ def plot_signal_vs_noise(signal: np.ndarray, noise: np.ndarray, active_region: t
     ax.set_title("Clean Signal (before noise)")
     ax.set_ylabel("Amplitude")
     ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.grid(visible=True, alpha=0.3)
 
     # Noise only
     ax = axes[1]
@@ -205,10 +255,10 @@ def plot_signal_vs_noise(signal: np.ndarray, noise: np.ndarray, active_region: t
     ax.axvline(start, color="g", linestyle="--", alpha=0.5)
     ax.axvline(end, color="g", linestyle="--", alpha=0.5)
     noise_std = np.std(noise[start:end])
-    ax.set_title(f"Noise (σ={noise_std:.4f})")
+    ax.set_title(f"Noise (sigma={noise_std:.4f})")
     ax.set_ylabel("Amplitude")
     ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.grid(visible=True, alpha=0.3)
 
     # Noisy signal
     ax = axes[2]
@@ -220,22 +270,19 @@ def plot_signal_vs_noise(signal: np.ndarray, noise: np.ndarray, active_region: t
     ax.set_xlabel("Sample")
     ax.set_ylabel("Amplitude")
     ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.grid(visible=True, alpha=0.3)
 
     plt.suptitle(f"Signal vs Noise Comparison (SNR={snr_db:.1f} dB)", fontsize=14)
     plt.tight_layout()
     return fig
 
 
-def plot_constellation_and_eye(
-    rx_filtered: np.ndarray, sync_result, mod_scheme: ModulationSchemes, snr_db: float, title: str,
-):
-    """Plot constellation and eye diagram for a single test."""
-    pilot_config = PilotConfig()
-
-    if not sync_result.success:
-        return None
-
+def _extract_payload_symbols(
+    rx_filtered: np.ndarray,
+    sync_result: SynchronizationResult,
+    pilot_config: PilotConfig,
+) -> np.ndarray:
+    """Extract and preprocess payload symbols from the received signal."""
     # CFO correction
     cfo_hz = sync_result.cfo_hat_hz
     n_vec = np.arange(len(rx_filtered))
@@ -267,17 +314,42 @@ def plot_constellation_and_eye(
     if n_data_est > 0:
         d_idx = data_indices(n_data_est, pilot_config)
         d_idx = d_idx[d_idx < len(payload_symbols_all)]
-        payload_data_only = payload_symbols_all[d_idx]
-    else:
-        payload_data_only = payload_symbols_all
+        return payload_symbols_all[d_idx]
+    return payload_symbols_all
 
-    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+
+def _prepare_rx_payload(
+    rx_filtered: np.ndarray,
+    sync_result: SynchronizationResult,
+) -> np.ndarray:
+    """Prepare the raw (non-downsampled) RX payload for eye diagrams."""
+    cfo_hz = sync_result.cfo_hat_hz
+    n_vec = np.arange(len(rx_filtered))
+    rx_corrected = rx_filtered * np.exp(-1j * 2 * np.pi * cfo_hz / SAMPLE_RATE * n_vec)
+    data_start = sync_result.long_zc_start + 139 * SPS
+    rx_data = rx_corrected[data_start:]
+    n_header_symbols = 72
+    header_symbols = rx_data[::SPS][:n_header_symbols]
+    phase_est = np.angle(np.sum(header_symbols * np.sign(np.real(header_symbols))))
+    rx_data = rx_data * np.exp(-1j * phase_est)
+    power = np.mean(np.abs(rx_data[:1000]) ** 2)
+    if power > 0:
+        rx_data = rx_data / np.sqrt(power)
+    payload_start = n_header_symbols * SPS
+    return rx_data[payload_start:]
+
+
+def _plot_eye_diagrams(
+    axes: np.ndarray,
+    rx_payload: np.ndarray,
+    n_traces: int,
+) -> None:
+    """Plot I and Q eye diagrams on the first two axes."""
+    eye_len = 2 * SPS
+    t_eye = np.linspace(-1, 1, eye_len)
 
     # Eye diagram - I
     ax = axes[0]
-    eye_len = 2 * SPS
-    t_eye = np.linspace(-1, 1, eye_len)
-    n_traces = min(200, len(rx_payload) // SPS - 2)
     for i in range(n_traces):
         start = i * SPS
         if start + eye_len <= len(rx_payload):
@@ -287,7 +359,7 @@ def plot_constellation_and_eye(
     ax.set_xlabel("Symbol Period")
     ax.set_ylabel("Amplitude")
     ax.set_xlim(-1, 1)
-    ax.grid(True, alpha=0.3)
+    ax.grid(visible=True, alpha=0.3)
 
     # Eye diagram - Q
     ax = axes[1]
@@ -300,7 +372,28 @@ def plot_constellation_and_eye(
     ax.set_xlabel("Symbol Period")
     ax.set_ylabel("Amplitude")
     ax.set_xlim(-1, 1)
-    ax.grid(True, alpha=0.3)
+    ax.grid(visible=True, alpha=0.3)
+
+
+def plot_constellation_and_eye(
+    rx_filtered: np.ndarray,
+    sync_result: SynchronizationResult,
+    mod_scheme: ModulationSchemes,
+    snr_db: float,
+    title: str,
+) -> mpl.figure.Figure | None:
+    """Plot constellation and eye diagram for a single test."""
+    pilot_config = PilotConfig()
+
+    if not sync_result.success:
+        return None
+
+    payload_data_only = _extract_payload_symbols(rx_filtered, sync_result, pilot_config)
+    rx_payload = _prepare_rx_payload(rx_filtered, sync_result)
+    n_traces = min(200, len(rx_payload) // SPS - 2)
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+    _plot_eye_diagrams(axes[:2], rx_payload, n_traces)
 
     # Constellation
     ax = axes[2]
@@ -313,7 +406,7 @@ def plot_constellation_and_eye(
     ax.set_xlim(-1.5, 1.5)
     ax.set_ylim(-1.5, 1.5)
     ax.set_aspect("equal")
-    ax.grid(True, alpha=0.3)
+    ax.grid(visible=True, alpha=0.3)
     ax.legend()
 
     plt.suptitle(f"{title} (SNR={snr_db} dB)", fontsize=12)
@@ -321,55 +414,28 @@ def plot_constellation_and_eye(
     return fig
 
 
-def main() -> None:
-
-    # Setup
-    pipeline = PipelineConfig()
-    sync_config = SynchronizerConfig()
-    pilot_config = PilotConfig()
-    fc = FrameConstructor()
-    h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
-    sync = Synchronizer(sync_config, sps=SPS, rrc_taps=h_rrc)
-
-    # Random CFO
-    max_cfo = 3000
-    cfo_hz = np.random.randint(-max_cfo, max_cfo + 1)
-
-    sdr = setup_pluto()
-    if cfo_hz != 0:
-        sdr.rx_lo = int(CENTER_FREQ - cfo_hz)
-
-    # Test parameters - fine granularity, 0.2 dB steps
-    snr_values = list(np.arange(-6, 4.1, 0.5))
-    mod_schemes = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.QAM16]
-    n_payload_bits = 200
-    n_trials = 3  # Average over multiple trials per SNR point
-
-    # Collect BER results
-    ber_results = {mod: [] for mod in mod_schemes}
-    plot_data = {}  # Store one result per modulation for plotting
+def _collect_ber_results(
+    mod_schemes: list[ModulationSchemes],
+    snr_values: list[float],
+    n_payload_bits: int,
+    n_trials: int,
+    radio: RadioContext,
+) -> tuple[dict[ModulationSchemes, list[float]], dict]:
+    """Collect BER results for all modulation schemes and SNR values."""
+    ber_results: dict[ModulationSchemes, list[float]] = {mod: [] for mod in mod_schemes}
+    plot_data: dict = {}
 
     for mod_scheme in mod_schemes:
-
         for snr_db in snr_values:
-            bers = []
+            bers: list[float] = []
             last_result = None
-            failures = 0
 
             for trial in range(n_trials):
-                # Print timing/noise info only on first trial of first SNR per modulation
                 first_snr = snr_db == snr_values[0]
+                tc = TestCase(mod_scheme, snr_db, n_payload_bits)
                 result = run_ber_test(
-                    mod_scheme,
-                    snr_db,
-                    n_payload_bits,
-                    sdr,
-                    h_rrc,
-                    sync,
-                    fc,
-                    pilot_config,
-                    pipeline,
-                    cfo_hz,
+                    tc,
+                    radio,
                     verbose=(trial == 0 and first_snr),
                     timing=(trial == 0 and first_snr),
                 )
@@ -377,28 +443,32 @@ def main() -> None:
                     bers.append(result["ber"])
                     last_result = result
                 else:
-                    failures += 1
+                    pass
 
-            # Only count successful decodes for BER average
-            if bers:
-                avg_ber = np.mean(bers)
-            else:
-                avg_ber = 0.5  # All failed
+            avg_ber = np.mean(bers) if bers else 0.5
             ber_results[mod_scheme].append(avg_ber)
 
             # Store result for mid-range SNR for plotting
-            if snr_db == 4 and last_result and last_result["success"]:
+            if snr_db == PLOT_SNR_THRESHOLD and last_result and last_result["success"]:
                 plot_data[mod_scheme] = (last_result, snr_db)
 
-    # Plot BER vs SNR
-    fig, ax = plt.subplots(figsize=(10, 6))
+    return ber_results, plot_data
+
+
+def _plot_ber_curve(
+    snr_values: list[float],
+    ber_results: dict[ModulationSchemes, list[float]],
+    mod_schemes: list[ModulationSchemes],
+    cfo_hz: int,
+) -> None:
+    """Plot and save the BER vs SNR curve."""
+    _fig, ax = plt.subplots(figsize=(10, 6))
 
     markers = {"BPSK": "o", "QPSK": "s", "QAM16": "^"}
     colors = {"BPSK": "blue", "QPSK": "green", "QAM16": "red"}
 
     for mod_scheme in mod_schemes:
         bers = ber_results[mod_scheme]
-        # Replace zeros with small value for log plot
         bers_plot = [max(b, 1e-5) for b in bers]
         ax.semilogy(
             snr_values,
@@ -414,16 +484,57 @@ def main() -> None:
     ax.set_ylabel("Bit Error Rate (BER)", fontsize=12)
     ax.set_title(f"BER vs SNR - Full Pipeline with LDPC (CFO={cfo_hz:+d} Hz)", fontsize=14)
     ax.legend(fontsize=11)
-    ax.grid(True, which="both", alpha=0.3)
+    ax.grid(visible=True, which="both", alpha=0.3)
     ax.set_ylim(1e-5, 1)
 
-    os.makedirs(PLOT_DIR, exist_ok=True)
+    plt.tight_layout()
+    ber_path = Path(PLOT_DIR) / "ber_vs_snr.png"
+    plt.savefig(ber_path, dpi=150)
+
+
+def main() -> None:
+    """Run full pipeline BER vs SNR test across modulation schemes over PlutoSDR loopback."""
+    rng = np.random.default_rng()
+
+    # Setup
+    pipeline = PipelineConfig()
+    sync_config = SynchronizerConfig()
+    pilot_config = PilotConfig()
+    fc = FrameConstructor()
+    h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
+    sync = Synchronizer(sync_config, sps=SPS, rrc_taps=h_rrc)
+
+    # Random CFO
+    max_cfo = 3000
+    cfo_hz = int(rng.integers(-max_cfo, max_cfo + 1))
+
+    sdr = setup_pluto()
+    if cfo_hz != 0:
+        sdr.rx_lo = int(CENTER_FREQ - cfo_hz)
+
+    radio = RadioContext(
+        sdr=sdr, h_rrc=h_rrc, sync=sync, fc=fc, pilot_config=pilot_config, pipeline=pipeline,
+    )
+
+    # Test parameters - fine granularity, 0.5 dB steps
+    snr_values = list(np.arange(-6, 4.1, 0.5))
+    mod_schemes = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.QAM16]
+    n_payload_bits = 200
+    n_trials = 3
+
+    Path(PLOT_DIR).mkdir(parents=True, exist_ok=True)
+
+    ber_results, plot_data = _collect_ber_results(mod_schemes, snr_values, n_payload_bits, n_trials, radio)
+    _plot_ber_curve(snr_values, ber_results, mod_schemes, cfo_hz)
 
     # Generate noise diagnostic plot at low SNR
     diag_snr = -4.0
-    tx_bits = np.random.randint(0, 2, n_payload_bits)
+    tx_bits = rng.integers(0, 2, n_payload_bits)
+    build_params = FrameBuildParams(
+        fc=fc, sync_config=sync_config, pilot_config=pilot_config, pipeline=pipeline,
+    )
     frame_symbols, _ = build_test_frame(
-        tx_bits, fc, sync_config, pilot_config, pipeline, ModulationSchemes.QPSK, CodeRates.HALF_RATE,
+        tx_bits, build_params, ModulationSchemes.QPSK, CodeRates.HALF_RATE,
     )
     tx_signal = upsample_and_filter(frame_symbols, SPS, h_rrc)
     zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
@@ -432,12 +543,8 @@ def main() -> None:
     rx_noisy, noise, active_region = add_awgn(rx_raw, diag_snr, verbose=True, return_noise=True)
 
     fig_noise = plot_signal_vs_noise(rx_noisy, noise, active_region, diag_snr)
-    noise_path = os.path.join(PLOT_DIR, f"noise_diagnostic_snr{diag_snr:.0f}dB.png")
+    noise_path = Path(PLOT_DIR) / f"noise_diagnostic_snr{diag_snr:.0f}dB.png"
     fig_noise.savefig(noise_path, dpi=150)
-
-    plt.tight_layout()
-    ber_path = os.path.join(PLOT_DIR, "ber_vs_snr.png")
-    plt.savefig(ber_path, dpi=150)
 
     # Plot constellation/eye for each modulation at mid-range SNR
     for mod_scheme, (result, snr_db) in plot_data.items():
@@ -446,7 +553,7 @@ def main() -> None:
         )
         if fig:
             filename = f"pipeline_{mod_scheme.name}_snr{int(snr_db):+d}dB.png"
-            filepath = os.path.join(PLOT_DIR, filename)
+            filepath = Path(PLOT_DIR) / filename
             fig.savefig(filepath, dpi=150)
 
     plt.show()
