@@ -38,3 +38,7 @@ pyldpc = ["numpy"]
 [tool.ruff]
 line-length = 120
 extend-exclude = ["vendor"]
+
+[tool.ruff.lint.pylint]
+max-args = 8
+max-returns = 8

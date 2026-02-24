@@ -10,14 +10,11 @@ import adi
 import numpy as np
 
 from pluto import create_pluto
+from pluto.config import CENTER_FREQ, DAC_SCALE, SAMPLE_RATE
 
-CENTER_FREQ = 2_400_000_000
-SAMPLE_RATE = 1_000_000
-SPS = 4
 TX_GAIN = -30
 RX_GAIN = 40
 RX_BUFFER_SIZE = 2**16
-DAC_SCALE = 2**14
 
 
 def setup_pluto(

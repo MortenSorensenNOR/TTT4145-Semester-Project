@@ -7,11 +7,14 @@ Measures BER vs SNR for different modulation schemes.
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import adi
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
 
 from modules.channel_coding import CodeRates
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
@@ -24,9 +27,9 @@ from modules.synchronization import (
     SynchronizerConfig,
     build_preamble,
 )
-from pluto.config import PipelineConfig, get_modulator
-from pluto.loopback import CENTER_FREQ, SAMPLE_RATE, SPS, setup_pluto, transmit_and_receive
-from pluto.receive import FrameDecoder
+from pluto.config import CENTER_FREQ, SAMPLE_RATE, SPS, PipelineConfig, get_modulator
+from pluto.decode import FrameDecoder
+from pluto.loopback import setup_pluto, transmit_and_receive
 
 PLOT_DIR = "examples/data"
 RRC_ALPHA = 0.35
@@ -39,7 +42,7 @@ PLOT_SNR_THRESHOLD = 4
 class FrameBuildParams:
     """Parameters needed to build a test frame."""
 
-    fc: FrameConstructor
+    frame_constructor: FrameConstructor
     sync_config: SynchronizerConfig
     pilot_config: PilotConfig
     pipeline: PipelineConfig
@@ -61,7 +64,7 @@ class RadioContext:
     sdr: adi.Pluto
     h_rrc: np.ndarray
     sync: Synchronizer
-    fc: FrameConstructor
+    frame_constructor: FrameConstructor
     pilot_config: PilotConfig
     pipeline: PipelineConfig
 
@@ -70,7 +73,6 @@ def add_awgn(
     signal: np.ndarray,
     snr_db: float,
     *,
-    verbose: bool = False,
     return_noise: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray, tuple[int, int]]:
     """Add AWGN noise to achieve target SNR (in dB).
@@ -99,13 +101,8 @@ def add_awgn(
     noise = np.sqrt(noise_power / 2) * (rng.standard_normal(len(signal)) + 1j * rng.standard_normal(len(signal)))
     noisy_signal = signal + noise
 
-    if verbose:
-        # Verify actual SNR in active region
-        actual_noise_power = np.mean(np.abs(noise[active_region[0] : active_region[1]]) ** 2)
-        10 * np.log10(sig_power / actual_noise_power)
-
     if return_noise:
-        return noisy_signal, noise, active_region
+        return noisy_signal, noise, cast("tuple[int, int]", active_region)
     return noisy_signal
 
 
@@ -126,7 +123,7 @@ def build_test_frame(
         sequence_number=0,
     )
 
-    header_encoded, payload_encoded = params.fc.encode(
+    header_encoded, payload_encoded = params.frame_constructor.encode(
         header,
         payload_bits,
         channel_coding=params.pipeline.channel_coding,
@@ -150,7 +147,6 @@ def run_ber_test(
     test_case: TestCase,
     radio: RadioContext,
     *,
-    verbose: bool = False,
     timing: bool = False,
 ) -> dict:
     """Run a single BER test at given SNR."""
@@ -165,7 +161,7 @@ def run_ber_test(
 
     sync_config = radio.sync.config
     build_params = FrameBuildParams(
-        fc=radio.fc,
+        frame_constructor=radio.frame_constructor,
         sync_config=sync_config,
         pilot_config=radio.pilot_config,
         pipeline=radio.pipeline,
@@ -186,7 +182,8 @@ def run_ber_test(
 
     # Add AWGN noise
     t0 = time.perf_counter()
-    rx_noisy = add_awgn(rx_raw, snr_db, verbose=verbose)
+    rx_noisy_result = add_awgn(rx_raw, snr_db)
+    rx_noisy = cast("np.ndarray", rx_noisy_result)
     timings["add_noise"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -195,8 +192,8 @@ def run_ber_test(
 
     t0 = time.perf_counter()
     radio.pipeline.pilot_config = radio.pilot_config
-    decoder = FrameDecoder(radio.sync, radio.fc, SAMPLE_RATE, SPS, radio.pipeline)
-    result = decoder.try_decode(rx_filtered, abs_offset=0)
+    decoder = FrameDecoder(radio.sync, radio.frame_constructor, SAMPLE_RATE, radio.pipeline)
+    result = decoder.try_decode(rx_filtered, global_sample_offset=0)
     timings["decode_total"] = time.perf_counter() - t0
 
     if timing:
@@ -224,8 +221,11 @@ def run_ber_test(
 
 
 def plot_signal_vs_noise(
-    signal: np.ndarray, noise: np.ndarray, active_region: tuple[int, int], snr_db: float,
-) -> mpl.figure.Figure:
+    signal: np.ndarray,
+    noise: np.ndarray,
+    active_region: tuple[int, int],
+    snr_db: float,
+) -> "Figure":
     """Plot signal and noise to visually verify noise levels."""
     start, end = active_region
     # Show a portion around the active region
@@ -381,7 +381,7 @@ def plot_constellation_and_eye(
     mod_scheme: ModulationSchemes,
     snr_db: float,
     title: str,
-) -> mpl.figure.Figure | None:
+) -> "Figure | None":
     """Plot constellation and eye diagram for a single test."""
     pilot_config = PilotConfig()
 
@@ -436,7 +436,6 @@ def _collect_ber_results(
                 result = run_ber_test(
                     tc,
                     radio,
-                    verbose=(trial == 0 and first_snr),
                     timing=(trial == 0 and first_snr),
                 )
                 if result["success"]:
@@ -446,7 +445,7 @@ def _collect_ber_results(
                     pass
 
             avg_ber = np.mean(bers) if bers else 0.5
-            ber_results[mod_scheme].append(avg_ber)
+            ber_results[mod_scheme].append(float(avg_ber))
 
             # Store result for mid-range SNR for plotting
             if snr_db == PLOT_SNR_THRESHOLD and last_result and last_result["success"]:
@@ -500,7 +499,7 @@ def main() -> None:
     pipeline = PipelineConfig()
     sync_config = SynchronizerConfig()
     pilot_config = PilotConfig()
-    fc = FrameConstructor()
+    frame_constructor = FrameConstructor()
     h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
     sync = Synchronizer(sync_config, sps=SPS, rrc_taps=h_rrc)
 
@@ -513,11 +512,11 @@ def main() -> None:
         sdr.rx_lo = int(CENTER_FREQ - cfo_hz)
 
     radio = RadioContext(
-        sdr=sdr, h_rrc=h_rrc, sync=sync, fc=fc, pilot_config=pilot_config, pipeline=pipeline,
+        sdr=sdr, h_rrc=h_rrc, sync=sync, frame_constructor=frame_constructor, pilot_config=pilot_config, pipeline=pipeline,
     )
 
     # Test parameters - fine granularity, 0.5 dB steps
-    snr_values = list(np.arange(-6, 4.1, 0.5))
+    snr_values = [float(x) for x in np.arange(-6, 4.1, 0.5)]
     mod_schemes = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.QAM16]
     n_payload_bits = 200
     n_trials = 3
@@ -531,7 +530,7 @@ def main() -> None:
     diag_snr = -4.0
     tx_bits = rng.integers(0, 2, n_payload_bits)
     build_params = FrameBuildParams(
-        fc=fc, sync_config=sync_config, pilot_config=pilot_config, pipeline=pipeline,
+        frame_constructor=frame_constructor, sync_config=sync_config, pilot_config=pilot_config, pipeline=pipeline,
     )
     frame_symbols, _ = build_test_frame(
         tx_bits, build_params, ModulationSchemes.QPSK, CodeRates.HALF_RATE,
@@ -540,7 +539,7 @@ def main() -> None:
     zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
     tx_signal = np.concatenate([zeros, tx_signal, zeros])
     rx_raw = transmit_and_receive(sdr, tx_signal, rx_delay_ms=50, n_captures=5)
-    rx_noisy, noise, active_region = add_awgn(rx_raw, diag_snr, verbose=True, return_noise=True)
+    rx_noisy, noise, active_region = add_awgn(rx_raw, diag_snr, return_noise=True)
 
     fig_noise = plot_signal_vs_noise(rx_noisy, noise, active_region, diag_snr)
     noise_path = Path(PLOT_DIR) / f"noise_diagnostic_snr{diag_snr:.0f}dB.png"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from modules.channel_coding import CodeRates
@@ -15,6 +15,8 @@ from modules.synchronization import SynchronizerConfig
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import adi
+
 SAMPLE_RATE = 1_000_000
 CENTER_FREQ = 2_400_000_000
 SPS = 4
@@ -26,6 +28,8 @@ MOD_SCHEME = ModulationSchemes.QPSK
 CODING_RATE = CodeRates.THREE_QUARTER_RATE  # Higher rate = more throughput (needs good SNR)
 DEFAULT_TX_GAIN = -10
 RX_BUFFER_SIZE = 2**14  # Smaller buffer = lower latency
+NODE_SRC = 0
+NODE_DST = 0
 
 # FDD frequency pair for bidirectional bridge mode
 FREQ_A_TO_B = 2_400_000_000
@@ -46,18 +50,44 @@ class PipelineConfig:
     channel_coding: bool = True
     interleaving: bool = True
     cfo_correction: bool = True
-    pilot_config: PilotConfig | None = None
+    pilot_config: PilotConfig = field(default_factory=PilotConfig)
 
     def __post_init__(self) -> None:
         """Validate pipeline configuration. Making sure costas and pilots are not running at the same time."""
         if self.pilots and self.costas_loop:
             msg = "Pilots and Costas loop are mutually exclusive"
             raise ValueError(msg)
-        if self.pilot_config is None:
-            self.pilot_config = PilotConfig()
 
 
 PIPELINE = PipelineConfig()
+
+
+def configure_rx(
+    sdr: adi.Pluto,
+    *,
+    freq: int = CENTER_FREQ,
+    gain_mode: str = "slow_attack",
+) -> None:
+    """Apply standard RX settings to an SDR."""
+    sdr.gain_control_mode_chan0 = gain_mode
+    sdr.rx_lo = int(freq)
+    sdr.sample_rate = SAMPLE_RATE
+    sdr.rx_rf_bandwidth = int(SAMPLE_RATE)
+    sdr.rx_buffer_size = RX_BUFFER_SIZE
+
+
+def configure_tx(
+    sdr: adi.Pluto,
+    *,
+    freq: int = CENTER_FREQ,
+    gain: float = DEFAULT_TX_GAIN,
+) -> None:
+    """Apply standard TX settings to an SDR."""
+    sdr.sample_rate = SAMPLE_RATE
+    sdr.tx_rf_bandwidth = int(SAMPLE_RATE)
+    sdr.tx_lo = int(freq)
+    sdr.tx_hardwaregain_chan0 = gain
+
 
 _modulator_cache: dict[ModulationSchemes, Modulator] = {}
 

@@ -50,7 +50,7 @@ class FrameHeader:
 class FrameHeaderConfig:
     """Bit-width configuration for frame header fields."""
 
-    payload_length_bits: int = 12  # length in bytes
+    payload_length_bits: int = 12  # length in bits
     src_bits: int = 2
     dst_bits: int = 2
     frame_type_bits: int = 2
@@ -213,6 +213,7 @@ class FrameConstructor:
     """Build and parse frames based on a configured header format."""
 
     PAYLOAD_CRC_BITS = 16
+    PAYLOAD_PAD_MULTIPLE = 12
 
     def __init__(
         self,
@@ -234,7 +235,7 @@ class FrameConstructor:
         """Return the number of coded payload bits for a given header."""
         if not channel_coding or header.coding_rate == CodeRates.NONE:
             raw = header.length + self.PAYLOAD_CRC_BITS
-            return raw + (-raw % 12)  # pad to multiple of 12
+            return raw + (-raw % self.PAYLOAD_PAD_MULTIPLE)
         k = _closest_payload_length(header.length + self.PAYLOAD_CRC_BITS, header.coding_rate)
         return LDPCConfig(k=k, code_rate=header.coding_rate).n
 

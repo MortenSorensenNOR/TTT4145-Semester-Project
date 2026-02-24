@@ -5,16 +5,20 @@ Injects real CFO by offsetting TX/RX LO frequencies.
 """
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import adi
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
 
 from modules.modulation import QPSK
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
 from modules.synchronization import Synchronizer, SynchronizerConfig, build_preamble
-from pluto.loopback import CENTER_FREQ, SAMPLE_RATE, SPS, setup_pluto, transmit_and_receive
+from pluto.config import CENTER_FREQ, SAMPLE_RATE, SPS
+from pluto.loopback import setup_pluto, transmit_and_receive
 
 PLOT_DIR = "examples/data"
 RRC_ALPHA = 0.35
@@ -57,7 +61,7 @@ def run_sync_test(
     }
 
 
-def plot_sync_result(result: dict, title: str) -> mpl.figure.Figure:
+def plot_sync_result(result: dict, title: str) -> "Figure":
     """Plot the synchronization process."""
     rx = result["rx_filtered"]
     sync = result["sync"]
@@ -112,14 +116,7 @@ def test_with_cfo_offset(
     sdr = setup_pluto(freq_hz=tx_lo)
     sdr.rx_lo = int(rx_lo)
 
-    result = run_sync_test(sdr, h_rrc, sync, injected_cfo)
-
-    if result["success"]:
-        result["cfo_estimated"] - injected_cfo
-    else:
-        pass
-
-    return result
+    return run_sync_test(sdr, h_rrc, sync, injected_cfo)
 
 
 def main() -> None:

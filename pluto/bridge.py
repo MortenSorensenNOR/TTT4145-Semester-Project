@@ -24,9 +24,11 @@ import struct
 import threading
 from dataclasses import dataclass
 
+import adi
 import numpy as np
 
 from modules.channel_coding import LDPCConfig, ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths
+from modules.frame_constructor import FrameConstructor
 from modules.util import bytes_to_bits
 from pluto import create_pluto
 from pluto.config import (
@@ -37,10 +39,11 @@ from pluto.config import (
     FREQ_B_TO_A,
     MOD_SCHEME,
     PIPELINE,
-    RX_BUFFER_SIZE,
-    SAMPLE_RATE,
+    configure_rx,
+    configure_tx,
 )
-from pluto.receive import FrameResult, create_decoder, run_receiver
+from pluto.decode import FrameResult, create_decoder
+from pluto.receive import run_receiver
 from pluto.transmit import build_tx_signal_from_bits, max_payload_bits
 
 logger = logging.getLogger(__name__)
@@ -118,22 +121,34 @@ def configure_tun(name: str, ip_addr: str, peer_addr: str, mtu: int) -> None:
     logger.info("TUN %s: %s/24 (peer %s, MTU %d)", name, ip_addr, peer_addr, mtu)
 
 
-def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
+def _warm_tx_cache(frame_constructor: FrameConstructor) -> None:
+    """Pre-warm LDPC encode cache for all supported payload sizes."""
+    logger.info("TX: warming LDPC cache...")
+    for k in ldpc_get_supported_payload_lengths(CODING_RATE):
+        dummy_bits = np.zeros(int(k) - 16, dtype=np.uint8)  # -16 for CRC
+        build_tx_signal_from_bits(dummy_bits, frame_constructor, MOD_SCHEME, CODING_RATE)
+    logger.info("TX: LDPC cache ready")
+
+
+def _warm_rx_cache() -> None:
+    """Pre-warm LDPC decode cache for all supported payload sizes."""
+    logger.info("RX: warming LDPC cache...")
+    for k in ldpc_get_supported_payload_lengths(CODING_RATE):
+        config = LDPCConfig(k=int(k), code_rate=CODING_RATE)
+        dummy_msg = np.zeros(int(k), dtype=int)
+        codeword = ldpc_encode(dummy_msg, config)
+        llr = (1 - 2 * codeword).astype(float) * 5.0
+        ldpc_decode(llr, config, max_iterations=1)
+    logger.info("RX: LDPC cache ready")
+
+
+def tx_thread(tun_fd: int, sdr: adi.Pluto, mtu: int, tx_buffer_len: int) -> None:
     """Read IP packets from TUN and transmit over PlutoSDR."""
+    frame_constructor = FrameConstructor()
     max_bits = max_payload_bits(CODING_RATE)
     logger.info("TX thread started (max payload %d bytes)", max_bits // 8)
 
-    # Pre-warm LDPC cache for all supported payload sizes to avoid 100-400ms JIT delays
-    logger.info("TX: warming LDPC cache...")
-    for k in ldpc_get_supported_payload_lengths(CODING_RATE):
-        # Build a dummy frame to trigger cache population
-        dummy_bits = np.zeros(int(k) - 16, dtype=np.uint8)  # -16 for CRC
-        build_tx_signal_from_bits(dummy_bits, MOD_SCHEME, CODING_RATE)
-    logger.info("TX: LDPC cache ready")
-
-    # Compute fixed buffer length from max-size frame (PlutoSDR requires constant buffer size)
-    max_signal = build_tx_signal_from_bits(np.zeros(max_bits, dtype=np.uint8), MOD_SCHEME, CODING_RATE)
-    tx_buffer_len = len(max_signal)
+    _warm_tx_cache(frame_constructor)
 
     while True:
         try:
@@ -150,7 +165,7 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
             continue
 
         try:
-            tx_signal = build_tx_signal_from_bits(payload_bits, MOD_SCHEME, CODING_RATE)
+            tx_signal = build_tx_signal_from_bits(payload_bits, frame_constructor, MOD_SCHEME, CODING_RATE)
             # Pad to fixed buffer length
             samples = np.zeros(tx_buffer_len, dtype=complex)
             samples[: len(tx_signal)] = tx_signal * DAC_SCALE
@@ -160,19 +175,10 @@ def tx_thread(tun_fd: int, sdr: object, mtu: int) -> None:
             logger.exception("TX: failed to transmit packet")
 
 
-def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
+def rx_thread_bridge(tun_fd: int, sdr: adi.Pluto) -> None:
     """Receive frames from PlutoSDR and write decoded IP packets to TUN."""
-    decoder, h_rrc = create_decoder(PIPELINE)
-
-    # Pre-warm LDPC decode cache
-    logger.info("RX: warming LDPC cache...")
-    for k in ldpc_get_supported_payload_lengths(CODING_RATE):
-        config = LDPCConfig(k=int(k), code_rate=CODING_RATE)
-        dummy_msg = np.zeros(int(k), dtype=int)
-        codeword = ldpc_encode(dummy_msg, config)
-        llr = (1 - 2 * codeword).astype(float) * 5.0
-        ldpc_decode(llr, config, max_iterations=1)
-    logger.info("RX: LDPC cache ready")
+    decoder = create_decoder(PIPELINE)
+    _warm_rx_cache()
 
     def on_frame(result: FrameResult) -> None:
         data = result.payload_bytes
@@ -191,7 +197,7 @@ def rx_thread_bridge(tun_fd: int, sdr: object) -> None:
             logger.exception("RX: TUN write failed")
 
     logger.info("RX thread started")
-    run_receiver(sdr, decoder, h_rrc, RX_BUFFER_SIZE, on_frame)  # type: ignore[arg-type]
+    run_receiver(sdr, decoder, on_frame)  # type: ignore[arg-type]
 
 
 def main() -> None:
@@ -217,22 +223,17 @@ def main() -> None:
 
     # ── SDR setup ─────────────────────────────────────────────────────
     sdr = create_pluto()
-    sdr.sample_rate = int(SAMPLE_RATE)
+    configure_tx(sdr, freq=node.tx_freq, gain=args.tx_gain)
 
-    # TX config - compute buffer size from max frame
+    # Compute TX buffer size from max-size frame (PlutoSDR requires constant buffer size)
+    frame_constructor = FrameConstructor()
     max_bits = max_payload_bits(CODING_RATE)
-    max_signal = build_tx_signal_from_bits(np.zeros(max_bits, dtype=np.uint8), MOD_SCHEME, CODING_RATE)
-    sdr.tx_buffer_size = len(max_signal)
-    sdr.tx_rf_bandwidth = int(SAMPLE_RATE)
-    sdr.tx_lo = int(node.tx_freq)
-    sdr.tx_hardwaregain_chan0 = args.tx_gain
+    max_signal = build_tx_signal_from_bits(np.zeros(max_bits, dtype=np.uint8), frame_constructor, MOD_SCHEME, CODING_RATE)
+    tx_buffer_len = len(max_signal)
+    sdr.tx_buffer_size = tx_buffer_len
 
-    # RX config
     rx_freq = node.rx_freq + args.rx_cfo_offset
-    sdr.gain_control_mode_chan0 = "slow_attack"
-    sdr.rx_lo = int(rx_freq)
-    sdr.rx_rf_bandwidth = int(SAMPLE_RATE)
-    sdr.rx_buffer_size = RX_BUFFER_SIZE
+    configure_rx(sdr, freq=rx_freq)
 
     sdr.rx()  # flush stale DMA buffer
 
@@ -247,7 +248,7 @@ def main() -> None:
 
     # ── Launch TX and RX threads ──────────────────────────────────────
     # TX and RX use separate DMA channels in libiio, safe to use from different threads.
-    t_tx = threading.Thread(target=tx_thread, args=(tun_fd, sdr, tun_mtu), daemon=True, name="tx")
+    t_tx = threading.Thread(target=tx_thread, args=(tun_fd, sdr, tun_mtu, tx_buffer_len), daemon=True, name="tx")
     t_rx = threading.Thread(target=rx_thread_bridge, args=(tun_fd, sdr), daemon=True, name="rx")
     t_tx.start()
     t_rx.start()

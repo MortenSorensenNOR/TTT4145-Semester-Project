@@ -7,13 +7,14 @@ Uses QPSK modulation with RRC pulse shaping.
 from dataclasses import dataclass
 from pathlib import Path
 
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.figure import Figure
 
 from modules.modulation import QPSK
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
-from pluto.loopback import SPS, setup_pluto, transmit_and_receive
+from pluto.config import SPS
+from pluto.loopback import setup_pluto, transmit_and_receive
 
 PLOT_DIR = "examples/data"
 RRC_ALPHA = 0.35
@@ -39,7 +40,7 @@ def estimate_phase_offset(rx_symbols: np.ndarray, tx_symbols: np.ndarray) -> flo
 
 
 def _plot_iq_comparison(
-    fig: mpl.figure.Figure,
+    fig: Figure,
     tx_baseband: np.ndarray,
     rx_baseband: np.ndarray,
     tx_symbols_norm: np.ndarray,
@@ -70,7 +71,7 @@ def _plot_iq_comparison(
 
 
 def _plot_eye_diagrams(
-    fig: mpl.figure.Figure,
+    fig: Figure,
     rx_baseband: np.ndarray,
     n_symbols: int,
 ) -> None:
@@ -105,7 +106,7 @@ def _plot_eye_diagrams(
 
 
 def _plot_constellations(
-    fig: mpl.figure.Figure,
+    fig: Figure,
     data: ConstellationPlotData,
 ) -> None:
     """Plot constellations before and after phase correction (row 3 of the figure)."""

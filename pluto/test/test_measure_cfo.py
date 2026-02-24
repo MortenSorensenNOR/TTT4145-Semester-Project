@@ -1,5 +1,7 @@
 """Measure actual carrier frequency offset using FFT."""
 
+from typing import cast
+
 import numpy as np
 
 from pluto import create_pluto
@@ -22,7 +24,7 @@ def measure_cfo_fft(samples: np.ndarray, sample_rate: float) -> float:
     # Find peak (excluding DC)
     magnitude = np.abs(spectrum)
     dc_idx = n_fft // 2
-    exclude_width = 100  # Exclude ±100 bins around DC
+    exclude_width = 100  # Exclude +-100 bins around DC
     magnitude[dc_idx - exclude_width : dc_idx + exclude_width] = 0
 
     peak_idx = np.argmax(magnitude)
@@ -46,14 +48,11 @@ def main() -> None:
 
     try:
         while True:
-            samples = sdr.rx()
+            samples = cast("np.ndarray", sdr.rx())
 
             # Measure CFO
             cfo = measure_cfo_fft(samples, SAMPLE_RATE)
             cfo_measurements.append(cfo)
-
-            # Running average
-            np.mean(cfo_measurements[-20:])
 
 
     except KeyboardInterrupt:

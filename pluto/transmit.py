@@ -17,6 +17,8 @@ from pluto.config import (
     CODING_RATE,
     DEFAULT_TX_GAIN,
     MOD_SCHEME,
+    NODE_DST,
+    NODE_SRC,
     PILOT_CONFIG,
     PIPELINE,
     RRC_ALPHA,
@@ -26,24 +28,27 @@ from pluto.config import (
     get_modulator,
 )
 
-GUARD_SAMPLES = 500
-
-_fc = FrameConstructor()
-_h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
+GUARD_SAMPLES = 500  # zeros before/after TX to avoid DAC transients
+UNCODED_MAX_PAYLOAD_BITS = 2**10 - 1  # conservative limit when channel coding is off
 
 
 def max_payload_bits(coding_rate: CodeRates = CODING_RATE) -> int:
     """Maximum number of payload bits for the given coding rate."""
     if not PIPELINE.channel_coding:
-        return 2**10 - 1  # header length field limit
+        return UNCODED_MAX_PAYLOAD_BITS
     max_k = int(max(ldpc_get_supported_payload_lengths(coding_rate)))
     return max_k - FrameConstructor.PAYLOAD_CRC_BITS
 
 
 def build_tx_signal_from_bits(
     payload_bits: np.ndarray,
+    frame_constructor: FrameConstructor,
     mod_scheme: ModulationSchemes = MOD_SCHEME,
     coding_rate: CodeRates = CODING_RATE,
+    src: int = NODE_SRC,
+    dst: int = NODE_DST,
+    frame_type: int = 0,
+    sequence_number: int = 0,
 ) -> np.ndarray:
     """Run the full TX pipeline from raw payload bits and return baseband samples."""
     max_bits = max_payload_bits(coding_rate)
@@ -53,14 +58,14 @@ def build_tx_signal_from_bits(
 
     header = FrameHeader(
         length=len(payload_bits),
-        src=0,
-        dst=0,
-        frame_type=0,
+        src=src,
+        dst=dst,
+        frame_type=frame_type,
         mod_scheme=mod_scheme,
         coding_rate=coding_rate,
-        sequence_number=0,
+        sequence_number=sequence_number,
     )
-    header_encoded, payload_encoded = _fc.encode(
+    header_encoded, payload_encoded = frame_constructor.encode(
         header,
         payload_bits,
         channel_coding=PIPELINE.channel_coding,
@@ -75,25 +80,43 @@ def build_tx_signal_from_bits(
     preamble = build_preamble(SYNC_CONFIG)
     frame = np.concatenate([preamble, header_symbols, payload_symbols])
 
-    tx_signal = upsample_and_filter(frame, SPS, _h_rrc) if PIPELINE.pulse_shaping else frame
+    if PIPELINE.pulse_shaping:
+        h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
+        tx_signal = upsample_and_filter(frame, SPS, h_rrc)
+    else:
+        tx_signal = frame
     zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
     return np.concatenate([zeros, tx_signal, zeros])
 
 
 def build_tx_signal(
     message: str,
+    frame_constructor: FrameConstructor,
     mod_scheme: ModulationSchemes = MOD_SCHEME,
     coding_rate: CodeRates = CODING_RATE,
+    src: int = NODE_SRC,
+    dst: int = NODE_DST,
+    frame_type: int = 0,
+    sequence_number: int = 0,
 ) -> np.ndarray:
     """Run the full TX pipeline from a text message and return baseband samples."""
-    return build_tx_signal_from_bits(text_to_bits(message), mod_scheme, coding_rate)
+    return build_tx_signal_from_bits(
+        text_to_bits(message),
+        frame_constructor,
+        mod_scheme,
+        coding_rate,
+        src,
+        dst,
+        frame_type,
+        sequence_number,
+    )
 
 
 if __name__ == "__main__":
     import argparse
 
     from pluto import create_pluto
-    from pluto.config import CENTER_FREQ, DAC_SCALE, SAMPLE_RATE
+    from pluto.config import DAC_SCALE, configure_tx
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger(__name__)
@@ -105,13 +128,11 @@ if __name__ == "__main__":
 
     # ── SDR setup ─────────────────────────────────────────────────────
     sdr = create_pluto()
-    sdr.sample_rate = int(SAMPLE_RATE)
-    sdr.tx_rf_bandwidth = int(SAMPLE_RATE)
-    sdr.tx_lo = int(CENTER_FREQ)
-    sdr.tx_hardwaregain_chan0 = args.tx_gain
+    configure_tx(sdr, gain=args.tx_gain)
 
     # ── Build TX signal ───────────────────────────────────────────────
-    tx_signal = build_tx_signal(args.message, MOD_SCHEME, CODING_RATE)
+    frame_constructor = FrameConstructor()
+    tx_signal = build_tx_signal(args.message, frame_constructor, MOD_SCHEME, CODING_RATE)
     samples = tx_signal * DAC_SCALE
 
     logger.info("TX: %r  (%d samples @ %d sps, gain=%.0f dB)", args.message, len(samples), SPS, args.tx_gain)

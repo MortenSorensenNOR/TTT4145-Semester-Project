@@ -88,7 +88,7 @@ class TimingReport:
             bar_len = int(pct / 100 * 25)
             bar = "#" * bar_len
             name = entry.name[:name_width].ljust(name_width)
-            print(f"{name} {bar} {pct:6.1f}% ({entry.duration_ms:7.2f} ms)")
+            logger.info("%s %s %.1f%% (%.2f ms)", name, bar, pct, entry.duration_ms)
 
 
 
@@ -292,7 +292,7 @@ class TestComponentTiming:
             report.add(f"{name} encode", elapsed_ms)
 
             # Add noise for soft demod
-            symbols_array = cast(np.ndarray, symbols)
+            symbols_array = cast("np.ndarray", symbols)
             noisy = symbols_array + rng.normal(0, 0.1, len(symbols_array)) * (1 + 1j)
 
             # Time soft decoding
@@ -363,7 +363,7 @@ class TestComponentTiming:
         report.add("insert_pilots", elapsed_ms)
 
         # Add phase rotation for phase tracking test
-        symbols_with_pilots_array = cast(np.ndarray, symbols_with_pilots)
+        symbols_with_pilots_array = cast("np.ndarray", symbols_with_pilots)
         phase = np.linspace(0, np.pi / 4, len(symbols_with_pilots_array))
         rotated = symbols_with_pilots_array * np.exp(1j * phase)
 
@@ -423,7 +423,7 @@ class TestComponentTiming:
             report.add(f"encode {n_messages} msg(s)", elapsed_ms)
 
             # Add up to 2 errors per 24-bit block (safe for Golay correction)
-            encoded_array = cast(np.ndarray, encoded)
+            encoded_array = cast("np.ndarray", encoded)
             received = encoded_array.copy()
             for block_idx in range(n_messages):
                 block_start = block_idx * 24
@@ -592,6 +592,7 @@ class TestPipelineTiming:
         full_frame = np.concatenate([preamble, symbols_with_pilots])
         tx_signal = upsample_and_filter(full_frame, sps, rrc_taps)
         tx_elapsed_ms = (time.perf_counter() - tx_start) * 1000
+        logger.info("TX elapsed: %.2f ms", tx_elapsed_ms)
 
         # Apply channel
         channel = ChannelModel(ChannelConfig(snr_db=15.0, cfo_hz=50.0, seed=42))
@@ -617,6 +618,7 @@ class TestPipelineTiming:
             llrs_flat = np.pad(llrs_flat, (0, ldpc_config.n - len(llrs_flat)))
         ldpc_decode(llrs_flat[: ldpc_config.n], ldpc_config, max_iterations=50)
         rx_elapsed_ms = (time.perf_counter() - rx_start) * 1000
+        logger.info("RX elapsed: %.2f ms", rx_elapsed_ms)
 
 
 
@@ -779,16 +781,16 @@ BYTES_PER_MB = 1024 * 1024
 def _get_array_memory(arr: object) -> int:
     """Return memory in bytes for a numpy array or sparse matrix."""
     if isinstance(arr, np.ndarray):
-        return cast(int, arr.nbytes)
+        return cast("int", arr.nbytes)
     if hasattr(arr, "data") and hasattr(arr, "indices") and hasattr(arr, "indptr"):
         # sparse matrix - access attributes via hasattr after type narrowing
         arr_data = getattr(arr, "data", None)
         arr_indices = getattr(arr, "indices", None)
         arr_indptr = getattr(arr, "indptr", None)
         if arr_data is not None and arr_indices is not None and arr_indptr is not None:
-            data_nbytes = cast(int, cast(np.ndarray, arr_data).nbytes)
-            indices_nbytes = cast(int, cast(np.ndarray, arr_indices).nbytes)
-            indptr_nbytes = cast(int, cast(np.ndarray, arr_indptr).nbytes)
+            data_nbytes = cast("int", cast("np.ndarray", arr_data).nbytes)
+            indices_nbytes = cast("int", cast("np.ndarray", arr_indices).nbytes)
+            indptr_nbytes = cast("int", cast("np.ndarray", arr_indptr).nbytes)
             return data_nbytes + indices_nbytes + indptr_nbytes
     return 0
 
@@ -869,11 +871,10 @@ class TestMemoryUsage:
             total_decode += dec_mem
 
             code_rate_name = code_rate.name.replace("_RATE", "").replace("_", "/").lower()
-            cache_size_per_config = h_mem + enc_mem + dec_mem
-            logger.debug(f"Cache stats for {code_rate_name}: H={h_mem}, enc={enc_mem}, dec={dec_mem}")
+            logger.debug("Cache stats for %s: H=%s, enc=%s, dec=%s", code_rate_name, h_mem, enc_mem, dec_mem)
 
         total_cache_bytes = total_h + total_encoding + total_decode
-        logger.info(f"Total cache size: {_format_bytes(total_cache_bytes)}")
+        logger.info("Total cache size: %s", _format_bytes(total_cache_bytes))
 
         # Cache size counts
 

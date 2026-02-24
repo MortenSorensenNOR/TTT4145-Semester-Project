@@ -12,7 +12,8 @@ import numpy as np
 
 from modules.modulation import BPSK, QAM, QPSK
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
-from pluto.loopback import SPS, setup_pluto, transmit_and_receive
+from pluto.config import SPS
+from pluto.loopback import setup_pluto, transmit_and_receive
 
 PLOT_DIR = "examples/data"
 RRC_ALPHA = 0.35

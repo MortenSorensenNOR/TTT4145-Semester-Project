@@ -18,8 +18,8 @@ from modules.pilots import PilotConfig, insert_pilots
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
 from modules.synchronization import Synchronizer, SynchronizerConfig, build_preamble
 from modules.util import ebn0_to_snr, text_to_bits
-from pluto.config import get_modulator
-from pluto.receive import FrameDecoder
+from pluto.config import PipelineConfig, get_modulator
+from pluto.decode import FrameDecoder
 
 MESSAGE_LENGTH = 324
 MAX_BIT_ERRORS_AWGN = 5
@@ -279,8 +279,8 @@ class TestFullPipeline:
             coding_rate=coding_rate,
             sequence_number=0,
         )
-        fc = FrameConstructor()
-        header_encoded, payload_encoded = fc.encode(header, payload_bits)
+        frame_constructor = FrameConstructor()
+        header_encoded, payload_encoded = frame_constructor.encode(header, payload_bits)
 
         header_symbols = BPSK().bits2symbols(header_encoded)
         payload_symbols = get_modulator(mod_scheme).bits2symbols(payload_encoded)
@@ -303,10 +303,10 @@ class TestFullPipeline:
         rx_filtered = np.convolve(rx_raw, rrc, mode="same")
 
         sync = Synchronizer(sync_config, sps=self.SPS, rrc_taps=rrc)
-        fc = FrameConstructor()
-        decoder = FrameDecoder(sync, fc, sample_rate=self.SAMPLE_RATE, sps=self.SPS)
+        frame_constructor = FrameConstructor()
+        decoder = FrameDecoder(sync, frame_constructor, sample_rate=self.SAMPLE_RATE, pipeline=PipelineConfig())
 
-        result = decoder.try_decode(rx_filtered, abs_offset=0)
+        result = decoder.try_decode(rx_filtered, global_sample_offset=0)
         return result.text if result is not None else None
 
     def test_pipeline_no_impairments(

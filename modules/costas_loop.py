@@ -139,10 +139,10 @@ def apply_costas_loop(
 
         # 4. Update the phase estimate for the next symbol
         phase_estimate += proportional + integrator
-        
+
         # 5. Wrap phase estimate to -pi to pi for consistent plotting and analysis
         phase_estimate = (phase_estimate + np.pi) % (2 * np.pi) - np.pi
-        
+
         corrected_symbols[i] = corrected_sym
         phase_estimates[i] = phase_estimate
 
