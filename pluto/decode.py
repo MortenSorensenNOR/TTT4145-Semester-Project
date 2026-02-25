@@ -111,7 +111,7 @@ class FrameDecoder:
             logger.debug("Not enough symbols for header")
             return None
 
-        header = self._demodulate_header(symbols)
+        header, header_final_phase = self._demodulate_header(symbols)
         if header is None:
             return None
 
@@ -140,6 +140,7 @@ class FrameDecoder:
             modulator,
             n_data_symbols,
             n_total_payload,
+            header_final_phase,
         )
         if payload_bits is None:
             return None
@@ -213,17 +214,23 @@ class FrameDecoder:
             return symbols
         return symbols / np.sqrt(header_power)
 
-    def _demodulate_header(self, symbols: np.ndarray) -> FrameHeader | None:
-        """Hard-demodulate the BPSK header, applying Costas loop if enabled."""
+    def _demodulate_header(self, symbols: np.ndarray) -> tuple[FrameHeader | None, float]:
+        """Hard-demodulate the BPSK header, applying Costas loop if enabled.
+
+        Returns the decoded header and the final Costas phase estimate (0.0 if
+        the Costas loop is disabled).
+        """
         header_symbols = symbols[: self.header_n_symbols]
+        final_phase = 0.0
         if self.pipeline.costas_loop:
-            header_symbols, _ = apply_costas_loop(symbols=header_symbols, config=COSTAS_CONFIG)
+            header_symbols, phase_estimates = apply_costas_loop(symbols=header_symbols, config=COSTAS_CONFIG)
+            final_phase = float(phase_estimates[-1])
         header_bits = _HEADER_BPSK.symbols2bits(header_symbols).flatten()
         try:
-            return self.frame_constructor.decode_header(header_bits)
+            return self.frame_constructor.decode_header(header_bits), final_phase
         except ValueError:
             logger.debug("Header CRC failed")
-            return None
+            return None, final_phase
 
     def _decode_payload(
         self,
@@ -232,6 +239,7 @@ class FrameDecoder:
         modulator: Modulator,
         n_data_symbols: int,
         n_total_payload_symbols: int,
+        header_final_phase: float = 0.0,
     ) -> np.ndarray | None:
         """Demodulate and channel-decode the payload, returning decoded bits or None."""
         payload_symbols = symbols[self.header_n_symbols : self.header_n_symbols + n_total_payload_symbols]
@@ -239,6 +247,12 @@ class FrameDecoder:
         if self.pipeline.pilots:
             header_symbols = symbols[: self.header_n_symbols]
             payload_symbols = self._apply_pilot_corrections(payload_symbols, header_symbols, n_data_symbols)
+        elif self.pipeline.costas_loop:
+            payload_symbols, _ = apply_costas_loop(
+                symbols=payload_symbols,
+                config=COSTAS_CONFIG,
+                current_phase_estimate=header_final_phase,
+            )
 
         payload_sigma_sq = modulator.estimate_noise_variance(payload_symbols)
         payload_llrs = modulator.symbols2bits_soft(payload_symbols, sigma_sq=payload_sigma_sq).flatten()
