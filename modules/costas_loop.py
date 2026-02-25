@@ -148,16 +148,6 @@ def apply_costas_loop(
             corrected_symbols[i] = corrected_sym
             phase_estimates[i] = phase_estimate
 
-<<<<<<< HEAD
-        # 4. Update the phase estimate for the next symbol
-        phase_estimate += proportional + integrator
-
-        # 5. Wrap phase estimate to -pi to pi for consistent plotting and analysis
-        phase_estimate = (phase_estimate + np.pi) % (2 * np.pi) - np.pi
-
-        corrected_symbols[i] = corrected_sym
-        phase_estimates[i] = phase_estimate
-=======
     if isinstance(modulator, QPSK):
         for i, sym in enumerate(symbols):
 
@@ -179,7 +169,6 @@ def apply_costas_loop(
             
             corrected_symbols[i] = corrected_sym
             phase_estimates[i] = phase_estimate
->>>>>>> d9bd8c9 (added costas QPSK)
 
     return corrected_symbols, phase_estimates
 

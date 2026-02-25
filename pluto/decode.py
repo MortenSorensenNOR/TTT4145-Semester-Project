@@ -223,7 +223,7 @@ class FrameDecoder:
         header_symbols = symbols[: self.header_n_symbols]
         final_phase = 0.0
         if self.pipeline.costas_loop:
-            header_symbols, phase_estimates = apply_costas_loop(symbols=header_symbols, config=COSTAS_CONFIG)
+            header_symbols, phase_estimates = apply_costas_loop(symbols=header_symbols, config=COSTAS_CONFIG, modulator=_HEADER_BPSK)
             final_phase = float(phase_estimates[-1])
         header_bits = _HEADER_BPSK.symbols2bits(header_symbols).flatten()
         try:
@@ -251,6 +251,7 @@ class FrameDecoder:
             payload_symbols, _ = apply_costas_loop(
                 symbols=payload_symbols,
                 config=COSTAS_CONFIG,
+                modulator=modulator,
                 current_phase_estimate=header_final_phase,
             )
 
