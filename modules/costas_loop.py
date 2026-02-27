@@ -49,46 +49,6 @@ class CostasConfig:
         object.__setattr__(self, "beta", b)
 
 
-def _costas_loop_iteration(
-    current_symbol: complex,
-    phase_estimate: float,
-    integrator: float,
-    alpha: float,
-    beta: float,
-) -> tuple[complex, float, float]:
-    """Perform a single iteration of the Costas loop.
-
-    Args:
-        current_symbol: The incoming complex-valued symbol.
-        phase_estimate: The current phase estimate (rad).
-        integrator: The current state of the loop filter's integrator.
-        alpha: The proportional gain of the PI loop filter.
-        beta: The integral gain of the PI loop filter.
-
-    Returns:
-        A tuple containing:
-        - corrected_symbol: The phase-corrected symbol.
-        - new_phase_estimate: The updated phase estimate.
-        - new_integrator: The updated integrator state.
-
-    """
-    # 1. Correct phase of the current symbol
-    corrected_sym = current_symbol * np.exp(-1j * phase_estimate)
-
-    # 2. Calculate the phase error (unified for BPSK/QPSK)
-    error = np.imag(corrected_sym) * np.sign(np.real(corrected_sym))
-
-    # 3. Update the loop filter (PI controller)
-    integrator += beta * error
-    proportional = alpha * error
-
-    # 4. Update the phase estimate for the next symbol
-    new_phase_estimate = phase_estimate + proportional + integrator
-    # Wrap phase estimate to -pi to pi for consistent plotting and analysis
-    new_phase_estimate = (new_phase_estimate + np.pi) % (2 * np.pi) - np.pi
-    return corrected_sym, new_phase_estimate, integrator
-
-
 def apply_costas_loop(
     symbols: np.ndarray, config: CostasConfig, modulator: Modulator = BPSK(), current_phase_estimate: float = 0, current_frequency_offset: float = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
