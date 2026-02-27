@@ -3,7 +3,13 @@
 from dataclasses import dataclass
 from enum import Enum
 
-import numba
+try:
+    import numba
+
+    _njit = numba.njit(cache=True)
+except ImportError:
+    _njit = lambda f: f  # noqa: E731
+
 import numpy as np
 import pyldpc
 from scipy import sparse
@@ -439,7 +445,7 @@ def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray:
     return codeword.astype(int)
 
 
-@numba.njit(cache=True)
+@_njit
 def _check_node_update(
     v2c: np.ndarray,
     c2v: np.ndarray,

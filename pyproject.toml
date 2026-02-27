@@ -14,13 +14,15 @@ requires-python = ">=3.13"
 dependencies = [
     "hypothesis>=6.151.6",
     "matplotlib>=3.10.8",
-    "numba>=0.63.1",
     "pyadi-iio>=0.0.17",
     "pyldpc>=0.7.9",
     "scipy>=1.14",
     "sympy>=1.14.0",
     "tqdm>=4.67.3",
 ]
+
+[project.optional-dependencies]
+speed = ["numba>=0.63.1"]
 
 [dependency-groups]
 dev = [
