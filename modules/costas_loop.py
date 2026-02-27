@@ -178,7 +178,7 @@ if __name__ == "__main__":
     import numpy as np
 
     # Test parameters
-    num_symbols = 100
+    num_symbols = 1000
     initial_phase_offset_rad = 0*np.pi / 4  # 45 degrees
 
     costas_config = CostasConfig(loop_noise_bandwidth_normalized=0.05)

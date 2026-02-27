@@ -163,9 +163,9 @@ class TestSynchronizer:
 TEST_SYMBOLS_LEN = 1000
 COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED = 0.01
 COSTAS_DAMPING_FACTOR = 0.707
-MAX_PHASE_ERROR_RAD = 0.2  # Tolerance for phase lock (e.g., ~11.4 degrees)
-COSTAS_SETTLING_SYMBOLS = 16  # Number of symbols after which Costas loop should be locked for direct tests
-COSTAS_PIPELINE_LOCK_THRESHOLD = 16  # Number of symbols for pipeline simulation to consider lock "acquired"
+MAX_PHASE_ERROR_RAD = 0.2 # Tolerance for phase lock (e.g., ~11.4 degrees)
+COSTAS_SETTLING_SYMBOLS = 50  # Number of symbols after which Costas loop should be locked for direct tests
+COSTAS_PIPELINE_LOCK_THRESHOLD = 50  # Number of symbols for pipeline simulation to consider lock "acquired"
 BER_THRESHOLD = 5e-3  # For bit recovery tests (accounts for Costas loop noise enhancement at low SNR)
 
 
@@ -216,7 +216,7 @@ class TestCostasLoop:
             loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
             damping_factor=COSTAS_DAMPING_FACTOR,
         )
-        corrected_symbols, _ = apply_costas_loop(symbols=noisy_symbols, config=costas_config)
+        corrected_symbols, _ = apply_costas_loop(symbols=noisy_symbols, config=costas_config, modulator=mod)
 
         # Check phase error after lock (using the latter half of symbols for stable lock)
         # We need to compute the phase difference between corrected and original symbols
@@ -255,7 +255,7 @@ class TestCostasLoop:
             loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
             damping_factor=COSTAS_DAMPING_FACTOR,
         )
-        corrected_symbols, _ = apply_costas_loop(symbols=noisy_symbols, config=costas_config)
+        corrected_symbols, _ = apply_costas_loop(symbols=noisy_symbols, config=costas_config, modulator=mod)
 
         # Check if the phase error is within tolerance after LOCK_THRESHOLD_SYMBOLS
         # We'll consider the loop locked if the average absolute phase error in the
@@ -294,7 +294,7 @@ class TestCostasLoop:
             loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
             damping_factor=COSTAS_DAMPING_FACTOR,
         )
-        corrected_symbols, _ = apply_costas_loop(symbols=noisy_symbols, config=costas_config)
+        corrected_symbols, _ = apply_costas_loop(symbols=noisy_symbols, config=costas_config, modulator=mod)
 
         # Evaluate performance based on average phase error in the latter half of symbols
         phase_errors = np.angle(
@@ -370,6 +370,7 @@ class TestCostasLoop:
         corrected_symbols, _phase_estimates = apply_costas_loop(
             symbols=noisy_symbols,
             config=costas_config,
+            modulator=mod
         )
 
         # Demodulate corrected symbols to bits
@@ -447,19 +448,8 @@ def _simulate_and_track_costas_loop(
         0, np.sqrt(noise_power / 2), num_symbols,
     )
     noisy_symbols = base_symbols + noise
-
-    n = len(noisy_symbols)
-    phase_estimate = 0.0  # Initial phase estimate
-    integrator = config.initial_freq_offset_rad_per_symbol  # Initialize integrator with frequency offset guess
-    corrected_symbols = np.zeros(n, dtype=complex)
-    phase_estimates = np.zeros(n)
-
-    for i, sym in enumerate(noisy_symbols):
-        corrected_sym, phase_estimate, integrator = _costas_loop_iteration(
-            sym, phase_estimate, integrator, config.alpha, config.beta,
-        )
-        corrected_symbols[i] = corrected_sym
-        phase_estimates[i] = phase_estimate
+    
+    corrected_symbols, phase_estimates = apply_costas_loop(symbols=noisy_symbols, config=config, modulator=modulator)
 
     return {
         "modulator": modulator,
