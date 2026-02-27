@@ -12,9 +12,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "matplotlib>=3.10.8",
+    "matplotlib>=3.0",
     "pyadi-iio>=0.0.17",
-    "scipy>=1.14",
+    "scipy>=1.9",
     "sympy>=1.14.0",
     "tqdm>=4.67.3",
 ]
@@ -32,9 +32,8 @@ dev = [
 pythonpath = ["."]
 norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendor", "pluto"]
 
-[[tool.uv.index]]
-url = "https://www.piwheels.org/simple"
-explicit = false
+[tool.uv]
+system-site-packages = true
 
 [tool.ruff]
 line-length = 120
