@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# Local machine overrides (e.g. piwheels on Pi)
+uv.toml
+
 # Virtual environments
 .venv
 .venv/
