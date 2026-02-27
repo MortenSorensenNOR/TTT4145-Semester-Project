@@ -46,7 +46,7 @@ class PipelineConfig:
 
     pulse_shaping: bool = True
     pilots: bool = True
-    costas_loop: bool = False  # Not yet implemented correctly! Cannot be used!!!
+    costas_loop: bool = False
     channel_coding: bool = True
     interleaving: bool = True
     cfo_correction: bool = True
