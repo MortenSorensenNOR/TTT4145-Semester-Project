@@ -55,14 +55,14 @@ def main() -> None:
         while True:
             samples = cast("np.ndarray", sdr.rx())
 
-            # Measure CFO
             cfo = measure_cfo_fft(samples, SAMPLE_RATE)
             cfo_measurements.append(cfo)
-
+            mean_cfo = np.mean(cfo_measurements)
+            print(f"CFO: {cfo:+.1f} Hz  (mean: {mean_cfo:+.1f} Hz, n={len(cfo_measurements)})")
 
     except KeyboardInterrupt:
         if cfo_measurements:
-            np.mean(cfo_measurements)
+            print(f"\nFinal mean CFO: {np.mean(cfo_measurements):+.1f} Hz")
 
 
 if __name__ == "__main__":
