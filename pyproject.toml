@@ -32,9 +32,6 @@ dev = [
 pythonpath = ["."]
 norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendor", "pluto"]
 
-[tool.uv]
-system-site-packages = true
-
 [tool.ruff]
 line-length = 120
 extend-exclude = ["vendor"]

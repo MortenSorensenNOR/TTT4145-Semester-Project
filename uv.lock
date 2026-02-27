@@ -481,7 +481,6 @@ name = "radiokommunikasjon"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "hypothesis" },
     { name = "matplotlib" },
     { name = "pyadi-iio" },
     { name = "scipy" },
@@ -493,6 +492,10 @@ dependencies = [
 speed = [
     { name = "numba" },
 ]
+test = [
+    { name = "hypothesis" },
+    { name = "pytest" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -501,15 +504,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hypothesis", specifier = ">=6.151.6" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "hypothesis", marker = "extra == 'test'", specifier = ">=6.151.6" },
+    { name = "matplotlib", specifier = ">=3.0" },
     { name = "numba", marker = "extra == 'speed'", specifier = ">=0.63.1" },
     { name = "pyadi-iio", specifier = ">=0.0.17" },
-    { name = "scipy", specifier = ">=1.14" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.2" },
+    { name = "scipy", specifier = ">=1.9" },
     { name = "sympy", specifier = ">=1.14.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
 ]
-provides-extras = ["speed"]
+provides-extras = ["speed", "test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]
