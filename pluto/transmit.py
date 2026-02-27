@@ -124,10 +124,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transmit a message over PlutoSDR")
     parser.add_argument("message", nargs="?", default="Hello, PlutoSDR!", help="Text message to transmit")
     parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)")
+    parser.add_argument("--pluto-ip", default="192.168.2.1", help="PlutoSDR IP address (default: %(default)s)")
     args = parser.parse_args()
 
     # ── SDR setup ─────────────────────────────────────────────────────
-    sdr = create_pluto()
+    sdr = create_pluto(f"ip:{args.pluto_ip}")
     configure_tx(sdr, gain=args.tx_gain)
 
     # ── Build TX signal ───────────────────────────────────────────────

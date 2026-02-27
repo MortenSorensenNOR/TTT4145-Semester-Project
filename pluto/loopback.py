@@ -22,9 +22,10 @@ def setup_pluto(
     sample_rate: int = SAMPLE_RATE,
     tx_gain: float = TX_GAIN,
     rx_gain: float = RX_GAIN,
+    uri: str = "ip:192.168.2.1",
 ) -> adi.Pluto:
     """Configure PlutoSDR for loopback testing with a single LO frequency."""
-    sdr = create_pluto()
+    sdr = create_pluto(uri)
     sdr.sample_rate = int(sample_rate)
     sdr.tx_rf_bandwidth = int(sample_rate)
     sdr.rx_rf_bandwidth = int(sample_rate)

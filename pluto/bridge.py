@@ -209,6 +209,7 @@ def main() -> None:
     parser.add_argument(
         "--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)",
     )
+    parser.add_argument("--pluto-ip", default="192.168.2.1", help="PlutoSDR IP address (default: %(default)s)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
@@ -222,7 +223,7 @@ def main() -> None:
     configure_tun(args.tun, node.ip_addr, node.peer_addr, tun_mtu)
 
     # ── SDR setup ─────────────────────────────────────────────────────
-    sdr = create_pluto()
+    sdr = create_pluto(f"ip:{args.pluto_ip}")
     configure_tx(sdr, freq=node.tx_freq, gain=args.tx_gain)
 
     # Compute TX buffer size from max-size frame (PlutoSDR requires constant buffer size)

@@ -1,5 +1,7 @@
 """Quick RX power level check to verify signal is reaching the receiver."""
 
+import argparse
+
 import numpy as np
 
 from pluto import create_pluto
@@ -11,7 +13,11 @@ ADC_FULL_SCALE = 2048
 
 def main() -> None:
     """Measure and display RX signal power levels."""
-    sdr = create_pluto()
+    parser = argparse.ArgumentParser(description="Check RX power level")
+    parser.add_argument("--pluto-ip", default="192.168.2.1", help="PlutoSDR IP address (default: %(default)s)")
+    args = parser.parse_args()
+
+    sdr = create_pluto(f"ip:{args.pluto_ip}")
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_lo = int(CENTER_FREQ)
     sdr.rx_rf_bandwidth = int(SAMPLE_RATE)

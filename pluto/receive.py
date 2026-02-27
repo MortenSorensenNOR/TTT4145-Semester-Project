@@ -132,12 +132,13 @@ if __name__ == "__main__":
         default=0,
         help="CFO offset in Hz to add to RX LO (compensate for TX oscillator drift)",
     )
+    parser.add_argument("--pluto-ip", default="192.168.2.1", help="PlutoSDR IP address (default: %(default)s)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     rx_freq = CENTER_FREQ + args.cfo_offset
-    sdr = create_pluto()
+    sdr = create_pluto(f"ip:{args.pluto_ip}")
     configure_rx(sdr, freq=rx_freq)
 
     decoder = create_decoder()

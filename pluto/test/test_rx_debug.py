@@ -1,5 +1,7 @@
 """Debug RX to see preamble detection and correlation values."""
 
+import argparse
+
 import numpy as np
 
 from modules.pulse_shaping import rrc_filter
@@ -18,8 +20,12 @@ from pluto.config import (
 
 def main() -> None:
     """Run RX debug session with live frame decoding output."""
+    parser = argparse.ArgumentParser(description="Debug RX preamble detection")
+    parser.add_argument("--pluto-ip", default="192.168.2.1", help="PlutoSDR IP address (default: %(default)s)")
+    args = parser.parse_args()
+
     # Setup SDR
-    sdr = create_pluto()
+    sdr = create_pluto(f"ip:{args.pluto_ip}")
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_lo = int(CENTER_FREQ)
     sdr.rx_rf_bandwidth = int(SAMPLE_RATE)

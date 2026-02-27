@@ -1,5 +1,6 @@
 """Measure actual carrier frequency offset using FFT."""
 
+import argparse
 from typing import cast
 
 import numpy as np
@@ -34,7 +35,11 @@ def measure_cfo_fft(samples: np.ndarray, sample_rate: float) -> float:
 
 def main() -> None:
     """Measure and display CFO between TX and RX oscillators."""
-    sdr = create_pluto()
+    parser = argparse.ArgumentParser(description="Measure carrier frequency offset")
+    parser.add_argument("--pluto-ip", default="192.168.2.1", help="PlutoSDR IP address (default: %(default)s)")
+    args = parser.parse_args()
+
+    sdr = create_pluto(f"ip:{args.pluto_ip}")
     sdr.sample_rate = int(SAMPLE_RATE)
     sdr.rx_lo = int(CENTER_FREQ)
     sdr.rx_rf_bandwidth = int(SAMPLE_RATE)
