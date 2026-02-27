@@ -431,17 +431,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyldpc"
-version = "0.7.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numba" },
-    { name = "numpy" },
-    { name = "scipy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e1/aa/fd5495869c7106a638ae71aa497d7d266cae7f2a343d1f6a9d0e3a986e1e/pyldpc-0.7.9.tar.gz", hash = "sha256:36ffca2183d2421617f5dcc3dcce759002068adab88c1976e0838d4e1723a1cf", size = 1071232, upload-time = "2020-02-29T20:38:19.951Z" }
-
-[[package]]
 name = "pylibiio"
 version = "0.25"
 source = { registry = "https://pypi.org/simple" }
@@ -495,7 +484,6 @@ dependencies = [
     { name = "hypothesis" },
     { name = "matplotlib" },
     { name = "pyadi-iio" },
-    { name = "pyldpc" },
     { name = "scipy" },
     { name = "sympy" },
     { name = "tqdm" },
@@ -517,7 +505,6 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numba", marker = "extra == 'speed'", specifier = ">=0.63.1" },
     { name = "pyadi-iio", specifier = ">=0.0.17" },
-    { name = "pyldpc", specifier = ">=0.7.9" },
     { name = "scipy", specifier = ">=1.14" },
     { name = "sympy", specifier = ">=1.14.0" },
     { name = "tqdm", specifier = ">=4.67.3" },

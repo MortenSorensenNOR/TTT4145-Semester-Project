@@ -15,7 +15,6 @@ dependencies = [
     "hypothesis>=6.151.6",
     "matplotlib>=3.10.8",
     "pyadi-iio>=0.0.17",
-    "pyldpc>=0.7.9",
     "scipy>=1.14",
     "sympy>=1.14.0",
     "tqdm>=4.67.3",
@@ -32,9 +31,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendor", "pluto"]
-
-[tool.uv.extra-build-dependencies]
-pyldpc = ["numpy"]
 
 [tool.ruff]
 line-length = 120

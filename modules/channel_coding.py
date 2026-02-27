@@ -11,7 +11,6 @@ except ImportError:
     _njit = lambda f: f  # noqa: E731
 
 import numpy as np
-import pyldpc
 from scipy import sparse
 
 # Minimum number of edges connected to a check node for meaningful BP update
@@ -538,6 +537,51 @@ def ldpc_decode(
 # ---------------------------------------------------------------------------
 
 
+def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """GF(2) Gaussian elimination producing systematic parity-check and generator matrices.
+
+    Produces H in the form [P | I_m] so that G = [I_k | P^T], ensuring the first k
+    positions of every codeword equal the message (systematic encoding).
+    Returns (h_sys, g_transposed) where g_transposed.T is the k×n generator matrix.
+    Replaces pyldpc.coding_matrix_systematic.
+    """
+    m, n = h.shape
+    k = n - m
+    work = np.array(h, dtype=int) % 2
+    col_perm = np.arange(n)
+
+    for r in range(m):
+        # Place pivot at column k+r (parity region), preferring columns k+r..n-1 so
+        # that message columns 0..k-1 are never swapped (preserves systematic property).
+        target_col = k + r
+        found_row, found_col = -1, -1
+        for c in list(range(target_col, n)) + list(range(r, target_col)):
+            for row in range(r, m):
+                if work[row, c]:
+                    found_row, found_col = row, c
+                    break
+            if found_row >= 0:
+                break
+        if found_row < 0:
+            break
+        if found_row != r:
+            work[[r, found_row]] = work[[found_row, r]]
+        if found_col != target_col:
+            work[:, [target_col, found_col]] = work[:, [found_col, target_col]]
+            col_perm[[target_col, found_col]] = col_perm[[found_col, target_col]]
+        for row in range(m):
+            if row != r and work[row, target_col]:
+                work[row] ^= work[r]
+
+    # work = [P | I_m]; G = [I_k | P^T] — identity in first k columns gives systematic encoding.
+    # Return original sparse H with columns permuted (not row-reduced work) to preserve
+    # the LDPC Tanner graph structure needed for belief propagation decoding.
+    P = work[:, :k]
+    g = np.hstack([np.eye(k, dtype=int), P.T])
+
+    return h[:, col_perm], g.T
+
+
 def _get_encoding_structures(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray]:
     """Get or compute the generator matrix G and permuted H matrix."""
     if config in _encoding_cache:
@@ -545,7 +589,7 @@ def _get_encoding_structures(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray
 
     h_mat = ldpc_get_h_matrix(config)
 
-    h_permuted, g_transposed = pyldpc.coding_matrix_systematic(h_mat)
+    h_permuted, g_transposed = _coding_matrix_systematic(h_mat)
     g_mat = g_transposed.T
 
     g_mat = np.asarray(g_mat, dtype=int)
