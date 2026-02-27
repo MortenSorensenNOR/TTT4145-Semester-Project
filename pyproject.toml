@@ -12,7 +12,6 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "hypothesis>=6.151.6",
     "matplotlib>=3.10.8",
     "pyadi-iio>=0.0.17",
     "scipy>=1.14",
@@ -22,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 speed = ["numba>=0.63.1"]
+test = ["hypothesis>=6.151.6", "pytest>=9.0.2"]
 
 [dependency-groups]
 dev = [
