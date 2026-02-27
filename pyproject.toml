@@ -32,6 +32,10 @@ dev = [
 pythonpath = ["."]
 norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendor", "pluto"]
 
+[[tool.uv.index]]
+url = "https://www.piwheels.org/simple"
+explicit = false
+
 [tool.ruff]
 line-length = 120
 extend-exclude = ["vendor"]
