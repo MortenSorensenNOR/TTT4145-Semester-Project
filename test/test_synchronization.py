@@ -15,7 +15,7 @@ from modules.channel import (
     ChannelConfig,
     ChannelModel,
 )
-from modules.costas_loop import CostasConfig, _costas_loop_iteration, apply_costas_loop
+from modules.costas_loop import CostasConfig, apply_costas_loop
 from modules.modulation import BPSK, QPSK, Modulator
 from modules.synchronization import Synchronizer, SynchronizerConfig, generate_zadoff_chu
 
