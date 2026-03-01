@@ -28,7 +28,7 @@ class ModulationSchemes(Enum):
     BPSK = 0
     QPSK = 1
     QAM16 = 2
-    QAM64 = 3
+    EightPSK = 3
 
 
 @dataclass

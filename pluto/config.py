@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from modules.channel_coding import CodeRates
 from modules.costas_loop import CostasConfig
 from modules.frame_constructor import ModulationSchemes
-from modules.modulation import BPSK, QAM, QPSK, Modulator
+from modules.modulation import BPSK, QAM, QPSK, Modulator, EightPSK
 from modules.pilots import PilotConfig
 from modules.synchronization import SynchronizerConfig
 
@@ -101,7 +101,7 @@ def get_modulator(scheme: ModulationSchemes) -> Modulator:
             ModulationSchemes.BPSK: BPSK,
             ModulationSchemes.QPSK: QPSK,
             ModulationSchemes.QAM16: lambda: QAM(16),
-            ModulationSchemes.QAM64: lambda: QAM(64),
+            ModulationSchemes.EightPSK: EightPSK,
         }
         if scheme not in factories:
             msg = f"Unknown modulation scheme: {scheme}"
