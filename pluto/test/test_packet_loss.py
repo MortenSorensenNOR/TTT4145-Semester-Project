@@ -352,11 +352,6 @@ def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
     finally:
         sdr.tx_destroy_buffer()
         logger.info("TX: done")
-    except KeyboardInterrupt:
-        logger.info("TX: interrupted at seq=%d", seq)
-    finally:
-        sdr.tx_destroy_buffer()
-        logger.info("TX: done")
 
 
 # ── RX mode ───────────────────────────────────────────────────────────────
