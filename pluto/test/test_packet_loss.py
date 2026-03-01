@@ -300,7 +300,7 @@ class RxStats:
 def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
     """Transmit numbered test packets at a fixed interval."""
     sdr = create_pluto(f"ip:{pluto_ip}")
-    configure_tx(sdr, gain=tx_gain)
+    configure_tx(sdr, gain=tx_gain, cyclic=True)
 
     frame_constructor = FrameConstructor()
     max_bits = max_payload_bits(CODING_RATE)
@@ -320,23 +320,38 @@ def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
             CODING_RATE,
             sequence_number=seq % 16,  # 4-bit header field
         )
-        samples = np.zeros(len(tx_signal) + 1000, dtype=complex)  # guard padding
-        samples[: len(tx_signal)] = tx_signal * DAC_SCALE
+        samples = tx_signal * DAC_SCALE
         signals.append(samples)
 
     # All signals must be the same length for PlutoSDR
     max_len = max(len(s) for s in signals)
     sdr.tx_buffer_size = max_len
+    silence = np.zeros(max_len, dtype=complex)
 
-    logger.info("TX: sending %d packets at %.0fms intervals (gain=%.0f dB)", count, interval * 1000, tx_gain)
+    # How long one packet takes to transmit at sample rate
+    tx_duration = max_len / SAMPLE_RATE
+    # Transmit for 3x the buffer duration to ensure it goes out
+    tx_time = max(0.05, tx_duration * 3)
+
+    logger.info(
+        "TX: sending %d packets at %.0fms intervals (gain=%.0f dB, %.1fms TX window)",
+        count, interval * 1000, tx_gain, tx_time * 1000,
+    )
     try:
         for seq in range(count):
             padded = np.zeros(max_len, dtype=complex)
             padded[: len(signals[seq])] = signals[seq]
-            sdr.tx(padded)
+            sdr.tx(padded)  # starts cycling this packet
+            time.sleep(tx_time)
+            sdr.tx(silence)  # stop: overwrite with zeros
             logger.info("TX: seq=%d/%d", seq, count - 1)
-            if interval > 0 and seq < count - 1:
-                time.sleep(interval)
+            if seq < count - 1:
+                time.sleep(max(0, interval - tx_time))
+    except KeyboardInterrupt:
+        logger.info("TX: interrupted at seq=%d", seq)
+    finally:
+        sdr.tx_destroy_buffer()
+        logger.info("TX: done")
     except KeyboardInterrupt:
         logger.info("TX: interrupted at seq=%d", seq)
     finally:
@@ -392,13 +407,11 @@ def run_rx(pluto_ip: str, cfo_offset: int, duration: float | None) -> None:
                     rx_buffer.consume(attempt.result.consumed_samples)
                     if attempt.stage == DecodeStage.SUCCESS:
                         seq = _decode_seq_payload(attempt.result.payload_bits)
-                        raw = attempt.result.payload_bytes[:8]
                         logger.info(
-                            "RX: seq=%s  CFO=%+.0f Hz  (%s)  raw=%s",
+                            "RX: seq=%s  CFO=%+.0f Hz  (%s)",
                             seq,
                             attempt.result.cfo_hz,
                             attempt.result.header.mod_scheme.name,
-                            raw.hex(),
                         )
                 else:
                     # Header failed — skip past the detected preamble region
@@ -421,7 +434,7 @@ def main() -> None:
 
     tx_parser = sub.add_parser("tx", help="Transmit numbered test packets")
     tx_parser.add_argument("--pluto-ip", default="192.168.2.1")
-    tx_parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN)
+    tx_parser.add_argument("--tx-gain", type=float, default=-50)
     tx_parser.add_argument("--interval", type=float, default=0.2, help="Seconds between packets (default: 0.2)")
     tx_parser.add_argument("--count", type=int, default=100, help="Number of packets to send (default: 100)")
 
