@@ -115,6 +115,10 @@ class FrameDecoder:
         if header is None:
             return None
 
+        if header.length == 0:
+            logger.debug("Header decoded with zero payload length — likely false positive")
+            return None  # or DecodeAttempt(DecodeStage.INVALID_HEADER, ...)
+
         try:
             modulator = get_modulator(header.mod_scheme)
         except ValueError:

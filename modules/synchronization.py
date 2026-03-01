@@ -41,7 +41,7 @@ class SynchronizerConfig:
     zc_root: int = 7
     n_short_reps: int = 8
     peak_threshold: float = 0.5       # relative threshold for finding repeat peaks
-    detection_threshold: float = 0.3  # absolute normalized threshold (noise ~0.05-0.1, signal ~0.5-1.0)
+    detection_threshold: float = 0.5  # absolute normalized threshold (noise ~0.05-0.1, signal ~0.5-1.0)
     peak_margin_factor: int = 2
     long_margin_factor: int = 5
 
