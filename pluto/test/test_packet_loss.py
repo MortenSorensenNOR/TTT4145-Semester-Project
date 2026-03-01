@@ -363,8 +363,7 @@ def run_rx(pluto_ip: str, cfo_offset: int, duration: float | None) -> None:
     rx_freq = CENTER_FREQ + cfo_offset
     configure_rx(sdr, freq=rx_freq)
 
-    base_decoder = create_decoder(PIPELINE)
-    decoder = InstrumentedDecoder(base_decoder)
+    decoder = create_decoder(PIPELINE)
     matched_filter = _MatchedFilter(decoder.rrc_taps)
     rx_buffer = _RxBuffer()
 
@@ -391,28 +390,12 @@ def run_rx(pluto_ip: str, cfo_offset: int, duration: float | None) -> None:
             rx_buffer.append(matched_filter(rx))
 
             while True:
-                attempt = decoder.try_decode(rx_buffer.samples, rx_buffer.sample_offset)
-                stats.record(attempt)
-
-                if attempt.stage == DecodeStage.NO_PREAMBLE:
+                frame = decoder.try_decode(rx_buffer.samples, rx_buffer.sample_offset)
+                if frame is None:
                     break
-
-                # Consume samples for any detection (successful or not)
-                if attempt.result is not None:
-                    rx_buffer.consume(attempt.result.consumed_samples)
-                    if attempt.stage == DecodeStage.SUCCESS:
-                        seq = _decode_seq_payload(attempt.result.payload_bits)
-                        logger.info(
-                            "RX: seq=%s  CFO=%+.0f Hz  (%s)",
-                            seq,
-                            attempt.result.cfo_hz,
-                            attempt.result.header.mod_scheme.name,
-                        )
-                else:
-                    # Header failed — skip past the detected preamble region
-                    # Use a conservative skip to avoid getting stuck
-                    skip = decoder.sync.config.n_long * decoder.sps * 2
-                    rx_buffer.consume(min(skip, len(rx_buffer.samples) // 2))
+                seq = _decode_seq_payload(frame.payload_bits)
+                logger.info("RX: seq=%s  CFO=%+.0f Hz", seq, frame.cfo_hz)
+                rx_buffer.consume(frame.consumed_samples)
 
     except KeyboardInterrupt:
         pass
