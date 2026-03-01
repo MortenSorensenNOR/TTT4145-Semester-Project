@@ -298,14 +298,17 @@ class RxStats:
 
 
 def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
-    """Transmit numbered test packets at a fixed interval."""
+    """Transmit numbered test packets at a fixed interval.
+
+    Builds one continuous buffer: [pkt0][silence][pkt1][silence]...[pktN][silence]
+    and transmits it in a single cyclic TX call, matching the proven pluto.transmit approach.
+    """
     sdr = create_pluto(f"ip:{pluto_ip}")
     configure_tx(sdr, gain=tx_gain, cyclic=True)
 
     frame_constructor = FrameConstructor()
     max_bits = max_payload_bits(CODING_RATE)
 
-    # Pre-build all signals for consistent timing
     logger.info("TX: pre-building %d packets...", count)
     signals = []
     for seq in range(count):
@@ -318,38 +321,38 @@ def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
             frame_constructor,
             MOD_SCHEME,
             CODING_RATE,
-            sequence_number=seq % 16,  # 4-bit header field
+            sequence_number=seq % 16,
         )
-        samples = tx_signal * DAC_SCALE
-        signals.append(samples)
+        signals.append(tx_signal * DAC_SCALE)
 
-    # All signals must be the same length for PlutoSDR
-    max_len = max(len(s) for s in signals)
-    sdr.tx_buffer_size = max_len
-    silence = np.zeros(max_len, dtype=complex)
+    # Build one big buffer: each packet followed by a silence gap
+    silence_samples = int(interval * SAMPLE_RATE)
+    max_pkt_len = max(len(s) for s in signals)
+    slot_len = max_pkt_len + silence_samples
+    total_len = slot_len * count
 
-    # How long one packet takes to transmit at sample rate
-    tx_duration = max_len / SAMPLE_RATE
-    # Transmit for 3x the buffer duration to ensure it goes out
-    tx_time = max(0.05, tx_duration * 3)
+    tx_buffer = np.zeros(total_len, dtype=complex)
+    for i, sig in enumerate(signals):
+        offset = i * slot_len
+        tx_buffer[offset : offset + len(sig)] = sig
+
+    sdr.tx_buffer_size = total_len
+    total_duration = total_len / SAMPLE_RATE
 
     logger.info(
-        "TX: sending %d packets at %.0fms intervals (gain=%.0f dB, %.1fms TX window)",
-        count, interval * 1000, tx_gain, tx_time * 1000,
+        "TX: %d packets, %.0fms interval, %.1fs total (gain=%.0f dB)",
+        count, interval * 1000, total_duration, tx_gain,
     )
+
+    sdr.tx(tx_buffer)
     try:
-        for seq in range(count):
-            padded = np.zeros(max_len, dtype=complex)
-            padded[: len(signals[seq])] = signals[seq]
-            sdr.tx(padded)  # starts cycling this packet
-            logger.info("TX: seq=%d/%d", seq, count - 1)
-            time.sleep(interval)
-            sdr.tx_destroy_buffer()
+        time.sleep(total_duration + 1.0)
     except KeyboardInterrupt:
-        logger.info("TX: interrupted at seq=%d", seq)
+        pass
     finally:
         sdr.tx_destroy_buffer()
         logger.info("TX: done")
+
 
 # ── RX mode ───────────────────────────────────────────────────────────────
 
