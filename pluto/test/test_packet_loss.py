@@ -50,7 +50,7 @@ from pluto.config import (
     get_modulator,
 )
 from pluto.decode import FrameDecoder, FrameResult, _HEADER_BPSK, create_decoder
-from pluto.receive import _MatchedFilter, _RxBuffer
+from pluto.receive import _MatchedFilter, _RxBuffer, run_receiver
 from pluto.transmit import build_tx_signal_from_bits, max_payload_bits
 
 logger = logging.getLogger(__name__)
@@ -358,50 +358,17 @@ def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
 
 
 def run_rx(pluto_ip: str, cfo_offset: int, duration: float | None) -> None:
-    """Receive and classify packets, printing a report on exit."""
     sdr = create_pluto(f"ip:{pluto_ip}")
     rx_freq = CENTER_FREQ + cfo_offset
     configure_rx(sdr, freq=rx_freq)
+    decoder = create_decoder()
 
-    decoder = create_decoder(PIPELINE)
-    matched_filter = _MatchedFilter(decoder.rrc_taps)
-    rx_buffer = _RxBuffer()
-
-    stats = RxStats()
+    def on_frame(result: FrameResult) -> None:
+        seq = _decode_seq_payload(result.payload_bits)
+        logger.info("RX: seq=%s  CFO=%+.0f Hz", seq, result.cfo_hz)
 
     logger.info("RX: listening on %.0f Hz (CFO offset %+d Hz)...", rx_freq, cfo_offset)
-    logger.info("RX: Ctrl-C to stop and print report")
-
-    sdr.rx()  # flush stale DMA
-
-    deadline = time.time() + duration if duration else None
-
-    try:
-        while True:
-            if deadline and time.time() > deadline:
-                break
-
-            try:
-                rx = sdr.rx()
-            except OSError:
-                logger.exception("RX: SDR read failed")
-                break
-
-            rx_buffer.append(matched_filter(rx))
-
-            while True:
-                frame = decoder.try_decode(rx_buffer.samples, rx_buffer.sample_offset)
-                if frame is None:
-                    break
-                seq = _decode_seq_payload(frame.payload_bits)
-                logger.info("RX: seq=%s  CFO=%+.0f Hz", seq, frame.cfo_hz)
-                rx_buffer.consume(frame.consumed_samples)
-
-    except KeyboardInterrupt:
-        pass
-
-    print(stats.report())
-
+    run_receiver(sdr, decoder, on_frame)
 
 # ── CLI ───────────────────────────────────────────────────────────────────
 
