@@ -81,12 +81,14 @@ def configure_tx(
     *,
     freq: int = CENTER_FREQ,
     gain: float = DEFAULT_TX_GAIN,
+    cyclic: bool = False,
 ) -> None:
     """Apply standard TX settings to an SDR."""
     sdr.sample_rate = SAMPLE_RATE
     sdr.tx_rf_bandwidth = int(SAMPLE_RATE)
     sdr.tx_lo = int(freq)
     sdr.tx_hardwaregain_chan0 = gain
+    sdr.tx_cyclic_buffer = cyclic
 
 
 _modulator_cache: dict[ModulationSchemes, Modulator] = {}
