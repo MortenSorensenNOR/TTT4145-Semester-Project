@@ -26,7 +26,7 @@ DAC_SCALE = 2**14
 RX_GAIN = 70.0
 MOD_SCHEME = ModulationSchemes.QPSK
 CODING_RATE = CodeRates.THREE_QUARTER_RATE  # Higher rate = more throughput (needs good SNR)
-DEFAULT_TX_GAIN = -10
+DEFAULT_TX_GAIN = -50
 RX_BUFFER_SIZE = 2**14  # Smaller buffer = lower latency
 NODE_SRC = 0
 NODE_DST = 0
