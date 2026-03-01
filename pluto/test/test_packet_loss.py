@@ -392,11 +392,13 @@ def run_rx(pluto_ip: str, cfo_offset: int, duration: float | None) -> None:
                     rx_buffer.consume(attempt.result.consumed_samples)
                     if attempt.stage == DecodeStage.SUCCESS:
                         seq = _decode_seq_payload(attempt.result.payload_bits)
+                        raw = attempt.result.payload_bytes[:8]
                         logger.info(
-                            "RX: seq=%s  CFO=%+.0f Hz  (%s)",
+                            "RX: seq=%s  CFO=%+.0f Hz  (%s)  raw=%s",
                             seq,
                             attempt.result.cfo_hz,
                             attempt.result.header.mod_scheme.name,
+                            raw.hex(),
                         )
                 else:
                     # Header failed — skip past the detected preamble region
