@@ -343,16 +343,17 @@ def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
             padded[: len(signals[seq])] = signals[seq]
             sdr.tx(padded)  # starts cycling this packet
             time.sleep(tx_time)
-            sdr.tx(silence)  # stop: overwrite with zeros
+            sdr.tx_destroy_buffer()  # stop cycling
+            sdr.tx(silence)          # transmit silence
             logger.info("TX: seq=%d/%d", seq, count - 1)
             if seq < count - 1:
                 time.sleep(max(0, interval - tx_time))
+                sdr.tx_destroy_buffer()
     except KeyboardInterrupt:
         logger.info("TX: interrupted at seq=%d", seq)
     finally:
         sdr.tx_destroy_buffer()
         logger.info("TX: done")
-
 
 # ── RX mode ───────────────────────────────────────────────────────────────
 
