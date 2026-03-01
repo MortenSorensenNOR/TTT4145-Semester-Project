@@ -36,12 +36,12 @@ def generate_zadoff_chu(u: int = 7, n_zc: int = 61) -> np.ndarray:
 @dataclass
 class SynchronizerConfig:
     """Configuration for the synchronizer."""
-
     n_short: int = 19
     n_long: int = 139
     zc_root: int = 7
     n_short_reps: int = 8
-    peak_threshold: float = 0.5
+    peak_threshold: float = 0.5       # relative threshold for finding repeat peaks
+    detection_threshold: float = 0.3  # absolute normalized threshold (noise ~0.05-0.1, signal ~0.5-1.0)
     peak_margin_factor: int = 2
     long_margin_factor: int = 5
 
@@ -131,7 +131,21 @@ class Synchronizer:
         corr_mag = np.abs(corr_short)
         if len(corr_mag) == 0:
             return SynchronizationResult(success=False)
+
+        # Absolute detection threshold 
+        # Normalize by template energy and local signal energy.
+        # A real preamble produces a peak near 1.0; noise stays well below.
+        template_energy = np.sum(np.abs(self._template_short) ** 2)
+        n_template = len(self._template_short)
+        # Sliding window signal energy (approximate with block average)
+        local_energy = np.convolve(np.abs(rx) ** 2, np.ones(n_template), mode="same")
+        local_energy = np.maximum(local_energy, 1e-12)  # avoid division by zero
+        corr_normalized = corr_mag / np.sqrt(template_energy * local_energy[:len(corr_mag)])
+
         global_max_idx = np.argmax(corr_mag)
+        if corr_normalized[global_max_idx] < self.config.detection_threshold:
+            return SynchronizationResult(success=False, reason="Below detection threshold")
+
 
         # find the peaks of all the repetitions of zc_short
         peak_indices = []

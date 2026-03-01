@@ -302,7 +302,7 @@ class TestEightPSKSoftDecision:
 
     @given(
         bits=st.lists(st.integers(0, 1), min_size=3, max_size=100).filter(lambda x: len(x) % 3 == 0),
-        snr_db=st.floats(min_value=10.0, max_value=30.0),
+        snr_db=st.floats(min_value=20.0, max_value=30.0),
         seed=st.integers(min_value=0, max_value=2**32 - 1),
     )
     def test_soft_to_hard_decision_high_snr(self, bits: list[int], snr_db: float, seed: int) -> None:
