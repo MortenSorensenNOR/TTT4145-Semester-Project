@@ -36,7 +36,7 @@ def _calculate_loop_parameters(
 class CostasConfig:
     """Configuration for Costas loop phase estimation."""
 
-    loop_noise_bandwidth_normalized: float = 0.05  # Normalized to symbol rate
+    loop_noise_bandwidth_normalized: float = 0.04  # Normalized to symbol rate
     damping_factor: float = 0.707  # zeta 1/sqrt(2)
     initial_freq_offset_rad_per_symbol: float = 0.0
     alpha: float = 0.0

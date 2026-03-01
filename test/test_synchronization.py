@@ -161,12 +161,12 @@ class TestSynchronizer:
 # =============================================================================
 
 TEST_SYMBOLS_LEN = 1000
-COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED = 0.01
+COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED = 0.04
 COSTAS_DAMPING_FACTOR = 0.707
 MAX_PHASE_ERROR_RAD = 0.2 # Tolerance for phase lock (e.g., ~11.4 degrees)
 COSTAS_SETTLING_SYMBOLS = 50  # Number of symbols after which Costas loop should be locked for direct tests
 COSTAS_PIPELINE_LOCK_THRESHOLD = 50  # Number of symbols for pipeline simulation to consider lock "acquired"
-BER_THRESHOLD = 5e-3  # For bit recovery tests (accounts for Costas loop noise enhancement at low SNR)
+BER_THRESHOLD = 1e-3  # For bit recovery tests (accounts for Costas loop noise enhancement at low SNR)
 
 
 @pytest.fixture(params=[BPSK(), QPSK()])
@@ -423,42 +423,6 @@ class TestCostasLoop:
 # Sweep helpers (used by __main__ for detailed analysis)
 # =============================================================================
 
-
-def _simulate_and_track_costas_loop(
-    modulator: Modulator,
-    num_symbols: int,
-    *,
-    snr_db: float,
-    seed: int,
-    config: CostasConfig,
-) -> dict[str, np.ndarray | float | Modulator]:
-    """Simulate a Costas loop run and explicitly collect phase_estimate history.
-
-    This helper function uses the core `_costas_loop_iteration` logic from the production module,
-    but wraps it to track and return the phase history for plotting.
-    """
-    rng = np.random.default_rng(seed)
-    bits = rng.integers(0, 2, size=num_symbols * modulator.bits_per_symbol)
-    base_symbols = modulator.bits2symbols(bits)
-
-    # Add AWGN (no initial phase offset applied; the Costas loop handles phase)
-    symbol_energy = np.mean(np.abs(base_symbols) ** 2)
-    noise_power = symbol_energy / (10 ** (snr_db / 10))
-    noise = rng.normal(0, np.sqrt(noise_power / 2), num_symbols) + 1j * rng.normal(
-        0, np.sqrt(noise_power / 2), num_symbols,
-    )
-    noisy_symbols = base_symbols + noise
-    
-    corrected_symbols, phase_estimates = apply_costas_loop(symbols=noisy_symbols, config=config, modulator=modulator)
-
-    return {
-        "modulator": modulator,
-        "snr_db": snr_db,
-        "corrected_symbols": corrected_symbols,
-        "phase_estimates": phase_estimates,
-    }
-
-
 def _run_sweep(
     cfo_values: list[float],
     snr_values: list[float],
@@ -662,16 +626,11 @@ def _run_costas_processing(
         initial_freq_offset_rad_per_symbol=cfo_hat_rad_per_symbol,
     )
 
-    costas_loop_results = _simulate_and_track_costas_loop(
-        modulator,
-        len(rx_payload),
-        snr_db=snr,
-        seed=seed,
+    corrected_symbols, phase_estimates = apply_costas_loop(
+        symbols=rx_payload,
         config=costas_cfg,
+        modulator=modulator,
     )
-
-    corrected_symbols = cast("np.ndarray", costas_loop_results["corrected_symbols"])
-    phase_estimates = cast("np.ndarray", costas_loop_results["phase_estimates"])
 
     _validate_corrected_symbols_length(corrected_symbols)
 
@@ -745,36 +704,98 @@ def _run_costas_pipeline(
     modulator: Modulator,
     num_payload_symbols: int = 2000,
 ) -> list[dict[str, object]]:
-    """Run a sweep simulating the full pipeline: ZC sync -> Costas loop."""
+    """Run a sweep simulating just the Costas loop with a controlled signal."""
     results: list[dict[str, object]] = []
     rng = np.random.default_rng(42)
-    sps = 1  # For simplicity, assuming symbol rate processing after timing recovery
-    if sps != 1:
-        msg = "This simulation assumes sps=1 for the Costas loop part."
-        raise NotImplementedError(msg)
 
     for cfo in cfo_values:
         for snr in snr_values:
-            res, rx_payload, payload_symbols, _rx_frame, _zc_result = _run_zc_sync_trial(
-                rng, cfo, snr, modulator, num_payload_symbols,
+            # 1. Generate a signal with high noise and a constrained random phase offset
+            initial_phase_rad = rng.uniform(-np.pi / 6, np.pi / 6)  # +/- 30 degrees
+
+            noisy_symbols_no_cfo, base_symbols = _simulate_costas_signal(
+                modulator,
+                num_payload_symbols,
+                initial_phase_rad=initial_phase_rad,
+                snr_db=snr,
+                seed=rng.integers(0, 2**31),
             )
 
-            if rx_payload is None:
-                results.append(res)
-                continue
+            # 2. Manually apply the CFO from the sweep parameters
+            time_indices = np.arange(num_payload_symbols) / SAMPLE_RATE
+            cfo_ramp = np.exp(1j * 2 * np.pi * cfo * time_indices)
+            rx_payload = noisy_symbols_no_cfo * cfo_ramp
 
+            # 3. Configure and run the Costas loop
+            #    Start the loop with a zero frequency offset guess to test acquisition
+            costas_cfg = CostasConfig(
+                loop_noise_bandwidth_normalized=COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED,
+                damping_factor=COSTAS_DAMPING_FACTOR,
+                initial_freq_offset_rad_per_symbol=0.0,
+            )
+
+            corrected_symbols, phase_estimates = apply_costas_loop(
+                symbols=rx_payload,
+                config=costas_cfg,
+                modulator=modulator,
+            )
+            
+            # 4. Perform analysis and populate the results dictionary
             try:
-                _run_costas_processing(
-                    modulator, rx_payload, cast("np.ndarray", payload_symbols),
-                    rng.integers(0, 2**31), res,
+                res = {}
+                _validate_corrected_symbols_length(corrected_symbols)
+
+                # Define the 'actual phase' for plotting purposes
+                actual_input_phase_offset = np.angle(rx_payload * np.conj(base_symbols))
+
+                # Evaluate lock quality after settling time
+                processed_corrected = corrected_symbols[COSTAS_PIPELINE_LOCK_THRESHOLD:]
+                original_segment = base_symbols[COSTAS_PIPELINE_LOCK_THRESHOLD:]
+
+                min_mean_abs_phase_error = float("inf")
+                for k in range(modulator.qam_order):
+                    ambiguity_rotation = np.exp(1j * k * 2 * np.pi / modulator.qam_order)
+                    ambiguous_original = original_segment * ambiguity_rotation
+                    phase_errors = np.angle(processed_corrected * np.conj(ambiguous_original))
+                    current_error = np.mean(np.abs(phase_errors))
+                    min_mean_abs_phase_error = min(min_mean_abs_phase_error, current_error)
+
+                mean_abs_phase_error = min_mean_abs_phase_error
+                met_lock_spec = mean_abs_phase_error < MAX_PHASE_ERROR_RAD
+
+                # Analyze residual frequency error
+                if len(phase_estimates) < MIN_POLYFIT_POINTS:
+                    residual_freq_hz = np.nan
+                    residual_cfo_error_hz = np.nan
+                else:
+                    stable_phase_est = phase_estimates[len(phase_estimates) // 2 :]
+                    symbol_indices = np.arange(len(stable_phase_est))
+                    residual_freq_rad_per_symbol = np.polyfit(symbol_indices, stable_phase_est, 1)[0]
+                    residual_freq_hz = residual_freq_rad_per_symbol * (SAMPLE_RATE) / (2 * np.pi)
+                    # cfo_hat is 0 in this simulation, so error is just residual vs true cfo
+                    residual_cfo_error_hz = residual_freq_hz - cfo
+
+                res.update(
+                    {
+                        "cfo_sweep": cfo,
+                        "snr_sweep": snr,
+                        "costas_success": True,
+                        "met_lock_spec": met_lock_spec,
+                        "costas_phase_history": phase_estimates,
+                        "actual_input_phase_offset": actual_input_phase_offset,
+                        "mean_abs_phase_error": mean_abs_phase_error,
+                        "residual_cfo_hz": residual_freq_hz,
+                        "residual_cfo_error_hz": residual_cfo_error_hz,
+                    }
                 )
-            except Exception:
-                res["costas_success"] = False
-                res["reason"] = "Error during Costas loop processing"
-                logger.exception(
-                    "Costas loop error for (CFO=%s, SNR=%s)",
-                    cfo, snr,
-                )
+            except Exception as e:
+                logger.warning(f"Analysis failed for CFO={cfo}, SNR={snr}: {e}")
+                res = {
+                    "cfo_sweep": cfo,
+                    "snr_sweep": snr,
+                    "costas_success": False,
+                    "met_lock_spec": False,
+                }
             finally:
                 results.append(res)
 
