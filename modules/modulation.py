@@ -64,6 +64,7 @@ class BPSK(_ModulatorBase):
     def __init__(self) -> None:
         """Initialize BPSK modulation scheme."""
         self.symbol_mapping = np.array([-1 + 0j, 1 + 0j])
+        self.bit_mapping = np.array([[0], [1]])
         self.bits_per_symbol = 1
         self.qam_order = 2
 
@@ -153,6 +154,102 @@ class QPSK(_ModulatorBase):
         llr_bit1 = -scale * np.imag(symbols)
 
         return np.column_stack([llr_bit0, llr_bit1])
+
+class EightPSK(_ModulatorBase):
+    """8 Phase Shift Keying modulation (Gray-coded).
+
+    Source: https://en.wikipedia.org/wiki/Phase-shift_keying#Higher-order_PSK (8-PSK)
+    """
+
+    def __init__(self) -> None:
+        """Initialize QPSK modulation scheme."""
+        # Gray-coded 8-PSK: 000 -> -1-1j, 001 -> -1+0j, 011 -> -1+1j, 010 0+1j, 110 -> +1+1j, 111 -> 1+0j, 101 -> 1-1j, 100 -> 0-1j
+        self.qam_order = 8
+        self.bits_per_symbol = 3
+
+        # Gray-coded 8-PSK: 000 -> -1-1j, 001 -> -1+0j, 011 -> -1+1j, 010 0+1j, 110 -> +1+1j, 111 -> 1+0j, 101 -> 1-1j, 100 -> 0-1j
+        symbols = np.exp(1j * np.arange(self.qam_order) * np.pi / 4) # Angles 0, pi/4, pi/2, ...
+        # Custom bit assignment as per user request
+        bit_mapping = np.array([
+            [1, 1, 1],  # Index 0 (0 deg)
+            [1, 1, 0],  # Index 1 (45 deg)
+            [0, 1, 0],  # Index 2 (90 deg)
+            [0, 1, 1],  # Index 3 (135 deg)
+            [0, 0, 1],  # Index 4 (180 deg)
+            [0, 0, 0],  # Index 5 (225 deg)
+            [1, 0, 0],  # Index 6 (270 deg)
+            [1, 0, 1]   # Index 7 (315 deg)
+        ])
+        
+        # Sort by bit-pattern index so symbol_mapping[i] corresponds to bit pattern i
+        bit_pattern_to_index = np.sum(
+            bit_mapping * 2 ** np.arange(self.bits_per_symbol - 1, -1, -1),
+            axis=1,
+            dtype=int,
+        )
+
+        self.bit_mapping = bit_mapping[np.argsort(bit_pattern_to_index), :]
+        self.symbol_mapping = symbols[np.argsort(bit_pattern_to_index)]
+
+
+    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
+        """Convert bit stream to 8-PSK symbols."""
+        if len(bitstream) == 0:
+            return np.array([], dtype=complex)
+        bitstream = bitstream.reshape(
+            int(np.size(bitstream) / self.bits_per_symbol),
+            self.bits_per_symbol,
+        )
+        return self.symbol_mapping[
+            np.sum(
+                bitstream * 2 ** np.arange(self.bits_per_symbol - 1, -1, -1),
+                axis=1,
+                dtype=int,
+            )
+        ]
+    
+    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+        """Convert 8-PSK symbols to hard-decision bits."""
+        if len(symbols) == 0:
+            return np.array([], dtype=int)
+        indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
+        return self.bit_mapping[indices, :]
+
+    def symbols2bits_soft(
+        self,
+        symbols: np.ndarray,
+        sigma_sq: float | None = None,
+    ) -> np.ndarray:
+        """Compute log-likelihood ratios (LLRs) using max-log-MAP approximation.
+
+        For each bit position, LLR = min distance to constellation point with bit=1
+        minus min distance to constellation point with bit=0, scaled by 1/sigma_sq.
+        """
+        if len(symbols) == 0:
+            return np.array([], dtype=float)
+
+        if sigma_sq is None:
+            sigma_sq = estimate_noise_variance(symbols, self.symbol_mapping)
+
+        distances_sq = (
+            np.abs(
+                symbols.reshape(-1, 1) - self.symbol_mapping[np.newaxis, :],
+            )
+            ** 2
+        )
+
+        llrs = np.zeros((len(symbols), self.bits_per_symbol))
+        for bit_idx in range(self.bits_per_symbol):
+            bit_is_zero = self.bit_mapping[:, bit_idx] == 0
+            bit_is_one = ~bit_is_zero
+
+            min_dist_zero = np.min(distances_sq[:, bit_is_zero], axis=1)
+            min_dist_one = np.min(distances_sq[:, bit_is_one], axis=1)
+
+            llrs[:, bit_idx] = (min_dist_one - min_dist_zero) / sigma_sq
+
+        return llrs
+
 
 
 class QAM(_ModulatorBase):
