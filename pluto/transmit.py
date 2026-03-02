@@ -6,6 +6,7 @@ Pipeline: payload bits -> frame encode -> modulate -> preamble + frame -> pulse 
 import logging
 
 import numpy as np
+import time
 
 from modules.channel_coding import CodeRates, ldpc_get_supported_payload_lengths
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
@@ -30,6 +31,8 @@ from pluto.config import (
 
 GUARD_SAMPLES = 500  # zeros before/after TX to avoid DAC transients
 UNCODED_MAX_PAYLOAD_BITS = 2**10 - 1  # conservative limit when channel coding is off
+
+PCACKETS_PER_SECOND = 10
 
 
 def max_payload_bits(coding_rate: CodeRates = CODING_RATE) -> int:
@@ -141,6 +144,10 @@ if __name__ == "__main__":
     # ── Transmit ──────────────────────────────────────────────────────
     try:
         while True:
-            sdr.tx(samples)
+            start = time.perf_counter()
+            for i in range(PCACKETS_PER_SECOND):
+                sdr.tx(samples)
+            time.sleep(1-(time.perf_counter()-start))
+
     except KeyboardInterrupt:
         sdr.tx_destroy_buffer()
