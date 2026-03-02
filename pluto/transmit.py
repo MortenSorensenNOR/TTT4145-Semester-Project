@@ -147,7 +147,7 @@ if __name__ == "__main__":
             for i in range(PACKETS_PER_SECOND):
                 start = time.perf_counter()
                 sdr.tx(samples)
-                time.sleep((1/PACKETS_PER_SECOND) - time.perf_counter()-start)
+                time.sleep((1/PACKETS_PER_SECOND) - (time.perf_counter()-start))
 
     except KeyboardInterrupt:
         sdr.tx_destroy_buffer()
