@@ -46,6 +46,7 @@
 | RRC alpha | 0.35 | |
 | RRC taps | 129 | 2 × SPS × SPAN + 1 |
 | Symbol period | 1.67 μs | |
+| Sample rate | 5.336 Mhz | |
 | Occupied bandwidth | 900 kHz | |
 | Throughput | 1 Mbps | |
 | Channel coding | LDPC | 802.11 base matrices (proven, existing implementation) |
