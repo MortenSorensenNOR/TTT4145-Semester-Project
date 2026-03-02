@@ -32,7 +32,7 @@ from pluto.config import (
 GUARD_SAMPLES = 500  # zeros before/after TX to avoid DAC transients
 UNCODED_MAX_PAYLOAD_BITS = 2**10 - 1  # conservative limit when channel coding is off
 
-PCACKETS_PER_SECOND = 10
+PACKETS_PER_SECOND = 10
 
 
 def max_payload_bits(coding_rate: CodeRates = CODING_RATE) -> int:
@@ -144,10 +144,10 @@ if __name__ == "__main__":
     # ── Transmit ──────────────────────────────────────────────────────
     try:
         while True:
-            start = time.perf_counter()
-            for i in range(PCACKETS_PER_SECOND):
+            for i in range(PACKETS_PER_SECOND):
+                start = time.perf_counter()
                 sdr.tx(samples)
-            time.sleep(1-(time.perf_counter()-start))
+                time.sleep((1/PACKETS_PER_SECOND) - time.perf_counter()-start)
 
     except KeyboardInterrupt:
         sdr.tx_destroy_buffer()
