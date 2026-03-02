@@ -41,7 +41,7 @@ def main():
 
     fig.tight_layout()
     plt.savefig("examples/constellations.png")
-    print("Saved constellation plot to examples/constellations.png")
+    print("Saved constellation plot to examples/data/constellations.png")
 
 
 if __name__ == "__main__":
