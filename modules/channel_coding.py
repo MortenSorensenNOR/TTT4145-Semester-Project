@@ -506,12 +506,12 @@ def ldpc_decode(
 
     (h_sparse, _num_checks, _num_vars, edge_var, check_order, check_bounds) = _get_decode_structures(config)
 
-    llr = llr_channel.astype(np.float64)
+    llr = llr_channel.astype(np.float32)
     num_edges = len(edge_var)
 
     # Message arrays indexed by edge
     v2c = llr[edge_var].copy()
-    c2v = np.zeros(num_edges, dtype=np.float64)
+    c2v = np.zeros(num_edges, dtype=np.float32)
     hard_decision = (llr_channel < 0).astype(int)
 
     for _iteration in range(max_iterations):
