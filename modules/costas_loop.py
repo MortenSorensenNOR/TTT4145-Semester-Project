@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _calculate_loop_parameters(
-    loop_noise_bandwidth_normalized: float = 0.01,  # Normalized to symbol rate
+    loop_noise_bandwidth_normalized: float = 0.05,  # Normalized to symbol rate
     damping_factor: float = 0.707,  # zeta 1/sqrt(2)
 ) -> tuple[float, float]:
 
@@ -37,7 +37,7 @@ def _calculate_loop_parameters(
 class CostasConfig:
     """Configuration for Costas loop phase estimation."""
 
-    loop_noise_bandwidth_normalized: float = 0.04  # Normalized to symbol rate
+    loop_noise_bandwidth_normalized: float = 0.05  # Normalized to symbol rate
     damping_factor: float = 0.707  # zeta 1/sqrt(2)
     initial_freq_offset_rad_per_symbol: float = 0.0
     alpha: float = 0.0
@@ -162,7 +162,7 @@ if __name__ == "__main__":
 
     # Test parameters
     num_symbols = 100
-    initial_phase_offset_rad = 0*np.pi / 4  # 45 degrees
+    initial_phase_offset_rad = np.pi / 8  # 45 degrees
 
     costas_config = CostasConfig(loop_noise_bandwidth_normalized=0.05)
     modulator = EightPSK()

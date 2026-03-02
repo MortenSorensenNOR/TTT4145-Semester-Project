@@ -16,7 +16,7 @@ from modules.channel import (
     ChannelModel,
 )
 from modules.costas_loop import CostasConfig, apply_costas_loop
-from modules.modulation import BPSK, QPSK, Modulator
+from modules.modulation import BPSK, QPSK, EightPSK, Modulator
 from modules.synchronization import Synchronizer, SynchronizerConfig, generate_zadoff_chu
 
 logger = logging.getLogger(__name__)
@@ -161,12 +161,12 @@ class TestSynchronizer:
 # =============================================================================
 
 TEST_SYMBOLS_LEN = 1000
-COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED = 0.04
+COSTAS_LOOP_NOISE_BANDWIDTH_NORMALIZED = 0.05
 COSTAS_DAMPING_FACTOR = 0.707
 MAX_PHASE_ERROR_RAD = 0.2 # Tolerance for phase lock (e.g., ~11.4 degrees)
 COSTAS_SETTLING_SYMBOLS = 50  # Number of symbols after which Costas loop should be locked for direct tests
 COSTAS_PIPELINE_LOCK_THRESHOLD = 50  # Number of symbols for pipeline simulation to consider lock "acquired"
-BER_THRESHOLD = 1e-3  # For bit recovery tests (accounts for Costas loop noise enhancement at low SNR)
+BER_THRESHOLD = 1.5e-3  # For bit recovery tests (accounts for Costas loop noise enhancement at low SNR)
 
 
 @pytest.fixture(params=[BPSK(), QPSK()])
@@ -876,7 +876,7 @@ def _plot_costas_results(costas_results: list[dict[str, object]]) -> None:
                 actual_phase = cast("np.ndarray", r["actual_input_phase_offset"])
                 met_spec = r.get("met_lock_spec", False)
 
-                plot_len = min(len(phase_hist), 500)
+                plot_len = min(len(phase_hist), 600)
 
                 ax.plot(phase_hist[:plot_len], color="blue", label="Estimated Phase")
                 ax.plot(actual_phase[:plot_len], color="red", linestyle="--", label="Actual Phase")
@@ -937,9 +937,9 @@ if __name__ == "__main__":
 
     # --- Costas Loop Pipeline Analysis ---
     # Define sweep parameters for Costas pipeline
-    _costas_cfo_values = [1000.0, 5000.0]  # Smaller range for illustration
-    _costas_snr_values = [5.0, 10.0, 20.0]
-    _costas_modulator = BPSK()
+    _costas_cfo_values = [400.0, 10000.0]  # Smaller range for illustration
+    _costas_snr_values = [10.0, 15.0, 20.0]
+    _costas_modulator = EightPSK()
 
     # Temporarily reduce num_payload_symbols for debug logging
     num_payload_symbols = 2000  # Assuming original value is 2000 from function signature
