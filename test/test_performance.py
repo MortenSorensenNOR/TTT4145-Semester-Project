@@ -196,11 +196,11 @@ class TestComponentTiming:
         config = LDPCConfig(k=k, code_rate=CodeRates.HALF_RATE)
 
         # JIT warmup (first call compiles)
-        warmup_llrs = rng.normal(0, 1, config.n)
+        warmup_llrs = rng.normal(np.float32(0), np.float32(1), config.n).astype(np.float32)
         _ = ldpc_decode(warmup_llrs, config, max_iterations=10)
 
         # Use pure noise LLRs - decoder will never converge, forcing full iterations
-        noise_llrs = rng.normal(0, 1, config.n)
+        noise_llrs = rng.normal(np.float32(0), np.float32(1), config.n).astype(np.float32)
 
         # Now time different iteration counts
         for max_iter in [10, 25, 50]:
@@ -216,19 +216,19 @@ class TestComponentTiming:
         report = TimingReport("SYNCHRONIZATION TIMING")
 
         sps = 4
-        sample_rate = 1e6
+        sample_rate = np.float32(1e6)
 
         # Generate a preamble signal
         preamble = synchronizer.preamble
         preamble_upsampled = upsample_and_filter(preamble, sps, rrc_taps)
 
         # Add some payload symbols after preamble
-        payload_symbols = rng.integers(0, 2, size=200).astype(np.complex128) * 2 - 1
+        payload_symbols = rng.integers(0, 2, size=200).astype(np.int32).astype(np.complex64) * np.float32(2) - np.float32(1)
         payload_upsampled = upsample_and_filter(payload_symbols, sps, rrc_taps)
 
         # Combine and add noise
         tx_signal = np.concatenate([preamble_upsampled, payload_upsampled])
-        rx_signal = tx_signal + rng.normal(0, 0.1, len(tx_signal)) * (1 + 1j)
+        rx_signal = tx_signal + rng.normal(np.float32(0), np.float32(0.1), len(tx_signal)).astype(np.float32) * (1 + 1j)
 
         # Matched filter
         filtered = signal.convolve(rx_signal, rrc_taps, mode="same")
@@ -248,7 +248,7 @@ class TestComponentTiming:
         sps = 4
 
         for n_symbols in [100, 500, 1000, 2000]:
-            symbols = rng.standard_normal(n_symbols) + 1j * rng.standard_normal(n_symbols)
+            symbols = rng.standard_normal(n_symbols).astype(np.float32) + np.complex64(1j) * rng.standard_normal(n_symbols).astype(np.float32)
             elapsed_ms, _ = time_function(upsample_and_filter, symbols, sps, rrc_taps, iterations=10)
             report.add(f"{n_symbols} symbols", elapsed_ms)
 
@@ -259,7 +259,7 @@ class TestComponentTiming:
         report = TimingReport("MATCHED FILTER TIMING")
 
         for n_samples in [1000, 5000, 10000, 20000]:
-            rx_signal = rng.standard_normal(n_samples) + 1j * rng.standard_normal(n_samples)
+            rx_signal = rng.standard_normal(n_samples).astype(np.float32) + np.complex64(1j) * rng.standard_normal(n_samples).astype(np.float32)
             elapsed_ms, _ = time_function(signal.convolve, rx_signal, rrc_taps, mode="same", iterations=10)
             report.add(f"{n_samples} samples", elapsed_ms)
 
@@ -293,10 +293,10 @@ class TestComponentTiming:
 
             # Add noise for soft demod
             symbols_array = cast("np.ndarray", symbols)
-            noisy = symbols_array + rng.normal(0, 0.1, len(symbols_array)) * (1 + 1j)
+            noisy = symbols_array + rng.normal(np.float32(0), np.float32(0.1), len(symbols_array)).astype(np.float32) * (1 + 1j)
 
             # Time soft decoding
-            elapsed_ms, _ = time_function(mod.symbols2bits_soft, noisy, sigma_sq=0.1, iterations=100)
+            elapsed_ms, _ = time_function(mod.symbols2bits_soft, noisy, sigma_sq=np.float32(0.1), iterations=100)
             report.add(f"{name} soft decode", elapsed_ms)
 
         report.print()
@@ -306,26 +306,26 @@ class TestComponentTiming:
         report = TimingReport("CHANNEL MODEL TIMING")
 
         n_samples = 10000
-        tx_signal = rng.standard_normal(n_samples) + 1j * rng.standard_normal(n_samples)
+        tx_signal = rng.standard_normal(n_samples).astype(np.float32) + np.complex64(1j) * rng.standard_normal(n_samples).astype(np.float32)
 
         # AWGN only
-        config_awgn = ChannelConfig(snr_db=20.0, seed=42)
+        config_awgn = ChannelConfig(snr_db=np.float32(20.0), seed=42)
         channel_awgn = ChannelModel(config_awgn)
         elapsed_ms, _ = time_function(channel_awgn.apply, tx_signal, iterations=10)
         report.add("AWGN only", elapsed_ms)
 
         # AWGN + CFO
-        config_cfo = ChannelConfig(snr_db=20.0, cfo_hz=100.0, seed=42)
+        config_cfo = ChannelConfig(snr_db=np.float32(20.0), cfo_hz=np.float32(100.0), seed=42)
         channel_cfo = ChannelModel(config_cfo)
         elapsed_ms, _ = time_function(channel_cfo.apply, tx_signal, iterations=10)
         report.add("AWGN + CFO", elapsed_ms)
 
         # AWGN + multipath
         config_mp = ChannelConfig(
-            snr_db=20.0,
+            snr_db=np.float32(20.0),
             enable_multipath=True,
-            multipath_delays_samples=(0.0, 2.0, 4.0),
-            multipath_gains_db=(0.0, -3.0, -6.0),
+            multipath_delays_samples=(np.float32(0.0), np.float32(2.0), np.float32(4.0)),
+            multipath_gains_db=(np.float32(0.0), np.float32(-3.0), np.float32(-6.0)),
             seed=42,
         )
         channel_mp = ChannelModel(config_mp)
@@ -334,11 +334,11 @@ class TestComponentTiming:
 
         # Full channel (AWGN + CFO + multipath)
         config_full = ChannelConfig(
-            snr_db=20.0,
-            cfo_hz=100.0,
+            snr_db=np.float32(20.0),
+            cfo_hz=np.float32(100.0),
             enable_multipath=True,
-            multipath_delays_samples=(0.0, 2.0, 4.0),
-            multipath_gains_db=(0.0, -3.0, -6.0),
+            multipath_delays_samples=(np.float32(0.0), np.float32(2.0), np.float32(4.0)),
+            multipath_gains_db=(np.float32(0.0), np.float32(-3.0), np.float32(-6.0)),
             seed=42,
         )
         channel_full = ChannelModel(config_full)
@@ -347,16 +347,12 @@ class TestComponentTiming:
 
         report.print()
 
-    # ========================================================================
-    # Tier 3: Lower Priority (usually fast)
-    # ========================================================================
-
     def test_pilot_operations_timing(self, pilot_config: PilotConfig, rng: np.random.Generator) -> None:
         """Time pilot insertion and phase tracking."""
         report = TimingReport("PILOT OPERATIONS TIMING")
 
         n_data = 500
-        data_symbols = rng.standard_normal(n_data) + 1j * rng.standard_normal(n_data)
+        data_symbols = rng.standard_normal(n_data).astype(np.float32) + np.complex64(1j) * rng.standard_normal(n_data).astype(np.float32)
 
         # Time pilot insertion
         elapsed_ms, symbols_with_pilots = time_function(insert_pilots, data_symbols, pilot_config, iterations=100)
@@ -364,7 +360,7 @@ class TestComponentTiming:
 
         # Add phase rotation for phase tracking test
         symbols_with_pilots_array = cast("np.ndarray", symbols_with_pilots)
-        phase = np.linspace(0, np.pi / 4, len(symbols_with_pilots_array))
+        phase = np.linspace(np.float32(0), np.float32(np.pi) / np.float32(4), len(symbols_with_pilots_array), dtype=np.float32)
         rotated = symbols_with_pilots_array * np.exp(1j * phase)
 
         # Time phase tracking
@@ -382,10 +378,10 @@ class TestComponentTiming:
         symbols_with_pilots = insert_pilots(data_symbols, pilot_config)
 
         # Simulate channel distortion
-        h = 0.8 + 0.2j  # Simple flat fading
-        distorted = symbols_with_pilots * h + rng.normal(0, 0.1, len(symbols_with_pilots)) * (1 + 1j)
+        h = np.complex64(0.8 + 0.2j)  # Simple flat fading
+        distorted = symbols_with_pilots * h + rng.normal(np.float32(0), np.float32(0.1), len(symbols_with_pilots)).astype(np.float32) * (1 + 1j)
 
-        elapsed_ms, _ = time_function(equalize_payload, distorted, n_data, pilot_config, sigma_sq=0.01, iterations=100)
+        elapsed_ms, _ = time_function(equalize_payload, distorted, n_data, pilot_config, sigma_sq=np.float32(0.01), iterations=100)
         report.add(f"equalize_payload (n_data={n_data})", elapsed_ms)
 
         report.print()
@@ -401,7 +397,7 @@ class TestComponentTiming:
             symbols = qpsk.bits2symbols(bits)
 
             # Add phase offset
-            phase = np.linspace(0, np.pi / 2, n_symbols)
+            phase = np.linspace(np.float32(0), np.float32(np.pi) / np.float32(2), n_symbols, dtype=np.float32)
             rotated = symbols * np.exp(1j * phase)
 
             elapsed_ms, _ = time_function(apply_costas_loop, rotated, CostasConfig(), iterations=10)
@@ -488,7 +484,7 @@ class TestPipelineTiming:
         ldpc_config = LDPCConfig(k=k, code_rate=CodeRates.HALF_RATE)
         qpsk = QPSK()
         sps = 4
-        sample_rate = 1e6
+        sample_rate = np.float32(1e6)
 
         # ====================================================================
         # Generate TX signal with preamble
@@ -504,11 +500,11 @@ class TestPipelineTiming:
         tx_signal = upsample_and_filter(full_frame, sps, rrc_taps)
 
         # Add channel impairments
-        channel = ChannelModel(ChannelConfig(snr_db=15.0, cfo_hz=50.0, seed=42))
+        channel = ChannelModel(ChannelConfig(snr_db=np.float32(15.0), cfo_hz=np.float32(50.0), seed=42))
         rx_signal = channel.apply(tx_signal)
 
         # JIT warmup for LDPC decode
-        warmup_llrs = rng.normal(0, 1, ldpc_config.n)
+        warmup_llrs = rng.normal(np.float32(0), np.float32(1), ldpc_config.n).astype(np.float32)
         _ = ldpc_decode(warmup_llrs, ldpc_config, max_iterations=5)
 
         # ====================================================================
@@ -529,7 +525,7 @@ class TestPipelineTiming:
         # Step 3: CFO correction
         with timed_section(report, "CFO correction"):
             t = np.arange(len(filtered)) / sample_rate
-            cfo_correction = np.exp(-1j * 2 * np.pi * sync_result.cfo_hat_hz * t)
+            cfo_correction = np.exp(np.complex64(-1j) * np.float32(2) * np.float32(np.pi) * sync_result.cfo_hat_hz * t)
             corrected = filtered * cfo_correction
 
         # Step 4: Symbol extraction (downsample)
@@ -575,10 +571,10 @@ class TestPipelineTiming:
         ldpc_config = LDPCConfig(k=k, code_rate=CodeRates.HALF_RATE)
         qpsk = QPSK()
         sps = 4
-        sample_rate = 1e6
+        sample_rate = np.float32(1e6)
 
         # JIT warmup
-        warmup_llrs = rng.normal(0, 1, ldpc_config.n)
+        warmup_llrs = rng.normal(np.float32(0), np.float32(1), ldpc_config.n).astype(np.float32)
         _ = ldpc_decode(warmup_llrs, ldpc_config, max_iterations=5)
 
         # Time TX
@@ -595,7 +591,7 @@ class TestPipelineTiming:
         logger.info("TX elapsed: %.2f ms", tx_elapsed_ms)
 
         # Apply channel
-        channel = ChannelModel(ChannelConfig(snr_db=15.0, cfo_hz=50.0, seed=42))
+        channel = ChannelModel(ChannelConfig(snr_db=np.float32(15.0), cfo_hz=np.float32(50.0), seed=42))
         rx_signal = channel.apply(tx_signal)
 
         # Time RX
@@ -603,7 +599,7 @@ class TestPipelineTiming:
         filtered = signal.convolve(rx_signal, rrc_taps, mode="same")
         sync_result = synchronizer.detect_preamble(filtered, sample_rate)
         t = np.arange(len(filtered)) / sample_rate
-        corrected = filtered * np.exp(-1j * 2 * np.pi * sync_result.cfo_hat_hz * t)
+        corrected = filtered * np.exp(np.complex64(-1j) * np.float32(2) * np.float32(np.pi) * sync_result.cfo_hat_hz * t)
         start_idx = sync_result.long_zc_start + len(preamble) * sps
         n_payload_symbols = len(symbols_with_pilots)
         rx_symbols = corrected[start_idx : start_idx + n_payload_symbols * sps : sps]
@@ -612,7 +608,7 @@ class TestPipelineTiming:
         n_data = len(symbols)
         equalized = equalize_payload(rx_symbols, n_data, pilot_config)
         phase_corrected = pilot_aided_phase_track(equalized, n_data, pilot_config)
-        llrs = qpsk.symbols2bits_soft(phase_corrected, sigma_sq=0.1)
+        llrs = qpsk.symbols2bits_soft(phase_corrected, sigma_sq=np.float32(0.1))
         llrs_flat = llrs.flatten()
         if len(llrs_flat) < ldpc_config.n:
             llrs_flat = np.pad(llrs_flat, (0, ldpc_config.n - len(llrs_flat)))
@@ -644,21 +640,21 @@ class TestScalingBehavior:
         codeword = ldpc_encode(message, config)
 
         # JIT warmup
-        warmup_llrs = rng.normal(0, 1, config.n)
+        warmup_llrs = rng.normal(np.float32(0), np.float32(1), config.n).astype(np.float32)
         _ = ldpc_decode(warmup_llrs, config, max_iterations=5)
 
         # High SNR LLRs - will converge in few iterations
-        good_llrs = (2 * codeword.astype(np.float64) - 1) * 10  # Very clean
+        good_llrs = (np.float32(2) * codeword.astype(np.float32) - np.float32(1)) * np.float32(10)  # Very clean
         elapsed_ms, _ = time_function(ldpc_decode, good_llrs, config, max_iterations=50, iterations=10)
         report.add("High SNR (converges early)", elapsed_ms)
 
         # Medium SNR LLRs - may converge
-        medium_llrs = (2 * codeword.astype(np.float64) - 1) * 2 + rng.normal(0, 1, config.n)
+        medium_llrs = (np.float32(2) * codeword.astype(np.float32) - np.float32(1)) * np.float32(2) + rng.normal(np.float32(0), np.float32(1), config.n).astype(np.float32)
         elapsed_ms, _ = time_function(ldpc_decode, medium_llrs, config, max_iterations=50, iterations=10)
         report.add("Medium SNR (may converge)", elapsed_ms)
 
         # Pure noise - will NOT converge, runs all 50 iterations
-        noise_llrs = rng.normal(0, 1, config.n)
+        noise_llrs = rng.normal(np.float32(0), np.float32(1), config.n).astype(np.float32)
         elapsed_ms, _ = time_function(ldpc_decode, noise_llrs, config, max_iterations=50, iterations=10)
         report.add("Pure noise (forced 50 iter)", elapsed_ms)
 
@@ -675,11 +671,11 @@ class TestScalingBehavior:
         config = LDPCConfig(k=k, code_rate=CodeRates.HALF_RATE)
 
         # JIT warmup
-        warmup_llrs = rng.normal(0, 1, config.n)
+        warmup_llrs = rng.normal(np.float32(0), np.float32(1), config.n).astype(np.float32)
         _ = ldpc_decode(warmup_llrs, config, max_iterations=5)
 
         # Pure noise - will not converge, forces full iterations
-        noise_llrs = rng.normal(0, 1, config.n)
+        noise_llrs = rng.normal(np.float32(0), np.float32(1), config.n).astype(np.float32)
 
         for max_iter in [10, 25, 50, 100]:
             elapsed_ms, _ = time_function(ldpc_decode, noise_llrs, config, max_iterations=max_iter, iterations=5)
@@ -697,7 +693,7 @@ class TestScalingBehavior:
 
         # JIT warmup with smallest config
         warmup_config = LDPCConfig(k=324, code_rate=CodeRates.HALF_RATE)
-        warmup_llrs = rng.normal(0, 1, warmup_config.n)
+        warmup_llrs = rng.normal(np.float32(0), np.float32(1), warmup_config.n).astype(np.float32)
         _ = ldpc_decode(warmup_llrs, warmup_config, max_iterations=10)
 
         # Test all three block sizes with multiple code rates
@@ -717,7 +713,7 @@ class TestScalingBehavior:
         for k, code_rate in test_configs:
             config = LDPCConfig(k=k, code_rate=code_rate)
             # Pure noise - forces full iterations
-            noise_llrs = rng.normal(0, 1, config.n)
+            noise_llrs = rng.normal(np.float32(0), np.float32(1), config.n).astype(np.float32)
 
             elapsed_ms, _ = time_function(ldpc_decode, noise_llrs, config, max_iterations=50, iterations=3)
             rate_str = code_rate.name.replace("_RATE", "").replace("_", "/").lower()
@@ -730,7 +726,7 @@ class TestScalingBehavior:
         report = TimingReport("CONVOLUTION SCALING (direct vs FFT)")
 
         for n_samples in [1000, 5000, 10000, 50000]:
-            rx_signal = rng.standard_normal(n_samples) + 1j * rng.standard_normal(n_samples)
+            rx_signal = rng.standard_normal(n_samples).astype(np.float32) + np.complex64(1j) * rng.standard_normal(n_samples).astype(np.float32)
 
             # Direct convolution (scipy default for small signals)
             elapsed_direct, _ = time_function(signal.convolve, rx_signal, rrc_taps, mode="same", iterations=5)
@@ -749,15 +745,15 @@ class TestScalingBehavior:
         report = TimingReport("SYNCHRONIZATION SCALING (signal length)")
 
         sps = 4
-        sample_rate = 1e6
+        sample_rate = np.float32(1e6)
 
         # Generate base signal with preamble
         preamble = synchronizer.preamble
         preamble_upsampled = upsample_and_filter(preamble, sps, rrc_taps)
-        payload = rng.standard_normal(100) + 1j * rng.standard_normal(100)
+        payload = rng.standard_normal(100).astype(np.float32) + np.complex64(1j) * rng.standard_normal(100).astype(np.float32)
         payload_upsampled = upsample_and_filter(payload, sps, rrc_taps)
         base_signal = np.concatenate([preamble_upsampled, payload_upsampled])
-        base_signal += rng.normal(0, 0.1, len(base_signal)) * (1 + 1j)
+        base_signal += rng.normal(np.float32(0), np.float32(0.1), len(base_signal)).astype(np.float32) * (1 + 1j)
 
         # Matched filter
         filtered_base = signal.convolve(base_signal, rrc_taps, mode="same")
@@ -847,7 +843,7 @@ class TestMemoryUsage:
 
             # Trigger cache population
             ldpc_encode(message, config)
-            noise_llrs = rng.normal(0, 1, config.n)
+            noise_llrs = rng.normal(np.float32(0), np.float32(1), config.n).astype(np.float32)
             _ = ldpc_decode(noise_llrs, config, max_iterations=5)
 
             # Measure H matrix cache
@@ -898,13 +894,12 @@ class TestPerformanceSummary:
         ldpc_config = LDPCConfig(k=k, code_rate=CodeRates.HALF_RATE)
         qpsk = QPSK()
         sps = 4
-        sample_rate = 1e6
+        sample_rate = np.float32(1e6)
 
         # Generate test data
         message = rng.integers(0, 2, size=k).astype(np.int8)
 
-        # JIT warmup for LDPC
-        warmup_llrs = rng.normal(0, 1, ldpc_config.n)
+        warmup_llrs = rng.normal(np.float32(0), np.float32(1), ldpc_config.n).astype(np.float32)
         _ = ldpc_decode(warmup_llrs, ldpc_config, max_iterations=5)
 
         # LDPC encode
@@ -912,7 +907,7 @@ class TestPerformanceSummary:
             codeword = ldpc_encode(message, ldpc_config)
 
         # LDPC decode
-        llrs = (2 * codeword.astype(np.float64) - 1) * 4 + rng.normal(0, 0.5, ldpc_config.n)
+        llrs = (np.float32(2) * codeword.astype(np.float32) - np.float32(1)) * np.float32(4) + rng.normal(np.float32(0), np.float32(0.5), ldpc_config.n).astype(np.float32)
         with timed_section(report, "LDPC decode (50 iter)"):
             _ = ldpc_decode(llrs, ldpc_config, max_iterations=50)
 
@@ -921,7 +916,7 @@ class TestPerformanceSummary:
             symbols = qpsk.bits2symbols(codeword)
 
         with timed_section(report, "QPSK soft demod"):
-            _ = qpsk.symbols2bits_soft(symbols, sigma_sq=0.1)
+            _ = qpsk.symbols2bits_soft(symbols, sigma_sq=np.float32(0.1))
 
         # Pilots
         with timed_section(report, "Pilot insert"):
@@ -937,7 +932,7 @@ class TestPerformanceSummary:
             tx_signal = upsample_and_filter(full_frame, sps, rrc_taps)
 
         # Channel
-        channel = ChannelModel(ChannelConfig(snr_db=15.0, cfo_hz=50.0, seed=42))
+        channel = ChannelModel(ChannelConfig(snr_db=np.float32(15.0), cfo_hz=np.float32(50.0), seed=42))
         with timed_section(report, "Channel apply"):
             rx_signal = channel.apply(tx_signal)
 

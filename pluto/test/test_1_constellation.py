@@ -16,7 +16,7 @@ from pluto.config import SPS
 from pluto.loopback import setup_pluto, transmit_and_receive
 
 PLOT_DIR = "examples/data"
-RRC_ALPHA = 0.35
+RRC_ALPHA = np.float32(0.35)
 RRC_NUM_TAPS = 101
 N_SYMBOLS = 500
 
@@ -36,7 +36,7 @@ def compute_evm(rx_symbols: np.ndarray, constellation: np.ndarray) -> float:
     error = rx_symbols - ideal
     ref_power = np.mean(np.abs(ideal) ** 2)
     error_power = np.mean(np.abs(error) ** 2)
-    return 100.0 * np.sqrt(error_power / ref_power)
+    return np.float32(100.0) * np.sqrt(error_power / ref_power)
 
 
 def normalize_and_extract(rx_filtered: np.ndarray, n_symbols: int, sps: int) -> np.ndarray:
@@ -53,11 +53,11 @@ def test_constellation(
 ) -> tuple[np.ndarray, float]:
     """Test a single modulation scheme and return (rx_symbols, evm)."""
     rng = np.random.default_rng()
-    bits = rng.integers(0, 2, N_SYMBOLS * modulator.bits_per_symbol)
+    bits = rng.integers(0, 2, N_SYMBOLS * modulator.bits_per_symbol, dtype=np.int32)
     tx_symbols = modulator.bits2symbols(bits)
     tx_symbols_norm = tx_symbols / np.sqrt(np.mean(np.abs(tx_symbols) ** 2))
 
-    guard = np.zeros(100, dtype=complex)
+    guard = np.zeros(100, dtype=np.complex64)
     frame = np.concatenate([guard, tx_symbols, guard])
     tx_signal = upsample_and_filter(frame, SPS, h_rrc)
 
@@ -70,7 +70,7 @@ def test_constellation(
     rx_symbols = normalize_and_extract(rx_filtered[offset:], N_SYMBOLS, SPS)
 
     phase_offset = estimate_phase_offset(rx_symbols, tx_symbols_norm)
-    rx_symbols = rx_symbols * np.exp(-1j * phase_offset)
+    rx_symbols = rx_symbols * np.exp(np.complex64(-1j) * phase_offset)
 
     constellation = modulator.symbol_mapping / np.sqrt(np.mean(np.abs(modulator.symbol_mapping) ** 2))
     evm = compute_evm(rx_symbols, constellation)

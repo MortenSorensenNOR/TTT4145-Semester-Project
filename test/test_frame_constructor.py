@@ -22,7 +22,7 @@ GOLAY_BLOCK_SIZE = 12
 FIRST_LDPC_K = 324
 SECOND_LDPC_K = 648
 THIRD_LDPC_K = 972
-SNR_DB = 15.0
+SNR_DB = np.float32(15.0)
 CHANNEL_SEED = 42
 RNG_SEED = 42
 MAX_PAYLOAD_LENGTH = 324
@@ -56,7 +56,7 @@ def sample_header() -> FrameHeader:
 def random_payload(sample_header: FrameHeader) -> np.ndarray:
     """Create random payload that EXACTLY matches the header length."""
     rng = np.random.default_rng(seed=RNG_SEED)
-    return rng.integers(0, 2, size=sample_header.length, dtype=int)
+    return rng.integers(0, 2, size=sample_header.length, dtype=np.int32)
 
 
 @pytest.fixture
@@ -142,7 +142,7 @@ class TestFrameConstructorRoundtrip:
             crc=0,
         )
         rng = np.random.default_rng()
-        payload = rng.integers(0, 2, size=length, dtype=int)
+        payload = rng.integers(0, 2, size=length, dtype=np.int32)
 
         header_encoded, payload_encoded = frame_constructor.encode(header, payload)
         decoded_header = frame_constructor.decode_header(header_encoded)
@@ -173,7 +173,7 @@ class TestDynamicPayloadLength:
     ) -> None:
         """Verify that payloads are padded to the correct LDPC k-dimension."""
         rng = np.random.default_rng()
-        payload = rng.integers(0, 2, size=payload_length, dtype=int)
+        payload = rng.integers(0, 2, size=payload_length, dtype=np.int32)
         header = FrameHeader(
             length=payload_length,
             src=1,
@@ -195,7 +195,7 @@ class TestDynamicPayloadLength:
         decoded_payload = frame_constructor.decode_payload(decoded_header, payload_encoded)
 
         np.testing.assert_equal(len(decoded_payload), payload_length)
-        np.testing.assert_array_equal(decoded_payload.flatten().astype(int), payload.flatten().astype(int))
+        np.testing.assert_array_equal(decoded_payload.flatten().astype(np.int32), payload.flatten().astype(np.int32))
 
 
 class TestGolayHeaderCoding:
@@ -204,7 +204,7 @@ class TestGolayHeaderCoding:
     def test_golay_roundtrip_no_errors(self) -> None:
         """Golay encode then decode should recover the original message."""
         golay = Golay()
-        message = np.array([1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 1], dtype=int)
+        message = np.array([1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 1], dtype=np.int32)
         encoded = golay.encode(message)
         decoded = golay.decode(encoded)
         np.testing.assert_array_equal(decoded, message)
@@ -213,7 +213,7 @@ class TestGolayHeaderCoding:
         """Multi-block Golay encoding should produce correct length and decode perfectly."""
         golay = Golay()
         rng = np.random.default_rng(RNG_SEED)
-        message = rng.integers(0, 2, size=GOLAY_MESSAGE_BITS)
+        message = rng.integers(0, 2, size=GOLAY_MESSAGE_BITS, dtype=np.int32)
         encoded = golay.encode(message)
         np.testing.assert_equal(len(encoded), GOLAY_ENCODED_BITS)
         np.testing.assert_array_equal(golay.decode(encoded), message)
@@ -235,7 +235,7 @@ class TestFrameConstructorWithChannel:
         tx_header_symbols = qpsk.bits2symbols(header_encoded)
         tx_payload_symbols = qpsk.bits2symbols(payload_encoded)
 
-        channel = ChannelModel(ChannelConfig(snr_db=SNR_DB, seed=CHANNEL_SEED))
+        channel = ChannelModel(ChannelConfig(snr_db=np.float32(SNR_DB), seed=CHANNEL_SEED))
         rx_header_symbols = channel.apply(tx_header_symbols)
         rx_payload_symbols = channel.apply(tx_payload_symbols)
 
@@ -263,7 +263,7 @@ class TestFrameConstructorWithChannel:
             sequence_number=0,
             crc=0,
         )
-        payload = np.zeros(UNSUPPORTED_PAYLOAD_LENGTH, dtype=int)
+        payload = np.zeros(UNSUPPORTED_PAYLOAD_LENGTH, dtype=np.int32)
 
         with pytest.raises(ValueError, match="Unsupported payload length"):
             frame_constructor.encode(header, payload)

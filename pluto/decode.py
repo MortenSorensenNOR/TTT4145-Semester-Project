@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from modules.modulation import Modulator
@@ -53,7 +53,7 @@ class FrameResult:
 
     payload_bits: np.ndarray
     header: FrameHeader
-    cfo_hz: float
+    cfo_hz: np.float32 # Already np.float32, good
     consumed_samples: int
 
     @property
@@ -74,7 +74,7 @@ class FrameDecoder:
         self,
         sync: Synchronizer,
         frame_constructor: FrameConstructor,
-        sample_rate: float,
+        sample_rate: np.float32, # Changed type hint
         pipeline: PipelineConfig,
     ) -> None:
         """Initialize with fixed radio parameters."""
@@ -83,16 +83,15 @@ class FrameDecoder:
         self.sample_rate = sample_rate
         self.pipeline = pipeline
         self.sps = sync.sps
-        self.header_n_symbols = frame_constructor.header_encoded_n_bits // _HEADER_BPSK.bits_per_symbol
+        self.header_n_symbols = self.frame_constructor.header_encoded_n_bits // np.int32(_HEADER_BPSK.bits_per_symbol) # Explicitly cast to np.int32
         self.pilot_config: PilotConfig = pipeline.pilot_config
         self.max_frame_samples = self._compute_max_frame_samples()
 
     @property
-    def rrc_taps(self) -> np.ndarray | None:
+    def rrc_taps(self) -> np.ndarray[np.float32, Any] | None: # Added type hint
         """RRC filter taps, or None when pulse shaping is disabled."""
         return self.sync.rrc_taps
 
-    # type: ignore[union-attr]
     def try_decode(
         self,
         rx_filtered: np.ndarray,
@@ -115,7 +114,7 @@ class FrameDecoder:
         if header is None:
             return None
 
-        if header.length == 0:
+        if header.length == np.int32(0): # Explicitly cast to np.int32
             logger.debug("Header decoded with zero payload length — likely false positive")
             return None  # or DecodeAttempt(DecodeStage.INVALID_HEADER, ...)
 
@@ -164,9 +163,9 @@ class FrameDecoder:
     def _recover_symbols(
         self,
         samples_from_zc: np.ndarray,
-        cfo_hz: float,
+        cfo_hz: np.float32, # Changed type hint
         global_sample_start: int,
-    ) -> np.ndarray:
+    ) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """CFO correct, phase correct, downsample, and normalize to symbol rate."""
         cfo_corrected = self._correct_cfo(samples_from_zc, cfo_hz, global_sample_start)
         phase_corrected = self._correct_residual_phase(cfo_corrected)
@@ -180,17 +179,17 @@ class FrameDecoder:
     def _correct_cfo(
         self,
         samples: np.ndarray,
-        cfo_hz: float,
+        cfo_hz: np.float32, # Changed type hint
         global_sample_start: int,
-    ) -> np.ndarray:
+    ) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Apply carrier frequency offset correction."""
         if not self.pipeline.cfo_correction:
             return samples
-        sample_indices = global_sample_start + np.arange(len(samples))
-        phase_increment = 2 * np.pi * cfo_hz / self.sample_rate
-        return samples * np.exp(-1j * phase_increment * sample_indices)
+        sample_indices = np.arange(global_sample_start, global_sample_start + len(samples), dtype=np.int32) # Explicitly cast to np.int32
+        phase_increment = np.float32(2) * np.float32(np.pi) * cfo_hz / self.sample_rate # Explicitly cast to np.float32
+        return samples * np.exp(np.complex64(-1j) * phase_increment * sample_indices.astype(np.float32)) # Explicitly cast to np.float32
 
-    def _correct_residual_phase(self, cfo_corrected: np.ndarray) -> np.ndarray:
+    def _correct_residual_phase(self, cfo_corrected: np.ndarray) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Remove residual phase offset estimated from the long ZC sequence.
 
         Downsamples internally to compare against the symbol-rate ZC reference,
@@ -205,30 +204,30 @@ class FrameDecoder:
             logger.debug("ZC length mismatch (%d vs %d), skipping phase correction", len(zc_rx), len(zc_long_ref))
             return cfo_corrected
         phase_hat = np.angle(np.sum(zc_rx * np.conj(zc_long_ref)))
-        return cfo_corrected * np.exp(-1j * phase_hat)
+        return cfo_corrected * np.exp(np.complex64(-1j) * phase_hat)
 
-    def _normalize_amplitude(self, symbols: np.ndarray) -> np.ndarray:
+    def _normalize_amplitude(self, symbols: np.ndarray) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Normalize symbol amplitude using the known-power BPSK header."""
         if len(symbols) < self.header_n_symbols:
             logger.warning("Too few symbols (%d) to estimate header power, skipping normalization", len(symbols))
             return symbols
-        header_power = np.mean(np.abs(symbols[: self.header_n_symbols]) ** 2)
-        if header_power == 0:
+        header_power = np.mean(np.abs(symbols[: self.header_n_symbols]) ** np.float32(2)) # Explicitly cast to np.float32
+        if header_power == np.float32(0): # Explicitly cast to np.float32
             logger.warning("Header power is zero, skipping normalization")
             return symbols
         return symbols / np.sqrt(header_power)
 
-    def _demodulate_header(self, symbols: np.ndarray) -> tuple[FrameHeader | None, float]:
+    def _demodulate_header(self, symbols: np.ndarray) -> tuple[FrameHeader | None, np.float32]: # Added return type hint
         """Hard-demodulate the BPSK header, applying Costas loop if enabled.
 
         Returns the decoded header and the final Costas phase estimate (0.0 if
         the Costas loop is disabled).
         """
         header_symbols = symbols[: self.header_n_symbols]
-        final_phase = 0.0
+        final_phase = np.float32(0.0) # Already np.float32, good
         if self.pipeline.costas_loop:
             header_symbols, phase_estimates = apply_costas_loop(symbols=header_symbols, config=COSTAS_CONFIG, modulator=_HEADER_BPSK)
-            final_phase = float(phase_estimates[-1])
+            final_phase = phase_estimates[-1]
         header_bits = _HEADER_BPSK.symbols2bits(header_symbols).flatten()
         try:
             return self.frame_constructor.decode_header(header_bits), final_phase
@@ -243,8 +242,8 @@ class FrameDecoder:
         modulator: Modulator,
         n_data_symbols: int,
         n_total_payload_symbols: int,
-        header_final_phase: float = 0.0,
-    ) -> np.ndarray | None:
+        header_final_phase: np.float32 = np.float32(0.0), # Already np.float32, good
+    ) -> np.ndarray[Any, Any] | None: # Added return type hint
         """Demodulate and channel-decode the payload, returning decoded bits or None."""
         payload_symbols = symbols[self.header_n_symbols : self.header_n_symbols + n_total_payload_symbols]
 
@@ -279,7 +278,7 @@ class FrameDecoder:
         payload_symbols: np.ndarray,
         header_symbols: np.ndarray,
         n_data_symbols: int,
-    ) -> np.ndarray:
+    ) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Equalize and phase-track payload using pilot symbols and header noise estimate."""
         header_sigma_sq = _HEADER_BPSK.estimate_noise_variance(header_symbols)
         p_idx = pilot_indices(n_data_symbols, self.pilot_config)
@@ -313,17 +312,17 @@ class FrameDecoder:
 
         if self.pipeline.channel_coding:
             all_coded_rates = [r for r in CodeRates if r != CodeRates.NONE]
-            max_coded_bits = max(
-                LDPCConfig(k=int(max(ldpc_get_supported_payload_lengths(rate))), code_rate=rate).n
+            max_coded_bits = np.int32(max(
+                LDPCConfig(k=np.int32(max(ldpc_get_supported_payload_lengths(rate))), code_rate=rate).n # Explicitly cast to np.int32
                 for rate in all_coded_rates
-            )
+            ))
         else:
-            max_payload_bits = 2**self.frame_constructor.header_config.payload_length_bits - 1
-            raw_bits = max_payload_bits + FrameConstructor.PAYLOAD_CRC_BITS
-            pad = FrameConstructor.PAYLOAD_PAD_MULTIPLE
+            max_payload_bits = np.int32(2)**self.frame_constructor.header_config.payload_length_bits - np.int32(1) # Explicitly cast to np.int32
+            raw_bits = max_payload_bits + self.frame_constructor.PAYLOAD_CRC_BITS
+            pad = self.frame_constructor.PAYLOAD_PAD_MULTIPLE
             max_coded_bits = raw_bits + (-raw_bits % pad)
 
-        max_data_symbols = max_coded_bits // 1  # BPSK (1 bit/symbol) is the worst case
+        max_data_symbols = max_coded_bits // np.int32(1)  # BPSK (1 bit/symbol) is the worst case # Explicitly cast to np.int32
 
         if self.pipeline.pilots:
             max_payload_symbols = n_total_symbols(max_data_symbols, self.pilot_config)
@@ -346,6 +345,6 @@ def create_decoder(
     return FrameDecoder(
         sync,
         frame_constructor,
-        sample_rate=SAMPLE_RATE,
+        sample_rate=np.float32(SAMPLE_RATE),
         pipeline=pipeline,
     )

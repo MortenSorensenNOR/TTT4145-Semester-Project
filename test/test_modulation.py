@@ -27,38 +27,38 @@ class TestBPSK:
 
     def test_symbol_constellation(self, bpsk: BPSK) -> None:
         """Verify that BPSK defines the expected constellation points."""
-        expected = np.array([-1 + 0j, 1 + 0j])
+        expected = np.array([-1 + 0j, 1 + 0j], dtype=np.complex64)
         np.testing.assert_array_equal(bpsk.symbol_mapping, expected)
 
     def test_bits2symbols_single_bit(self, bpsk: BPSK) -> None:
         """Verify that single bits map to the expected BPSK symbol."""
-        np.testing.assert_equal(bpsk.bits2symbols(np.array([0]))[0], -1 + 0j)
-        np.testing.assert_equal(bpsk.bits2symbols(np.array([1]))[0], 1 + 0j)
+        np.testing.assert_equal(bpsk.bits2symbols(np.array([0], dtype=np.int32))[0], -1 + 0j)
+        np.testing.assert_equal(bpsk.bits2symbols(np.array([1], dtype=np.int32))[0], 1 + 0j)
 
     def test_bits2symbols_bitstream(self, bpsk: BPSK) -> None:
         """Verify mapping from a bitstream to BPSK symbols."""
-        bits = np.array([0, 1, 1, 0, 1, 0])
+        bits = np.array([0, 1, 1, 0, 1, 0], dtype=np.int32)
         symbols = bpsk.bits2symbols(bits)
-        expected = np.array([-1 + 0j, 1 + 0j, 1 + 0j, -1 + 0j, 1 + 0j, -1 + 0j])
+        expected = np.array([-1 + 0j, 1 + 0j, 1 + 0j, -1 + 0j, 1 + 0j, -1 + 0j], dtype=np.complex64)
         np.testing.assert_array_equal(symbols, expected)
 
     def test_symbols2bits_perfect_symbols(self, bpsk: BPSK) -> None:
         """Verify demodulation on noiseless BPSK symbols."""
-        symbols = np.array([-1 + 0j, 1 + 0j, 1 + 0j, -1 + 0j])
+        symbols = np.array([-1 + 0j, 1 + 0j, 1 + 0j, -1 + 0j], dtype=np.complex64)
         bits = bpsk.symbols2bits(symbols).flatten()
-        expected = np.array([0, 1, 1, 0])
+        expected = np.array([0, 1, 1, 0], dtype=np.int32)
         np.testing.assert_array_equal(bits, expected)
 
     def test_symbols2bits_noisy_symbols(self, bpsk: BPSK) -> None:
         """Verify demodulation on noisy BPSK symbols."""
-        symbols = np.array([-0.8 + 0.1j, 0.9 - 0.05j, 0.7 + 0.2j, -1.1 + 0j])
+        symbols = np.array([-0.8 + 0.1j, 0.9 - 0.05j, 0.7 + 0.2j, -1.1 + 0j], dtype=np.complex64)
         bits = bpsk.symbols2bits(symbols).flatten()
-        expected = np.array([0, 1, 1, 0])
+        expected = np.array([0, 1, 1, 0], dtype=np.int32)
         np.testing.assert_array_equal(bits, expected)
 
     def test_roundtrip(self, bpsk: BPSK) -> None:
         """Verify that BPSK hard demodulation roundtrip is lossless."""
-        original_bits = np.array([0, 1, 0, 1, 1, 0, 0, 1])
+        original_bits = np.array([0, 1, 0, 1, 1, 0, 0, 1], dtype=np.int32)
         symbols = bpsk.bits2symbols(original_bits)
         recovered_bits = bpsk.symbols2bits(symbols).flatten()
         np.testing.assert_array_equal(recovered_bits, original_bits)
@@ -88,7 +88,7 @@ class TestQPSK:
 
     def test_bits2symbols(self, qpsk: QPSK) -> None:
         """Verify mapping from bits to QPSK symbols."""
-        bits = np.array([0, 0, 0, 1, 1, 0, 1, 1])
+        bits = np.array([0, 0, 0, 1, 1, 0, 1, 1], dtype=np.int32)
         symbols = qpsk.bits2symbols(bits)
         np.testing.assert_equal(len(symbols), QPSK_ORDER)
 
@@ -100,7 +100,7 @@ class TestQPSK:
 
     def test_roundtrip(self, qpsk: QPSK) -> None:
         """Verify that QPSK hard demodulation roundtrip is lossless."""
-        original_bits = np.array([0, 0, 0, 1, 1, 0, 1, 1])
+        original_bits = np.array([0, 0, 0, 1, 1, 0, 1, 1], dtype=np.int32)
         symbols = qpsk.bits2symbols(original_bits)
         recovered_bits = qpsk.symbols2bits(symbols).flatten()
         np.testing.assert_array_equal(recovered_bits, original_bits)
@@ -142,7 +142,7 @@ class TestEightPSK:
 
     def test_bits2symbols(self, eight_psk: EightPSK) -> None:
         """Verify mapping from bits to EightPSK symbols."""
-        bits = np.array([0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1])
+        bits = np.array([0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1], dtype=np.int32)
         symbols = eight_psk.bits2symbols(bits)
         np.testing.assert_equal(len(symbols), EIGHT_PSK_ORDER)
 
@@ -154,7 +154,7 @@ class TestEightPSK:
 
     def test_roundtrip(self, eight_psk: EightPSK) -> None:
         """Verify that EightPSK hard demodulation roundtrip is lossless."""
-        original_bits = np.array([0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1])
+        original_bits = np.array([0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1], dtype=np.int32)
         symbols = eight_psk.bits2symbols(original_bits)
         recovered_bits = eight_psk.symbols2bits(symbols).flatten()
         np.testing.assert_array_equal(recovered_bits, original_bits)
@@ -192,7 +192,7 @@ class TestQAM:
         """Verify hard-decision roundtrip for 16-QAM."""
         qam = QAM(QAM_ORDER_16)
         rng = np.random.default_rng(RNG_SEED_SOFT_ROUNDTRIP)
-        original_bits = rng.integers(0, QPSK_BITS_PER_SYMBOL, size=QAM_ORDER_16)
+        original_bits = rng.integers(0, QPSK_BITS_PER_SYMBOL, size=QAM_ORDER_16, dtype=np.int32)
         symbols = qam.bits2symbols(original_bits)
         recovered_bits = qam.symbols2bits(symbols).flatten()
         np.testing.assert_array_equal(recovered_bits, original_bits)
@@ -218,7 +218,7 @@ class TestEightPSKSoftDecision:
 
     def test_soft_output_shape(self, eight_psk: EightPSK) -> None:
         """Verify that soft output shape is `(N, 3)`."""
-        symbols = np.array([0.5 + 0.5j, -0.3 + 0.2j, 0.1 - 0.8j])
+        symbols = np.array([0.5 + 0.5j, -0.3 + 0.2j, 0.1 - 0.8j], dtype=np.complex64)
         llrs = eight_psk.symbols2bits_soft(symbols, sigma_sq=0.1)
         np.testing.assert_array_equal(llrs.shape, (3, EIGHT_PSK_BITS_PER_SYMBOL))
 
@@ -246,7 +246,7 @@ class TestEightPSKSoftDecision:
 
     def test_llr_symmetric_around_origin(self, eight_psk: EightPSK) -> None:
         """Verify antisymmetry of LLR around the origin."""
-        symbols = np.array([0.5 + 0.3j])
+        symbols = np.array([0.5 + 0.3j], dtype=np.complex64)
         neg_symbols = -symbols
 
         llrs = eight_psk.symbols2bits_soft(symbols, sigma_sq=0.1)
@@ -257,7 +257,7 @@ class TestEightPSKSoftDecision:
 
     def test_llr_scales_with_noise_variance(self, eight_psk: EightPSK) -> None:
         """Verify that LLR magnitude decreases as noise variance increases."""
-        symbols = np.array([0.5 + 0.5j])
+        symbols = np.array([0.5 + 0.5j], dtype=np.complex64)
         llr_low_noise = eight_psk.symbols2bits_soft(symbols, sigma_sq=0.05)
         llr_high_noise = eight_psk.symbols2bits_soft(symbols, sigma_sq=0.5)
 
@@ -273,12 +273,12 @@ class TestEightPSKSoftDecision:
     def test_noise_variance_estimation(self, eight_psk: EightPSK) -> None:
         """Verify that estimated noise variance is close to the true value."""
         rng = np.random.default_rng(RNG_SEED_NOISE_ESTIMATION)
-        true_sigma_sq = 0.05
+        true_sigma_sq = np.float32(0.05)
         bits = np.array([0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1] * 100)
         symbols = eight_psk.bits2symbols(bits)
         gaussian_noise = rng.standard_normal(len(symbols))
         quadrature_noise = rng.standard_normal(len(symbols))
-        noise = np.sqrt(true_sigma_sq / 2) * (gaussian_noise + 1j * quadrature_noise)
+        noise = np.sqrt(true_sigma_sq / np.float32(2)).astype(np.float32) * (gaussian_noise.astype(np.float32) + np.complex64(1j) * quadrature_noise.astype(np.float32))
         noisy_symbols = symbols + noise
 
         estimated_sigma_sq = eight_psk.estimate_noise_variance(noisy_symbols)
@@ -295,9 +295,9 @@ class TestEightPSKSoftDecision:
         quadrature_noise = rng.standard_normal(len(symbols))
         noise = 0.05 * (gaussian_noise + 1j * quadrature_noise)
         noisy_symbols = symbols + noise
-        llrs = eight_psk.symbols2bits_soft(noisy_symbols, sigma_sq=0.01)
+        llrs = eight_psk.symbols2bits_soft(noisy_symbols, sigma_sq=np.float32(0.01))
 
-        hard_from_llr = (llrs < 0).astype(int).flatten()
+        hard_from_llr = (llrs < 0).astype(np.int32).flatten()
         np.testing.assert_array_equal(hard_from_llr, bits)
 
     @given(
@@ -309,16 +309,16 @@ class TestEightPSKSoftDecision:
         """Verify that hard decisions from LLRs match original bits at high SNR."""
         eight_psk = EightPSK()
         rng = np.random.default_rng(seed)
-        bits_arr = np.array(bits)
+        bits_arr = np.array(bits, dtype=np.int32)
         symbols = eight_psk.bits2symbols(bits_arr)
 
-        snr_linear = 10 ** (snr_db / 10)
-        sigma_sq = 1.0 / (2 * snr_linear)
-        noise = np.sqrt(sigma_sq / 2) * (rng.standard_normal(len(symbols)) + 1j * rng.standard_normal(len(symbols)))
+        snr_linear = np.float32(10) ** (np.float32(snr_db) / np.float32(10))
+        sigma_sq = np.float32(1.0) / (np.float32(2) * snr_linear)
+        noise = np.sqrt(sigma_sq / np.float32(2)).astype(np.float32) * (rng.standard_normal(len(symbols), dtype=np.float32) + np.complex64(1j) * rng.standard_normal(len(symbols), dtype=np.float32))
         noisy_symbols = symbols + noise
 
         llrs = eight_psk.symbols2bits_soft(noisy_symbols, sigma_sq=sigma_sq)
-        hard_from_llr = (llrs < 0).astype(int).flatten()
+        hard_from_llr = (llrs < 0).astype(np.int32).flatten()
 
         np.testing.assert_array_equal(hard_from_llr, bits_arr)
 
@@ -358,7 +358,7 @@ class TestQAM4EqualsQPSK:
     def test_hard_decision_equivalent(self, qpsk: QPSK, qam4: QAM) -> None:
         """Hard demodulation should produce the same bits."""
         rng = np.random.default_rng(42)
-        symbols = qpsk.symbol_mapping + 0.05 * (rng.standard_normal(4) + 1j * rng.standard_normal(4))
+        symbols = qpsk.symbol_mapping + np.float32(0.05) * (rng.standard_normal(4, dtype=np.float32) + np.complex64(1j) * rng.standard_normal(4, dtype=np.float32))
         np.testing.assert_array_equal(
             qam4.symbols2bits(symbols),
             qpsk.symbols2bits(symbols),
@@ -367,15 +367,15 @@ class TestQAM4EqualsQPSK:
     def test_soft_decision_equivalent(self, qpsk: QPSK, qam4: QAM) -> None:
         """Soft demodulation LLRs should match between QAM(4) and QPSK."""
         rng = np.random.default_rng(42)
-        symbols = qpsk.symbol_mapping + 0.1 * (rng.standard_normal(4) + 1j * rng.standard_normal(4))
-        sigma_sq = 0.1
+        symbols = qpsk.symbol_mapping + np.float32(0.1) * (rng.standard_normal(4, dtype=np.float32) + np.complex64(1j) * rng.standard_normal(4, dtype=np.float32))
+        sigma_sq = np.float32(0.1)
         llr_qpsk = qpsk.symbols2bits_soft(symbols, sigma_sq=sigma_sq)
         llr_qam4 = qam4.symbols2bits_soft(symbols, sigma_sq=sigma_sq)
         np.testing.assert_array_almost_equal(llr_qam4, llr_qpsk, decimal=5)
 
     def test_roundtrip_interchangeable(self, qpsk: QPSK, qam4: QAM) -> None:
         """Encoding with QPSK and decoding with QAM(4) should work and vice versa."""
-        bits = np.array([0, 1, 1, 0, 0, 0, 1, 1])
+        bits = np.array([0, 1, 1, 0, 0, 0, 1, 1], dtype=np.int32)
         # QPSK encode → QAM(4) decode
         symbols = qpsk.bits2symbols(bits)
         recovered = qam4.symbols2bits(symbols).flatten()
@@ -396,7 +396,7 @@ class TestQPSKSoftDecision:
 
     def test_soft_output_shape(self, qpsk: QPSK) -> None:
         """Verify that soft output shape is `(N, 2)`."""
-        symbols = np.array([0.5 + 0.5j, -0.3 + 0.2j, 0.1 - 0.8j])
+        symbols = np.array([0.5 + 0.5j, -0.3 + 0.2j, 0.1 - 0.8j], dtype=np.complex64)
         llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=0.1)
         np.testing.assert_array_equal(llrs.shape, (3, QPSK_BITS_PER_SYMBOL))
 
@@ -422,8 +422,8 @@ class TestQPSKSoftDecision:
 
     def test_llr_magnitude_increases_away_from_boundary(self, qpsk: QPSK) -> None:
         """Verify that LLR magnitude increases away from decision boundaries."""
-        close_to_boundary = np.array([0.1 + 0.5j])
-        far_from_boundary = np.array([0.7 + 0.5j])
+        close_to_boundary = np.array([0.1 + 0.5j], dtype=np.complex64)
+        far_from_boundary = np.array([0.7 + 0.5j], dtype=np.complex64)
 
         llr_close = qpsk.symbols2bits_soft(close_to_boundary, sigma_sq=0.1)
         llr_far = qpsk.symbols2bits_soft(far_from_boundary, sigma_sq=0.1)
@@ -432,7 +432,7 @@ class TestQPSKSoftDecision:
 
     def test_llr_symmetric_around_origin(self, qpsk: QPSK) -> None:
         """Verify antisymmetry of LLR around the origin."""
-        symbols = np.array([0.5 + 0.3j])
+        symbols = np.array([0.5 + 0.3j], dtype=np.complex64)
         neg_symbols = -symbols
 
         llrs = qpsk.symbols2bits_soft(symbols, sigma_sq=0.1)
@@ -442,7 +442,7 @@ class TestQPSKSoftDecision:
 
     def test_llr_scales_with_noise_variance(self, qpsk: QPSK) -> None:
         """Verify that LLR magnitude decreases as noise variance increases."""
-        symbols = np.array([0.5 + 0.5j])
+        symbols = np.array([0.5 + 0.5j], dtype=np.complex64)
         llr_low_noise = qpsk.symbols2bits_soft(symbols, sigma_sq=0.05)
         llr_high_noise = qpsk.symbols2bits_soft(symbols, sigma_sq=0.5)
 
@@ -457,23 +457,23 @@ class TestQPSKSoftDecision:
 
     def test_llr_on_decision_boundary_is_zero(self, qpsk: QPSK) -> None:
         """Verify that LLR is zero on QPSK decision boundaries."""
-        on_i_boundary = np.array([0.0 + 0.5j])
+        on_i_boundary = np.array([0.0 + 0.5j], dtype=np.complex64)
         llrs_i = qpsk.symbols2bits_soft(on_i_boundary, sigma_sq=0.1)
         np.testing.assert_almost_equal(llrs_i[0, 0], 0.0)
 
-        on_q_boundary = np.array([0.5 + 0.0j])
+        on_q_boundary = np.array([0.5 + 0.0j], dtype=np.complex64)
         llrs_q = qpsk.symbols2bits_soft(on_q_boundary, sigma_sq=0.1)
         np.testing.assert_almost_equal(llrs_q[0, 1], 0.0)
 
     def test_noise_variance_estimation(self, qpsk: QPSK) -> None:
         """Verify that estimated noise variance is close to the true value."""
         rng = np.random.default_rng(RNG_SEED_NOISE_ESTIMATION)
-        true_sigma_sq = 0.05
+        true_sigma_sq = np.float32(0.05)
         bits = np.array([0, 0, 0, 1, 1, 0, 1, 1] * 100)
         symbols = qpsk.bits2symbols(bits)
         gaussian_noise = rng.standard_normal(len(symbols))
         quadrature_noise = rng.standard_normal(len(symbols))
-        noise = np.sqrt(true_sigma_sq / 2) * (gaussian_noise + 1j * quadrature_noise)
+        noise = np.sqrt(true_sigma_sq / np.float32(2)).astype(np.float32) * (rng.standard_normal(len(symbols), dtype=np.float32) + np.complex64(1j) * rng.standard_normal(len(symbols), dtype=np.float32))
         noisy_symbols = symbols + noise
 
         estimated_sigma_sq = qpsk.estimate_noise_variance(noisy_symbols)
@@ -484,15 +484,15 @@ class TestQPSKSoftDecision:
     def test_soft_roundtrip_improves_with_confidence(self, qpsk: QPSK) -> None:
         """Verify hard decisions from high-confidence LLRs."""
         rng = np.random.default_rng(RNG_SEED_SOFT_ROUNDTRIP)
-        bits = np.array([0, 0, 0, 1, 1, 0, 1, 1])
+        bits = np.array([0, 0, 0, 1, 1, 0, 1, 1], dtype=np.int32)
         symbols = qpsk.bits2symbols(bits)
-        gaussian_noise = rng.standard_normal(len(symbols))
-        quadrature_noise = rng.standard_normal(len(symbols))
-        noise = 0.05 * (gaussian_noise + 1j * quadrature_noise)
+        gaussian_noise = rng.standard_normal(len(symbols), dtype=np.float32)
+        quadrature_noise = rng.standard_normal(len(symbols), dtype=np.float32)
+        noise = np.float32(0.05) * (gaussian_noise + np.complex64(1j) * quadrature_noise)
         noisy_symbols = symbols + noise
-        llrs = qpsk.symbols2bits_soft(noisy_symbols, sigma_sq=0.01)
+        llrs = qpsk.symbols2bits_soft(noisy_symbols, sigma_sq=np.float32(0.01))
 
-        hard_from_llr = (llrs < 0).astype(int).flatten()
+        hard_from_llr = (llrs < 0).astype(np.int32).flatten()
         np.testing.assert_array_equal(hard_from_llr, bits)
 
     @given(
@@ -504,20 +504,20 @@ class TestQPSKSoftDecision:
         """Verify that hard decisions from LLRs match original bits at high SNR."""
         qpsk = QPSK()
         rng = np.random.default_rng(seed)
-        bits_arr = np.array(bits)
+        bits_arr = np.array(bits, dtype=np.int32)
         symbols = qpsk.bits2symbols(bits_arr)
 
         # Add AWGN noise based on SNR
         # SNR = E_s / N_0, where E_s = 1 (unit energy constellation)
         # sigma^2 = N_0 / 2 = 1 / (2 * SNR)
-        snr_linear = 10 ** (snr_db / 10)
-        sigma_sq = 1.0 / (2 * snr_linear)
-        noise = np.sqrt(sigma_sq / 2) * (rng.standard_normal(len(symbols)) + 1j * rng.standard_normal(len(symbols)))
+        snr_linear = np.float32(10) ** (np.float32(snr_db) / np.float32(10))
+        sigma_sq = np.float32(1.0) / (np.float32(2) * snr_linear)
+        noise = np.sqrt(sigma_sq / np.float32(2)).astype(np.float32) * (rng.standard_normal(len(symbols), dtype=np.float32) + np.complex64(1j) * rng.standard_normal(len(symbols), dtype=np.float32))
         noisy_symbols = symbols + noise
 
         # Get soft decisions and convert to hard decisions
         llrs = qpsk.symbols2bits_soft(noisy_symbols, sigma_sq=sigma_sq)
-        hard_from_llr = (llrs < 0).astype(int).flatten()
+        hard_from_llr = (llrs < 0).astype(np.int32).flatten()
 
         # At high SNR (>=10dB), hard decisions should match original bits
         np.testing.assert_array_equal(hard_from_llr, bits_arr)
@@ -529,14 +529,14 @@ class TestEdgeCases:
     def test_empty_bitstream(self) -> None:
         """Verify handling of an empty BPSK bitstream."""
         bpsk = BPSK()
-        bits = np.array([])
+        bits = np.array([], dtype=np.int32)
         symbols = bpsk.bits2symbols(bits)
         np.testing.assert_equal(len(symbols), 0)
 
     def test_bpsk_decision_boundary(self) -> None:
         """Verify valid hard decision exactly at the BPSK boundary."""
         bpsk = BPSK()
-        symbols = np.array([0 + 0j])
+        symbols = np.array([0 + 0j], dtype=np.complex64)
         bits = bpsk.symbols2bits(symbols).flatten()
         np.testing.assert_array_less(bits[0], QPSK_BITS_PER_SYMBOL)
         np.testing.assert_array_less(-1, bits[0])

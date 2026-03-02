@@ -17,10 +17,10 @@ from pluto.config import SPS
 from pluto.loopback import setup_pluto, transmit_and_receive
 
 PLOT_DIR = "examples/data"
-RRC_ALPHA = 0.35
+RRC_ALPHA = np.float32(0.35)
 RRC_NUM_TAPS = 101
 N_BITS = 2000
-BER_THRESHOLD = 0.01
+BER_THRESHOLD = np.float32(0.01)
 
 
 @dataclass
@@ -138,12 +138,12 @@ def main() -> None:
     h_rrc = rrc_filter(SPS, RRC_ALPHA, RRC_NUM_TAPS)
     qpsk = QPSK()
 
-    tx_bits = rng.integers(0, 2, N_BITS)
+    tx_bits = rng.integers(0, 2, N_BITS, dtype=np.int32)
     tx_symbols = qpsk.bits2symbols(tx_bits)
     tx_symbols_norm = tx_symbols / np.sqrt(np.mean(np.abs(tx_symbols) ** 2))
     n_symbols = len(tx_symbols)
 
-    guard = np.zeros(100, dtype=complex)
+    guard = np.zeros(100, dtype=np.complex64)
     frame = np.concatenate([guard, tx_symbols, guard])
     tx_signal = upsample_and_filter(frame, SPS, h_rrc)
 
@@ -161,7 +161,7 @@ def main() -> None:
         rx_symbols_raw = rx_symbols_raw / np.sqrt(power)
 
     phase_offset = estimate_phase_offset(rx_symbols_raw, tx_symbols_norm)
-    rx_symbols = rx_symbols_raw * np.exp(-1j * phase_offset)
+    rx_symbols = rx_symbols_raw * np.exp(np.complex64(-1j) * phase_offset)
 
     rx_bits = qpsk.symbols2bits(rx_symbols).flatten()
 
@@ -169,7 +169,7 @@ def main() -> None:
         rx_bits = rx_bits[: len(tx_bits)]
 
     errors = np.sum(tx_bits != rx_bits)
-    ber = errors / len(tx_bits)
+    ber = np.float32(errors) / len(tx_bits)
 
     if ber == 0 or ber < BER_THRESHOLD:
         pass
@@ -180,7 +180,7 @@ def main() -> None:
     tx_baseband = upsample_and_filter(tx_symbols_norm, SPS, h_rrc)
     rx_baseband = rx_filtered[offset : offset + len(tx_baseband)]
     rx_baseband = rx_baseband / np.sqrt(np.mean(np.abs(rx_baseband) ** 2))
-    rx_baseband = rx_baseband * np.exp(-1j * phase_offset)
+    rx_baseband = rx_baseband * np.exp(np.complex64(-1j) * phase_offset)
 
     fig = plt.figure(figsize=(14, 12))
 

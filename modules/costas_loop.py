@@ -11,6 +11,7 @@ extended to other M-PSK schemes.
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from matplotlib import figure
 import numpy as np
@@ -22,13 +23,13 @@ logger = logging.getLogger(__name__)
 
 
 def _calculate_loop_parameters(
-    loop_noise_bandwidth_normalized: float = 0.05,  # Normalized to symbol rate
-    damping_factor: float = 0.707,  # zeta 1/sqrt(2)
-) -> tuple[float, float]:
+    loop_noise_bandwidth_normalized: np.float32 = np.float32(0.05),  # Normalized to symbol rate
+    damping_factor: np.float32 = np.float32(0.707),  # zeta 1/sqrt(2)
+) -> tuple[np.float32, np.float32]: # Changed return type hint
 
-    wn_normalized = loop_noise_bandwidth_normalized / (damping_factor + 1 / (4 * damping_factor))
-    alpha = (4 * damping_factor * wn_normalized) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
-    beta = (4 * wn_normalized**2) / (1 + 2 * damping_factor * wn_normalized + wn_normalized**2)
+    wn_normalized = loop_noise_bandwidth_normalized / (damping_factor + np.float32(1) / (np.float32(4) * damping_factor)) # Explicitly cast to np.float32
+    alpha = (np.float32(4) * damping_factor * wn_normalized) / (np.float32(1) + np.float32(2) * damping_factor * wn_normalized + wn_normalized**np.float32(2)) # Explicitly cast to np.float32
+    beta = (np.float32(4) * wn_normalized**np.float32(2)) / (np.float32(1) + np.float32(2) * damping_factor * wn_normalized + wn_normalized**np.float32(2)) # Explicitly cast to np.float32
 
     return alpha, beta
 
@@ -37,11 +38,11 @@ def _calculate_loop_parameters(
 class CostasConfig:
     """Configuration for Costas loop phase estimation."""
 
-    loop_noise_bandwidth_normalized: float = 0.05  # Normalized to symbol rate
-    damping_factor: float = 0.707  # zeta 1/sqrt(2)
-    initial_freq_offset_rad_per_symbol: float = 0.0
-    alpha: float = 0.0
-    beta: float = 0.0
+    loop_noise_bandwidth_normalized: np.float32 = np.float32(0.05)  # Normalized to symbol rate # Changed type hint and default
+    damping_factor: np.float32 = np.float32(0.707)  # zeta 1/sqrt(2) # Changed type hint and default
+    initial_freq_offset_rad_per_symbol: np.float32 = np.float32(0.0) # Changed type hint and default
+    alpha: np.float32 = np.float32(0.0) # Changed type hint and default
+    beta: np.float32 = np.float32(0.0) # Changed type hint and default
 
     def __post_init__(self) -> None:
         """Compute and set loop filter gains from bandwidth and damping factor."""
@@ -51,8 +52,8 @@ class CostasConfig:
 
 
 def apply_costas_loop(
-    symbols: np.ndarray, config: CostasConfig, modulator: Modulator = BPSK(), current_phase_estimate: float = 0, current_frequency_offset: float = 0,
-) -> tuple[np.ndarray, np.ndarray]:
+    symbols: np.ndarray, config: CostasConfig, modulator: Modulator = BPSK(), current_phase_estimate: np.float32 = np.float32(0), current_frequency_offset: np.float32 = np.float32(0), # Changed type hints and defaults
+) -> tuple[np.ndarray[np.complex64, Any], np.ndarray[np.float32, Any]]: # Changed return type hint
     """Apply a second-order Costas loop to correct carrier phase offset.
 
     This function implements a digital Proportional-Plus-Integrator (PI)
@@ -80,18 +81,19 @@ def apply_costas_loop(
     # These formulas are derived for a second-order, type-II digital PLL
     # (PI loop filter)
     n = len(symbols)
-    phase_estimate = current_phase_estimate  # Initial phase estimate
-    integrator = current_frequency_offset  # Initialize integrator with frequency offset guess
-    corrected_symbols = np.zeros(n, dtype=complex)
-    phase_estimates = np.zeros(n, dtype=float)
+    phase_estimate = np.float32(current_phase_estimate)  # Initial phase estimate
+    integrator = np.float32(current_frequency_offset)  # Initialize integrator with frequency offset guess
+    corrected_symbols = np.zeros(n, dtype=np.complex64)
+    phase_estimates = np.zeros(n, dtype=np.float32)
 
-    alpha, beta = config.alpha, config.beta
+    alpha = np.float32(config.alpha)
+    beta = np.float32(config.beta)
 
     if isinstance(modulator, BPSK):
         for i, sym in enumerate(symbols):
 
             # 1. Correct phase of the current symbol
-            corrected_sym = sym * np.exp(-1j * phase_estimate)
+            corrected_sym = sym * np.exp(np.complex64(-1j) * phase_estimate)
 
             # 2. Calculate the phase error (unified for BPSK)
             error = np.imag(corrected_sym) * np.sign(np.real(corrected_sym))
@@ -104,7 +106,7 @@ def apply_costas_loop(
             phase_estimate += proportional + integrator
             
             # 5. Wrap phase estimate to -pi to pi for consistent plotting and analysis
-            phase_estimate = (phase_estimate + np.pi) % (2 * np.pi) - np.pi
+            phase_estimate = (phase_estimate + np.float32(np.pi)) % (np.float32(2) * np.float32(np.pi)) - np.float32(np.pi)
             
             corrected_symbols[i] = corrected_sym
             phase_estimates[i] = phase_estimate
@@ -113,7 +115,7 @@ def apply_costas_loop(
         for i, sym in enumerate(symbols):
 
             # 1. Correct phase of the current symbol
-            corrected_sym = sym * np.exp(-1j * phase_estimate)
+            corrected_sym = sym * np.exp(np.complex64(-1j) * phase_estimate)
 
             # 2. Calculate the phase error (unified for QPSK)
             
@@ -126,7 +128,7 @@ def apply_costas_loop(
             phase_estimate += proportional + integrator
             
             # 5. Wrap phase estimate to -pi to pi for consistent plotting and analysis
-            phase_estimate = (phase_estimate + np.pi) % (2 * np.pi) - np.pi
+            phase_estimate = (phase_estimate + np.float32(np.pi)) % (np.float32(2) * np.float32(np.pi)) - np.float32(np.pi)
             
             corrected_symbols[i] = corrected_sym
             phase_estimates[i] = phase_estimate
@@ -135,10 +137,10 @@ def apply_costas_loop(
         for i, sym in enumerate(symbols):
 
             # 1. Phase correction
-            corrected_sym = sym * np.exp(-1j * phase_estimate)
+            corrected_sym = sym * np.exp(np.complex64(-1j) * phase_estimate)
 
             # 2. 8PSK phase error detector (Mth-power method)
-            error = np.angle(corrected_sym ** 8) / 8.0
+            error = np.angle(corrected_sym ** np.float32(8)) / np.float32(8.0) # Explicitly cast to np.float32
 
             # 3. Loop filter (PI controller)
             integrator += beta * error
@@ -148,7 +150,7 @@ def apply_costas_loop(
             phase_estimate += proportional + integrator
 
             # 5. Wrap phase
-            phase_estimate = (phase_estimate + np.pi) % (2 * np.pi) - np.pi
+            phase_estimate = (phase_estimate + np.float32(np.pi)) % (np.float32(2) * np.float32(np.pi)) - np.float32(np.pi)
 
             corrected_symbols[i] = corrected_sym
             phase_estimates[i] = phase_estimate
@@ -162,9 +164,9 @@ if __name__ == "__main__":
 
     # Test parameters
     num_symbols = 100
-    initial_phase_offset_rad = np.pi / 8  # 45 degrees
+    initial_phase_offset_rad = np.float32(np.pi) / np.float32(8)  # 45 degrees # Explicitly cast to np.float32
 
-    costas_config = CostasConfig(loop_noise_bandwidth_normalized=0.05)
+    costas_config = CostasConfig(loop_noise_bandwidth_normalized=np.float32(0.05)) # Explicitly cast to np.float32
     modulator = EightPSK()
 
 
@@ -172,16 +174,16 @@ if __name__ == "__main__":
     rng = np.random.default_rng()
     bits = rng.integers(0, 2, size=num_symbols * modulator.bits_per_symbol)
     base_symbols = modulator.bits2symbols(bits)
-    phase_noise = np.linspace(0, 3, len(base_symbols))
+    phase_noise = np.linspace(np.float32(0), np.float32(3), len(base_symbols), dtype=np.float32) # Explicitly cast to np.float32
 
     # Apply a constant phase offset
     # The actual phase that the loop should converge to is initial_phase_offset_rad
 
-    input_symbols = base_symbols * np.exp(1j * (initial_phase_offset_rad + phase_noise))
+    input_symbols = base_symbols * np.exp(np.complex64(1j) * (initial_phase_offset_rad + phase_noise)) # Explicitly cast to np.complex64
     start=time.perf_counter()
     # Apply Costas loop
     corrected_symbols, phase_estimates = apply_costas_loop(symbols=input_symbols, config=costas_config, modulator=modulator)
-    print(f"{(time.perf_counter()-start)*1e3} ms")
+    print(f"{(time.perf_counter()-start)*np.float32(1e3)} ms") # Explicitly cast to np.float32
     # Plotting
     plt.figure(figsize=(10, 6))
     plt.plot(np.degrees(phase_estimates), label="Estimated Phase (degrees)")
@@ -200,7 +202,7 @@ if __name__ == "__main__":
     plt.savefig("examples/data/phase.png")
 
     # Verify if it converged
-    CONVERGENCE_TOLERANCE_DEG = 5
+    CONVERGENCE_TOLERANCE_DEG = np.float32(5) # Explicitly cast to np.float32
     final_phase_error = np.degrees(initial_phase_offset_rad - phase_estimates[-1])
     if abs(final_phase_error) < CONVERGENCE_TOLERANCE_DEG:
         pass

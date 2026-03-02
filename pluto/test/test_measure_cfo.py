@@ -9,18 +9,18 @@ from pluto import create_pluto
 from pluto.config import CENTER_FREQ, RX_BUFFER_SIZE, SAMPLE_RATE
 
 
-def measure_cfo_fft(samples: np.ndarray, sample_rate: float) -> float:
+def measure_cfo_fft(samples: np.ndarray, sample_rate: np.float32) -> float:
     """Estimate CFO using FFT peak detection."""
     # Use a large FFT for fine resolution
     n_fft = 2**16
 
     # Window the signal
-    window = np.hanning(len(samples))
+    window = np.hanning(len(samples)).astype(np.float32)
     windowed = samples * window
 
     # Zero-pad and FFT
     spectrum = np.fft.fftshift(np.fft.fft(windowed, n_fft))
-    freqs = np.fft.fftshift(np.fft.fftfreq(n_fft, 1 / sample_rate))
+    freqs = np.fft.fftshift(np.fft.fftfreq(n_fft, np.float32(1) / sample_rate))
 
     # Find peak (excluding DC)
     magnitude = np.abs(spectrum)
@@ -55,7 +55,7 @@ def main() -> None:
         while True:
             samples = cast("np.ndarray", sdr.rx())
 
-            cfo = measure_cfo_fft(samples, SAMPLE_RATE)
+            cfo = measure_cfo_fft(samples, np.float32(SAMPLE_RATE))
             cfo_measurements.append(cfo)
             mean_cfo = np.mean(cfo_measurements)
             print(f"CFO: {cfo:+.1f} Hz  (mean: {mean_cfo:+.1f} Hz, n={len(cfo_measurements)})")

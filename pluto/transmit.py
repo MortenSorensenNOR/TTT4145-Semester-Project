@@ -7,6 +7,7 @@ import logging
 
 import numpy as np
 import time
+from typing import Any # Added for np.ndarray type hints
 
 from modules.channel_coding import CodeRates, ldpc_get_supported_payload_lengths
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
@@ -35,16 +36,16 @@ UNCODED_MAX_PAYLOAD_BITS = 2**10 - 1  # conservative limit when channel coding i
 PACKETS_PER_SECOND = 10
 
 
-def max_payload_bits(coding_rate: CodeRates = CODING_RATE) -> int:
+def max_payload_bits(coding_rate: CodeRates = CODING_RATE) -> np.int32: # Changed return type hint
     """Maximum number of payload bits for the given coding rate."""
     if not PIPELINE.channel_coding:
-        return UNCODED_MAX_PAYLOAD_BITS
-    max_k = int(max(ldpc_get_supported_payload_lengths(coding_rate)))
+        return np.int32(UNCODED_MAX_PAYLOAD_BITS) # Explicitly cast to np.int32
+    max_k = np.int32(max(ldpc_get_supported_payload_lengths(coding_rate))) # Explicitly cast to np.int32
     return max_k - FrameConstructor.PAYLOAD_CRC_BITS
 
 
 def build_tx_signal_from_bits(
-    payload_bits: np.ndarray,
+    payload_bits: np.ndarray[np.uint8, Any], # Changed type hint
     frame_constructor: FrameConstructor,
     mod_scheme: ModulationSchemes = MOD_SCHEME,
     coding_rate: CodeRates = CODING_RATE,
@@ -52,7 +53,7 @@ def build_tx_signal_from_bits(
     dst: int = NODE_DST,
     frame_type: int = 0,
     sequence_number: int = 0,
-) -> np.ndarray:
+) -> np.ndarray[np.complex64, Any]: # Added return type hint
     """Run the full TX pipeline from raw payload bits and return baseband samples."""
     max_bits = max_payload_bits(coding_rate)
     if len(payload_bits) > max_bits:
@@ -60,13 +61,13 @@ def build_tx_signal_from_bits(
         raise ValueError(msg)
 
     header = FrameHeader(
-        length=len(payload_bits),
-        src=src,
-        dst=dst,
-        frame_type=frame_type,
+        length=np.int32(len(payload_bits)), # Explicitly cast to np.int32
+        src=np.int32(src), # Explicitly cast to np.int32
+        dst=np.int32(dst), # Explicitly cast to np.int32
+        frame_type=np.int32(frame_type), # Explicitly cast to np.int32
         mod_scheme=mod_scheme,
         coding_rate=coding_rate,
-        sequence_number=sequence_number,
+        sequence_number=np.int32(sequence_number), # Explicitly cast to np.int32
     )
     header_encoded, payload_encoded = frame_constructor.encode(
         header,
@@ -88,7 +89,7 @@ def build_tx_signal_from_bits(
         tx_signal = upsample_and_filter(frame, SPS, h_rrc)
     else:
         tx_signal = frame
-    zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
+    zeros = np.zeros(GUARD_SAMPLES, dtype=np.complex64)
     return np.concatenate([zeros, tx_signal, zeros])
 
 
@@ -101,7 +102,7 @@ def build_tx_signal(
     dst: int = NODE_DST,
     frame_type: int = 0,
     sequence_number: int = 0,
-) -> np.ndarray:
+) -> np.ndarray[np.complex64, Any]: # Added return type hint
     """Run the full TX pipeline from a text message and return baseband samples."""
     return build_tx_signal_from_bits(
         text_to_bits(message),
@@ -126,7 +127,10 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Transmit a message over PlutoSDR")
     parser.add_argument("message", nargs="?", default="Hello, PlutoSDR!", help="Text message to transmit")
-    parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)")
+    parser.add_argument("--tx-gain", type=np.float32, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)") # Type already changed in config.py
+    parser.add_argument(
+        "--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)",
+    )
     parser.add_argument("--pluto-ip", default="192.168.2.1", help="PlutoSDR IP address (default: %(default)s)")
     args = parser.parse_args()
 
@@ -147,7 +151,7 @@ if __name__ == "__main__":
             for i in range(PACKETS_PER_SECOND):
                 start = time.perf_counter()
                 sdr.tx(samples)
-                time.sleep(1/PACKETS_PER_SECOND)
+                time.sleep(np.float32(1)/PACKETS_PER_SECOND) # Explicitly cast to np.float32
 
     except KeyboardInterrupt:
         sdr.tx_destroy_buffer()

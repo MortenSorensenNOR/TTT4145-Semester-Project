@@ -35,9 +35,9 @@ PADDING_BIT_POS = (
     LENGTH_BITS + SRC_BITS + DST_BITS + FRAME_TYPE_BITS + MOD_SCHEME_BITS + CODING_RATE_BITS + SEQUENCE_NUMBER_BITS
 )
 
-HIGH_SNR_DB = 30.0
-LOW_SNR_DB = -5.0
-PHASE_OFFSET_RAD = np.pi / 4
+HIGH_SNR_DB = np.float32(30.0)
+LOW_SNR_DB = np.float32(-5.0)
+PHASE_OFFSET_RAD = np.float32(np.pi) / np.float32(4)
 CHANNEL_SEED = 42
 CHANNEL_SEED_ALT = 123
 MAX_HYPOTHESIS_EXAMPLES = 50
@@ -147,12 +147,12 @@ class TestFrameHeaderConstructor:
 
 def _bits_to_bpsk(bits: np.ndarray | Sequence[int]) -> np.ndarray:
     """Convert bits to BPSK symbols (0 -> +1, 1 -> -1)."""
-    return 1 - 2 * np.array(bits, dtype=np.float64)
+    return np.float32(1) - np.float32(2) * np.array(bits, dtype=np.float32)
 
 
 def _bpsk_to_bits(symbols: np.ndarray) -> np.ndarray:
     """Convert BPSK symbols back to bits via hard decision."""
-    return (np.real(symbols) < 0).astype(int)
+    return (np.real(symbols) < 0).astype(np.int32)
 
 
 class TestFrameHeaderWithChannel:
@@ -182,7 +182,7 @@ class TestFrameHeaderWithChannel:
 
         tx_symbols = _bits_to_bpsk(encoded_bits)
 
-        channel = ChannelModel(ChannelConfig(snr_db=HIGH_SNR_DB, seed=CHANNEL_SEED))
+        channel = ChannelModel(ChannelConfig(snr_db=np.float32(HIGH_SNR_DB), seed=CHANNEL_SEED))
         rx_symbols = channel.apply(tx_symbols)
 
         rx_bits = _bpsk_to_bits(rx_symbols)
@@ -211,7 +211,7 @@ class TestFrameHeaderWithChannel:
 
         tx_symbols = _bits_to_bpsk(encoded_bits)
 
-        channel = ChannelModel(ChannelConfig(snr_db=snr_db, seed=CHANNEL_SEED_ALT))
+        channel = ChannelModel(ChannelConfig(snr_db=np.float32(snr_db), seed=CHANNEL_SEED_ALT))
         rx_symbols = channel.apply(tx_symbols)
 
         rx_bits = _bpsk_to_bits(rx_symbols)
@@ -240,13 +240,13 @@ class TestFrameHeaderWithChannel:
         channel = ChannelModel(
             ChannelConfig(
                 snr_db=HIGH_SNR_DB,
-                initial_phase_rad=PHASE_OFFSET_RAD,
+                initial_phase_rad=np.float32(PHASE_OFFSET_RAD),
                 seed=CHANNEL_SEED,
             ),
         )
         rx_symbols = channel.apply(tx_symbols)
 
-        rx_compensated = rx_symbols * np.exp(-1j * PHASE_OFFSET_RAD)
+        rx_compensated = rx_symbols * np.exp(np.complex64(-1j) * np.float32(PHASE_OFFSET_RAD))
         rx_bits = _bpsk_to_bits(rx_compensated)
 
         decoded = self.header_constructor.decode(rx_bits)
@@ -268,7 +268,7 @@ class TestFrameHeaderWithChannel:
         encoded_bits = self.header_constructor.encode(header)
         tx_symbols = _bits_to_bpsk(encoded_bits)
 
-        channel = ChannelModel(ChannelConfig(snr_db=LOW_SNR_DB, seed=CHANNEL_SEED))
+        channel = ChannelModel(ChannelConfig(snr_db=np.float32(LOW_SNR_DB), seed=CHANNEL_SEED))
         rx_symbols = channel.apply(tx_symbols)
 
         rx_bits = _bpsk_to_bits(rx_symbols)

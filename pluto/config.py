@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from modules.channel_coding import CodeRates
 from modules.costas_loop import CostasConfig
 from modules.frame_constructor import ModulationSchemes
-from modules.modulation import BPSK, QAM, QPSK, EightPSK, Modulator, EightPSK
+from modules.modulation import BPSK, QAM, QPSK, EightPSK, Modulator
 from modules.pilots import PilotConfig
 from modules.synchronization import SynchronizerConfig
 
@@ -17,24 +19,24 @@ if TYPE_CHECKING:
 
     import adi
 
-SAMPLE_RATE = 5_336_000
-CENTER_FREQ = 2_400_000_000
+SAMPLE_RATE = np.float32(5_336_000) # Changed to np.float32
+CENTER_FREQ = np.float32(2_400_000_000) # Changed to np.float32
 SPS = 8
 SPAN = 8
-RRC_ALPHA = 0.35
+RRC_ALPHA = np.float32(0.35)
 RRC_NUM_TAPS = 2 * SPS * SPAN + 1
-DAC_SCALE = 2**14
-RX_GAIN = 70.0
+DAC_SCALE = np.float32(2**14)
+RX_GAIN = np.float32(70.0)
 MOD_SCHEME = ModulationSchemes.QPSK
 CODING_RATE = CodeRates.THREE_QUARTER_RATE  # Higher rate = more throughput (needs good SNR)
-DEFAULT_TX_GAIN = -50
+DEFAULT_TX_GAIN = np.float32(-50.0)
 RX_BUFFER_SIZE = 2**20  # Smaller buffer = lower latency
 NODE_SRC = 0
 NODE_DST = 0
 
 # FDD frequency pair for bidirectional bridge mode
-FREQ_A_TO_B = 2_400_000_000
-FREQ_B_TO_A = 2_450_000_000
+FREQ_A_TO_B = np.float32(2_400_000_000) # Changed to np.float32
+FREQ_B_TO_A = np.float32(2_450_000_000) # Changed to np.float32
 
 SYNC_CONFIG = SynchronizerConfig()
 PILOT_CONFIG = PilotConfig()
@@ -66,13 +68,13 @@ PIPELINE = PipelineConfig()
 def configure_rx(
     sdr: adi.Pluto,
     *,
-    freq: int = CENTER_FREQ,
+    freq: np.float32 = CENTER_FREQ, # Changed type hint
     gain_mode: str = "slow_attack",
 ) -> None:
     """Apply standard RX settings to an SDR."""
     sdr.gain_control_mode_chan0 = gain_mode
     sdr.rx_lo = int(freq)
-    sdr.sample_rate = SAMPLE_RATE
+    sdr.sample_rate = int(SAMPLE_RATE) # Explicitly cast to int
     sdr.rx_rf_bandwidth = int(SAMPLE_RATE)
     sdr.rx_buffer_size = RX_BUFFER_SIZE
 
@@ -80,19 +82,19 @@ def configure_rx(
 def configure_tx(
     sdr: adi.Pluto,
     *,
-    freq: int = CENTER_FREQ,
-    gain: float = DEFAULT_TX_GAIN,
+    freq: np.float32 = CENTER_FREQ, # Changed type hint
+    gain: np.float32 = DEFAULT_TX_GAIN, # Changed type hint
     cyclic: bool = False,
 ) -> None:
     """Apply standard TX settings to an SDR."""
-    sdr.sample_rate = SAMPLE_RATE
+    sdr.sample_rate = int(SAMPLE_RATE) # Explicitly cast to int
     sdr.tx_rf_bandwidth = int(SAMPLE_RATE)
     sdr.tx_lo = int(freq)
     sdr.tx_hardwaregain_chan0 = gain
     sdr.tx_cyclic_buffer = cyclic
 
 
-_modulator_cache: dict[ModulationSchemes, Modulator] = {}
+_modulator_cache: dict[ModulationSchemes, Callable[[], Modulator]] = {} # type: ignore
 
 
 def get_modulator(scheme: ModulationSchemes) -> Modulator:

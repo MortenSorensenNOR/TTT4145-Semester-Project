@@ -23,6 +23,7 @@ import socket
 import struct
 import threading
 from dataclasses import dataclass
+from typing import Any
 
 import adi
 import numpy as np
@@ -93,7 +94,7 @@ def open_tun(name: str = "pluto0") -> int:
     return fd
 
 
-def _sockaddr_in(ip_addr: str) -> bytes:
+def _sockaddr_in(ip_addr: str) -> bytes: # Added return type hint
     """Pack an IPv4 address into a sockaddr_in struct (16 bytes)."""
     return struct.pack("HH4s8s", socket.AF_INET, 0, socket.inet_aton(ip_addr), b"\x00" * 8)
 
@@ -125,7 +126,7 @@ def _warm_tx_cache(frame_constructor: FrameConstructor) -> None:
     """Pre-warm LDPC encode cache for all supported payload sizes."""
     logger.info("TX: warming LDPC cache...")
     for k in ldpc_get_supported_payload_lengths(CODING_RATE):
-        dummy_bits = np.zeros(int(k) - 16, dtype=np.uint8)  # -16 for CRC
+        dummy_bits = np.zeros(k - np.int32(16), dtype=np.uint8)  # -16 for CRC # Explicitly cast to np.int32
         build_tx_signal_from_bits(dummy_bits, frame_constructor, MOD_SCHEME, CODING_RATE)
     logger.info("TX: LDPC cache ready")
 
@@ -134,10 +135,10 @@ def _warm_rx_cache() -> None:
     """Pre-warm LDPC decode cache for all supported payload sizes."""
     logger.info("RX: warming LDPC cache...")
     for k in ldpc_get_supported_payload_lengths(CODING_RATE):
-        config = LDPCConfig(k=int(k), code_rate=CODING_RATE)
-        dummy_msg = np.zeros(int(k), dtype=int)
+        config = LDPCConfig(k=k, code_rate=CODING_RATE)
+        dummy_msg = np.zeros(k, dtype=np.int32) # Changed to np.int32
         codeword = ldpc_encode(dummy_msg, config)
-        llr = (1 - 2 * codeword).astype(float) * 5.0
+        llr = (np.float32(1) - np.float32(2) * codeword.astype(np.float32)) * np.float32(5.0) # Explicitly cast to np.float32
         ldpc_decode(llr, config, max_iterations=1)
     logger.info("RX: LDPC cache ready")
 
@@ -167,7 +168,7 @@ def tx_thread(tun_fd: int, sdr: adi.Pluto, mtu: int, tx_buffer_len: int) -> None
         try:
             tx_signal = build_tx_signal_from_bits(payload_bits, frame_constructor, MOD_SCHEME, CODING_RATE)
             # Pad to fixed buffer length
-            samples = np.zeros(tx_buffer_len, dtype=complex)
+            samples = np.zeros(tx_buffer_len, dtype=np.complex64) # Changed to np.complex64
             samples[: len(tx_signal)] = tx_signal * DAC_SCALE
             sdr.tx(samples)  # type: ignore[union-attr]
             logger.info("TX: %d bytes", len(packet))
@@ -205,7 +206,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="PlutoSDR TUN/TAP IP bridge")
     parser.add_argument("--node", choices=["A", "B"], required=True, help="Node identity (A or B)")
     parser.add_argument("--tun", default="pluto0", help="TUN device name (default: pluto0)")
-    parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)")
+    parser.add_argument("--tx-gain", type=np.float32, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)") # Changed to np.float32
     parser.add_argument(
         "--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)",
     )
@@ -241,9 +242,9 @@ def main() -> None:
     logger.info(
         "Node %s: TX %.0f MHz (%.0f dB) -> RX %.0f Hz (CFO offset %+d Hz)",
         args.node,
-        node.tx_freq / 1e6,
+        node.tx_freq / np.float32(1e6), # Explicitly cast to np.float32
         args.tx_gain,
-        rx_freq,
+        np.float32(rx_freq), # Explicitly cast to np.float32
         args.rx_cfo_offset,
     )
 

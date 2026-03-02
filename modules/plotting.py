@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any # Added Any for np.ndarray type hints
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,8 +20,8 @@ def plot_iq(
     *signals: np.ndarray,
     labels: list[str] | None = None,
     title: str | None = None,
-    sample_rate: float | None = None,
-) -> tuple[Figure, tuple[Axes, Axes]]:
+    sample_rate: np.float32 | None = None, # Changed type hint
+) -> tuple[Figure, tuple[Axes, Axes]]: # Added return type hint
     """Plot I and Q components of complex signals."""
     if labels is None:
         labels = [f"Signal {i + 1}" for i in range(len(signals))]
@@ -30,7 +30,7 @@ def plot_iq(
 
     for sig, label in zip(signals, labels, strict=True):
         if sample_rate:
-            t = np.arange(len(sig)) / sample_rate * 1e6  # microseconds
+            t = np.arange(len(sig), dtype=np.float32) / sample_rate * np.float32(1e6)  # microseconds # Explicitly cast to np.float32
             ax_i.plot(t, np.real(sig), label=label)
             ax_q.plot(t, np.imag(sig), label=label)
             ax_q.set_xlabel("Time [us]")
@@ -57,7 +57,7 @@ def plot_constellation(
     *signals: np.ndarray,
     labels: list[str] | None = None,
     title: str | None = None,
-) -> tuple[Figure, Axes]:
+) -> tuple[Figure, Axes]: # Added return type hint
     """Plot constellation diagram of complex signals."""
     if labels is None:
         labels = [f"Signal {i + 1}" for i in range(len(signals))]
@@ -85,7 +85,7 @@ def plot_constellation_confidence(
     llrs: np.ndarray,
     tx_symbols: np.ndarray | None = None,
     title: str | None = None,
-) -> tuple[Figure, Axes]:
+) -> tuple[Figure, Axes]: # Added return type hint
     """Plot constellation with symbols colored by soft decision confidence."""
     # Confidence = minimum |LLR| across bits for each symbol
     confidence = np.min(np.abs(llrs), axis=1)
@@ -121,8 +121,8 @@ def plot_constellation_confidence(
         )
 
     # Decision boundaries
-    ax.axvline(x=0, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.axhline(y=0, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
+    ax.axvline(x=np.float32(0), color="gray", linestyle="--", linewidth=np.float32(0.8), alpha=np.float32(0.5)) # Explicitly cast to np.float32
+    ax.axhline(y=np.float32(0), color="gray", linestyle="--", linewidth=np.float32(0.8), alpha=np.float32(0.5)) # Explicitly cast to np.float32
 
     ax.set_xlabel("I (Real)")
     ax.set_ylabel("Q (Imag)")
@@ -141,10 +141,10 @@ def plot_constellation_confidence(
 
 def plot_spectrum(
     *signals: np.ndarray,
-    sample_rate: float = 1.0,
+    sample_rate: np.float32 = np.float32(1.0), # Changed type hint and default
     labels: list[str] | None = None,
     title: str | None = None,
-) -> tuple[Figure, Axes]:
+) -> tuple[Figure, Axes]: # Added return type hint
     """Plot power spectrum of complex signals."""
     if labels is None:
         labels = [f"Signal {i + 1}" for i in range(len(signals))]
@@ -153,9 +153,9 @@ def plot_spectrum(
 
     for sig, label in zip(signals, labels, strict=True):
         n = len(sig)
-        freq = np.fft.fftshift(np.fft.fftfreq(n, 1 / sample_rate)) / 1e6  # MHz
+        freq = np.fft.fftshift(np.fft.fftfreq(n, np.float32(1) / sample_rate)) / np.float32(1e6)  # MHz # Explicitly cast to np.float32
         spectrum = np.fft.fftshift(np.fft.fft(sig))
-        power_db = 20 * np.log10(np.abs(spectrum) + np.finfo(float).tiny)
+        power_db = np.float32(20) * np.log10(np.abs(spectrum) + np.finfo(np.float32).tiny) # Explicitly cast to np.float32
         power_db -= np.max(power_db)  # normalize to 0 dB peak
         ax.plot(freq, power_db, label=label)
 
@@ -163,7 +163,7 @@ def plot_spectrum(
     ax.set_ylabel("Power [dB]")
     ax.legend()
     ax.grid(visible=True, alpha=0.3)
-    ax.set_ylim(bottom=-60, top=5)
+    ax.set_ylim(bottom=np.float32(-60), top=np.float32(5)) # Explicitly cast to np.float32
 
     if title:
         ax.set_title(title)
@@ -174,15 +174,15 @@ def plot_spectrum(
 
 def plot_llr_heatmap(
     modulator: Modulator,
-    sigma_sq: float = 0.1,
+    sigma_sq: np.float32 = np.float32(0.1), # Changed type hint and default
     grid_size: int = 100,
-) -> tuple[Figure, NDArray[np.object_]]:
+) -> tuple[Figure, NDArray[Any]]: # Changed return type hint
     """Plot heatmaps showing LLR values across the complex plane."""
-    extent = 1.5
-    re = np.linspace(-extent, extent, grid_size)
-    im = np.linspace(-extent, extent, grid_size)
+    extent = np.float32(1.5) # Explicitly cast to np.float32
+    re = np.linspace(-extent, extent, grid_size, dtype=np.float32) # Explicitly cast to np.float32
+    im = np.linspace(-extent, extent, grid_size, dtype=np.float32) # Explicitly cast to np.float32
     re_grid, im_grid = np.meshgrid(re, im)
-    symbols_grid = (re_grid + 1j * im_grid).flatten()
+    symbols_grid = (re_grid + np.complex64(1j) * im_grid).flatten()
 
     llrs = modulator.symbols2bits_soft(symbols_grid, sigma_sq=sigma_sq)
     llr_bit0 = llrs[:, 0].reshape(grid_size, grid_size)
@@ -197,8 +197,8 @@ def plot_llr_heatmap(
         cmap="RdBu",
         aspect="equal",
     )
-    axes[0].axvline(x=0, color="k", linestyle="--", linewidth=1, label="Decision boundary")
-    axes[0].plot(np.real(modulator.symbol_mapping), np.imag(modulator.symbol_mapping), "ko", markersize=8)
+    axes[0].axvline(x=np.float32(0), color="k", linestyle="--", linewidth=np.float32(1), label="Decision boundary") # Explicitly cast to np.float32
+    axes[0].plot(np.real(modulator.symbol_mapping), np.imag(modulator.symbol_mapping), "ko", markersize=np.float32(8)) # Explicitly cast to np.float32
     axes[0].set_xlabel("Real")
     axes[0].set_ylabel("Imaginary")
     axes[0].set_title("LLR for Bit 0 (I)\nBlue: likely 0, Red: likely 1")
@@ -211,8 +211,8 @@ def plot_llr_heatmap(
         cmap="RdBu",
         aspect="equal",
     )
-    axes[1].axhline(y=0, color="k", linestyle="--", linewidth=1, label="Decision boundary")
-    axes[1].plot(np.real(modulator.symbol_mapping), np.imag(modulator.symbol_mapping), "ko", markersize=8)
+    axes[1].axhline(y=np.float32(0), color="k", linestyle="--", linewidth=np.float32(1), label="Decision boundary") # Explicitly cast to np.float32
+    axes[1].plot(np.real(modulator.symbol_mapping), np.imag(modulator.symbol_mapping), "ko", markersize=np.float32(8)) # Explicitly cast to np.float32
     axes[1].set_xlabel("Real")
     axes[1].set_ylabel("Imaginary")
     axes[1].set_title("LLR for Bit 1 (Q)\nBlue: likely 0, Red: likely 1")
@@ -226,9 +226,9 @@ def plot_llr_heatmap(
         cmap="viridis",
         aspect="equal",
     )
-    axes[2].axvline(x=0, color="w", linestyle="--", linewidth=1)
-    axes[2].axhline(y=0, color="w", linestyle="--", linewidth=1)
-    axes[2].plot(np.real(modulator.symbol_mapping), np.imag(modulator.symbol_mapping), "wo", markersize=8)
+    axes[2].axvline(x=np.float32(0), color="w", linestyle="--", linewidth=np.float32(1)) # Explicitly cast to np.float32
+    axes[2].axhline(y=np.float32(0), color="w", linestyle="--", linewidth=np.float32(1)) # Explicitly cast to np.float32
+    axes[2].plot(np.real(modulator.symbol_mapping), np.imag(modulator.symbol_mapping), "wo", markersize=np.float32(8)) # Explicitly cast to np.float32
     axes[2].set_xlabel("Real")
     axes[2].set_ylabel("Imaginary")
     axes[2].set_title(f"Min Confidence |LLR| (σ²={sigma_sq})\nDark = uncertain")

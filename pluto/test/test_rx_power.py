@@ -37,9 +37,9 @@ def main() -> None:
 
             # Normalized power relative to full scale
             normalized = samples / ADC_FULL_SCALE
-            10 * np.log10(np.mean(np.abs(normalized) ** 2) + 1e-12)
+            10 * np.log10(np.mean(np.abs(normalized) ** 2) + np.float32(1e-12))
 
-            "CLIPPING!" if max_component > ADC_FULL_SCALE * 0.95 else ""
+            "CLIPPING!" if max_component > ADC_FULL_SCALE * np.float32(0.95) else ""
     except KeyboardInterrupt:
         pass
 

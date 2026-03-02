@@ -21,7 +21,7 @@ from pluto.config import CENTER_FREQ, SAMPLE_RATE, SPS
 from pluto.loopback import setup_pluto, transmit_and_receive
 
 PLOT_DIR = "examples/data"
-RRC_ALPHA = 0.35
+RRC_ALPHA = np.float32(0.35)
 RRC_NUM_TAPS = 101
 N_PAYLOAD_SYMBOLS = 200
 
@@ -32,20 +32,20 @@ def run_sync_test(
     """Run a single sync test and return results."""
     rng = np.random.default_rng()
     qpsk = QPSK()
-    payload_bits = rng.integers(0, 2, N_PAYLOAD_SYMBOLS * 2)
+    payload_bits = rng.integers(0, 2, N_PAYLOAD_SYMBOLS * 2, dtype=np.int32)
     payload_symbols = qpsk.bits2symbols(payload_bits)
 
     preamble = build_preamble(sync.config)
     frame = np.concatenate([preamble, payload_symbols])
 
-    guard = np.zeros(200, dtype=complex)
+    guard = np.zeros(200, dtype=np.complex64)
     tx_frame = np.concatenate([guard, frame, guard])
     tx_signal = upsample_and_filter(tx_frame, SPS, h_rrc)
 
     rx_raw = transmit_and_receive(sdr, tx_signal, rx_delay_ms=50, n_captures=3)
     rx_filtered = np.convolve(rx_raw, h_rrc, mode="same")
 
-    result = sync.detect_preamble(rx_filtered, SAMPLE_RATE)
+    result = sync.detect_preamble(rx_filtered, np.float32(SAMPLE_RATE))
 
     return {
         "success": result.success,
@@ -93,9 +93,9 @@ def plot_sync_result(result: dict, title: str) -> "Figure":
     ax = axes[2]
     cfo_est = result["cfo_estimated"]
     cfo_inj = result["cfo_injected"]
-    n = np.arange(min(5000, len(rx)))
+    n = np.arange(min(5000, len(rx)), dtype=np.int32)
     phase_uncorrected = np.angle(rx[: len(n)])
-    phase_corrected = np.angle(rx[: len(n)] * np.exp(-1j * 2 * np.pi * cfo_est / SAMPLE_RATE * n))
+    phase_corrected = np.angle(rx[: len(n)] * np.exp(np.complex64(-1j) * np.float32(2) * np.float32(np.pi) * np.float32(cfo_est) / np.float32(SAMPLE_RATE) * n))
     ax.plot(np.unwrap(phase_uncorrected), label="Before CFO correction", alpha=0.7)
     ax.plot(np.unwrap(phase_corrected), label="After CFO correction", alpha=0.7)
     ax.set_title(f"Phase (injected={cfo_inj:+.0f} Hz, estimated={cfo_est:+.0f} Hz)")
@@ -138,7 +138,7 @@ def main() -> None:
     for _name, r in results:
         if r["success"]:
             error = abs(r["cfo_estimated"] - r["cfo_injected"])
-            tolerance = 500 + abs(r["cfo_injected"]) * 0.05  # 5% + 500 Hz baseline
+            tolerance = np.float32(500) + abs(np.float32(r["cfo_injected"])) * np.float32(0.05)  # 5% + 500 Hz baseline
             if error >= tolerance:
                 all_passed = False
         else:

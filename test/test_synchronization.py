@@ -94,7 +94,7 @@ class TestZadoffChu:
     def test_constant_amplitude(self) -> None:
         """Zadoff-Chu sequences have constant amplitude."""
         seq = generate_zadoff_chu(u=7, n_zc=ZC_SEQUENCE_LENGTH)
-        np.testing.assert_allclose(np.abs(seq), 1.0, atol=1e-10)
+        np.testing.assert_allclose(np.abs(seq), 1.0, atol=1e-6)
 
     def test_different_roots_are_different(self) -> None:
         """Different root indices should produce different sequences."""

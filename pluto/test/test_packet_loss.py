@@ -102,7 +102,7 @@ class DecodeAttempt:
 
     stage: DecodeStage
     result: FrameResult | None = None
-    cfo_hz: float | None = None
+    cfo_hz: np.float32 | None = None
 
 
 class InstrumentedDecoder:
@@ -174,7 +174,7 @@ class InstrumentedDecoder:
         if payload_bits is None:
             # Build a partial result so we can still consume the right number of samples
             partial = FrameResult(
-                payload_bits=np.array([], dtype=int),
+                payload_bits=np.array([], dtype=np.int32),
                 header=header,
                 cfo_hz=detection.cfo_hat_hz,
                 consumed_samples=consumed,
@@ -207,7 +207,7 @@ class RxStats:
     insufficient_payload: int = 0
     received_seqs: set[int] = field(default_factory=set)
     max_seq_seen: int = -1
-    cfo_values: list[float] = field(default_factory=list)
+    cfo_values: list[np.float32] = field(default_factory=list)
 
     def record(self, attempt: DecodeAttempt) -> None:
         stage = attempt.stage
@@ -283,7 +283,7 @@ class RxStats:
                 ]
 
         if self.cfo_values:
-            arr = np.array(self.cfo_values)
+            arr = np.array(self.cfo_values, dtype=np.float32)
             lines += [
                 f"  CFO:  mean={np.mean(arr):+.0f} Hz  std={np.std(arr):.0f} Hz  "
                 f"range=[{np.min(arr):+.0f}, {np.max(arr):+.0f}] Hz",
@@ -297,7 +297,7 @@ class RxStats:
 # ── TX mode ───────────────────────────────────────────────────────────────
 
 
-def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
+def run_tx(pluto_ip: str, tx_gain: np.float32, interval: np.float32, count: int) -> None:
     """Transmit numbered test packets at a fixed interval.
 
     Builds one continuous buffer: [pkt0][silence][pkt1][silence]...[pktN][silence]
@@ -331,7 +331,7 @@ def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
     slot_len = max_pkt_len + silence_samples
     total_len = slot_len * count
 
-    tx_buffer = np.zeros(total_len, dtype=complex)
+    tx_buffer = np.zeros(total_len, dtype=np.complex64)
     for i, sig in enumerate(signals):
         offset = i * slot_len
         tx_buffer[offset : offset + len(sig)] = sig

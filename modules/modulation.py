@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -23,25 +23,25 @@ class Modulator(Protocol):
         """Convert symbols to hard-decision bits."""
         ...
 
-    def symbols2bits_soft(self, symbols: np.ndarray, sigma_sq: float | None = None) -> np.ndarray:
+    def symbols2bits_soft(self, symbols: np.ndarray, sigma_sq: np.float32 | None = None) -> np.ndarray: # Changed to np.float32
         """Compute log-likelihood ratios (LLRs) for soft decision decoding."""
         ...
 
-    def estimate_noise_variance(self, symbols: np.ndarray) -> float:
+    def estimate_noise_variance(self, symbols: np.ndarray) -> np.float32: # Changed to np.float32
         """Estimate noise variance from received symbols."""
         ...
 
 
-def estimate_noise_variance(symbols: np.ndarray, constellation: np.ndarray) -> float:
+def estimate_noise_variance(symbols: np.ndarray, constellation: np.ndarray) -> np.float32: # Changed return type hint
     """Estimate noise variance from received symbols using hard decisions."""
     if len(symbols) == 0:
-        return np.finfo(float).eps
+        return np.finfo(np.float32).eps
     indices = np.argmin(
         np.abs(symbols.reshape(-1, 1) - constellation.reshape(1, -1)),
         axis=1,
     )
     noise = symbols - constellation[indices]
-    return float(max(np.mean(np.abs(noise) ** 2), np.finfo(float).eps))
+    return np.float32(max(np.mean(np.abs(noise) ** 2), np.finfo(np.float32).eps))
 
 
 class _ModulatorBase:
@@ -50,7 +50,7 @@ class _ModulatorBase:
     symbol_mapping: np.ndarray
     bits_per_symbol: int
 
-    def estimate_noise_variance(self, symbols: np.ndarray) -> float:
+    def estimate_noise_variance(self, symbols: np.ndarray) -> np.float32: # Changed to np.float32
         """Estimate noise variance from received symbols."""
         return estimate_noise_variance(symbols, self.symbol_mapping)
 
@@ -63,28 +63,28 @@ class BPSK(_ModulatorBase):
 
     def __init__(self) -> None:
         """Initialize BPSK modulation scheme."""
-        self.symbol_mapping = np.array([-1 + 0j, 1 + 0j])
-        self.bit_mapping = np.array([[0], [1]])
+        self.symbol_mapping = np.array([-1 + 0j, 1 + 0j], dtype=np.complex64)
+        self.bit_mapping = np.array([[0], [1]], dtype=np.int32)
         self.bits_per_symbol = 1
         self.qam_order = 2
 
-    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
+    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Convert bit stream to BPSK symbols."""
         if len(bitstream) == 0:
-            return np.array([], dtype=complex)
+            return np.array([], dtype=np.complex64)
         return self.symbol_mapping[bitstream]
 
-    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray[np.int32, Any]: # Added return type hint
         """Convert BPSK symbols to hard-decision bits."""
         if len(symbols) == 0:
-            return np.array([], dtype=int).reshape(0, 1)
+            return np.array([], dtype=np.int32).reshape(0, 1)
         return np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1).reshape(-1, 1)
 
     def symbols2bits_soft(
         self,
         symbols: np.ndarray,
-        sigma_sq: float | None = None,
-    ) -> np.ndarray:
+        sigma_sq: np.float32 | None = None, # Changed to np.float32
+    ) -> np.ndarray[np.float32, Any]: # Added return type hint
         """Compute log-likelihood ratios (LLRs) for soft decision decoding.
 
         LLR convention: positive = more likely 0, negative = more likely 1.
@@ -92,14 +92,14 @@ class BPSK(_ModulatorBase):
         Source: https://en.wikipedia.org/wiki/Log-likelihood_ratio
         """
         if len(symbols) == 0:
-            return np.array([], dtype=float)
+            return np.array([], dtype=np.float32)
 
         if sigma_sq is None:
             sigma_sq = estimate_noise_variance(symbols, self.symbol_mapping)
 
         # BPSK: symbol -1 -> bit 0, symbol +1 -> bit 1
         # LLR = -2 * Re(y) / σ²  (positive when Re(y)<0, i.e. bit 0 more likely)
-        return (-2.0 * np.real(symbols) / sigma_sq).reshape(-1, 1)
+        return (-np.float32(2.0) * np.real(symbols) / sigma_sq).reshape(-1, 1) # Explicitly cast to np.float32
 
 
 class QPSK(_ModulatorBase):
@@ -111,34 +111,34 @@ class QPSK(_ModulatorBase):
     def __init__(self) -> None:
         """Initialize QPSK modulation scheme."""
         # Gray-coded QPSK: 00 -> -1-1j, 01 -> -1+1j, 10 -> +1-1j, 11 -> +1+1j
-        self.symbol_mapping = np.array([-1 - 1j, -1 + 1j, 1 - 1j, 1 + 1j]) / np.sqrt(2)
-        self.bit_mapping = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+        self.symbol_mapping = (np.array([-1 - 1j, -1 + 1j, 1 - 1j, 1 + 1j]) / np.sqrt(np.float32(2))).astype(np.complex64) # Explicitly cast to np.float32
+        self.bit_mapping = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.int32)
         self.bits_per_symbol = 2
         self.qam_order = 4
 
-    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
+    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Convert bit stream to QPSK symbols."""
         if len(bitstream) == 0:
-            return np.array([], dtype=complex)
+            return np.array([], dtype=np.complex64)
         bitstream = bitstream.reshape(-1, 2)
         indices = bitstream[:, 0] * 2 + bitstream[:, 1]
         return self.symbol_mapping[indices]
 
-    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray[np.int32, Any]: # Added return type hint
         """Convert QPSK symbols to hard-decision bits."""
         if len(symbols) == 0:
-            return np.array([], dtype=int)
+            return np.array([], dtype=np.int32)
         indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
         return np.column_stack([indices // 2, indices % 2])
 
     def symbols2bits_soft(
         self,
         symbols: np.ndarray,
-        sigma_sq: float | None = None,
-    ) -> np.ndarray:
+        sigma_sq: np.float32 | None = None, # Changed to np.float32
+    ) -> np.ndarray[np.float32, Any]: # Added return type hint
         """Compute log-likelihood ratios (LLRs) for soft decision decoding."""
         if len(symbols) == 0:
-            return np.array([], dtype=float)
+            return np.array([], dtype=np.float32)
 
         if sigma_sq is None:
             sigma_sq = estimate_noise_variance(symbols, self.symbol_mapping)
@@ -149,7 +149,7 @@ class QPSK(_ModulatorBase):
         # LLR = ln(P(bit=0)/P(bit=1)), so LLR>0 means bit=0
         # LLR(bit0) = -2*√2/σ² * Re(y)
         # LLR(bit1) = -2*√2/σ² * Im(y)
-        scale = 2.0 * np.sqrt(2) / sigma_sq
+        scale = np.float32(2.0) * np.sqrt(np.float32(2)) / sigma_sq # Explicitly cast to np.float32
         llr_bit0 = -scale * np.real(symbols)
         llr_bit1 = -scale * np.imag(symbols)
 
@@ -168,7 +168,7 @@ class EightPSK(_ModulatorBase):
         self.bits_per_symbol = 3
 
         # Gray-coded 8-PSK: 000 -> -1-1j, 001 -> -1+0j, 011 -> -1+1j, 010 0+1j, 110 -> +1+1j, 111 -> 1+0j, 101 -> 1-1j, 100 -> 0-1j
-        symbols = np.exp(1j * np.arange(self.qam_order) * np.pi / 4) # Angles 0, pi/4, pi/2, ...
+        symbols = np.exp(np.complex64(1j) * np.arange(self.qam_order).astype(np.float32) * np.float32(np.pi) / np.float32(4)).astype(np.complex64) # Explicitly cast to np.float32
         # Custom bit assignment as per user request
         bit_mapping = np.array([
             [1, 1, 1],  # Index 0 (0 deg)
@@ -179,54 +179,54 @@ class EightPSK(_ModulatorBase):
             [0, 0, 0],  # Index 5 (225 deg)
             [1, 0, 0],  # Index 6 (270 deg)
             [1, 0, 1]   # Index 7 (315 deg)
-        ])
+        ], dtype=np.int32)
         
         # Sort by bit-pattern index so symbol_mapping[i] corresponds to bit pattern i
         bit_pattern_to_index = np.sum(
-            bit_mapping * 2 ** np.arange(self.bits_per_symbol - 1, -1, -1),
+            bit_mapping * np.float32(2) ** np.arange(self.bits_per_symbol - 1, -1, -1), # Explicitly cast to np.float32
             axis=1,
-            dtype=int,
+            dtype=np.int32,
         )
 
         self.bit_mapping = bit_mapping[np.argsort(bit_pattern_to_index), :]
         self.symbol_mapping = symbols[np.argsort(bit_pattern_to_index)]
 
 
-    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
+    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Convert bit stream to 8-PSK symbols."""
         if len(bitstream) == 0:
-            return np.array([], dtype=complex)
+            return np.array([], dtype=np.complex64)
         bitstream = bitstream.reshape(
             int(np.size(bitstream) / self.bits_per_symbol),
             self.bits_per_symbol,
         )
         return self.symbol_mapping[
             np.sum(
-                bitstream * 2 ** np.arange(self.bits_per_symbol - 1, -1, -1),
+                bitstream * np.float32(2) ** np.arange(self.bits_per_symbol - 1, -1, -1), # Explicitly cast to np.float32
                 axis=1,
-                dtype=int,
+                dtype=np.int32,
             )
         ]
     
-    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray[np.int32, Any]: # Added return type hint
         """Convert 8-PSK symbols to hard-decision bits."""
         if len(symbols) == 0:
-            return np.array([], dtype=int)
+            return np.array([], dtype=np.int32)
         indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
         return self.bit_mapping[indices, :]
 
     def symbols2bits_soft(
         self,
         symbols: np.ndarray,
-        sigma_sq: float | None = None,
-    ) -> np.ndarray:
+        sigma_sq: np.float32 | None = None, # Changed to np.float32
+    ) -> np.ndarray[np.float32, Any]: # Added return type hint
         """Compute log-likelihood ratios (LLRs) using max-log-MAP approximation.
 
         For each bit position, LLR = min distance to constellation point with bit=1
         minus min distance to constellation point with bit=0, scaled by 1/sigma_sq.
         """
         if len(symbols) == 0:
-            return np.array([], dtype=float)
+            return np.array([], dtype=np.float32)
 
         if sigma_sq is None:
             sigma_sq = estimate_noise_variance(symbols, self.symbol_mapping)
@@ -235,10 +235,10 @@ class EightPSK(_ModulatorBase):
             np.abs(
                 symbols.reshape(-1, 1) - self.symbol_mapping[np.newaxis, :],
             )
-            ** 2
+            ** np.float32(2) # Explicitly cast to np.float32
         )
 
-        llrs = np.zeros((len(symbols), self.bits_per_symbol))
+        llrs = np.zeros((len(symbols), self.bits_per_symbol), dtype=np.float32)
         for bit_idx in range(self.bits_per_symbol):
             bit_is_zero = self.bit_mapping[:, bit_idx] == 0
             bit_is_one = ~bit_is_zero
@@ -263,24 +263,25 @@ class QAM(_ModulatorBase):
 
     def __init__(self, qam_order: int) -> None:
         """Initialize QAM modulation scheme with Gray-coded bit mapping."""
-        bits_per_symbol = int(np.log2(qam_order))
+        self.bits_per_symbol = int(np.log2(qam_order)) # Fix 1: Moved earlier
+        # bits_per_symbol = self.bits_per_symbol # Use local var for clarity - not needed after moving
 
         # Build constellation grid and normalize power
-        iq = 2 * np.arange(np.sqrt(qam_order)) - np.sqrt(qam_order) + 1
+        iq = (np.float32(2) * np.arange(np.sqrt(np.float32(qam_order))) - np.sqrt(np.float32(qam_order)) + np.float32(1)).astype(np.float32) # Explicitly cast to np.float32
         q_rep, i_rep = np.meshgrid(iq, iq)
-        symbols = i_rep.reshape(qam_order) + 1j * q_rep.reshape(qam_order)
-        symbols = symbols / np.sqrt(np.mean(np.abs(symbols) ** 2))
+        symbols = i_rep.reshape(qam_order) + np.complex64(1j) * q_rep.reshape(qam_order)
+        symbols = symbols / np.sqrt(np.mean(np.abs(symbols) ** np.float32(2))) # Explicitly cast to np.float32
 
         # Build Gray code columns using reflected binary construction
-        half_grid_size = int(np.sqrt(qam_order) / 2)
-        gray_code_column = np.hstack((np.zeros(half_grid_size), np.ones(half_grid_size)))
-        for i in range(int(bits_per_symbol / 2 - 1)):
-            prev_column = gray_code_column if i == 0 else gray_code_column[-1, :]
+        half_grid_size = int(np.sqrt(np.float32(qam_order)) / np.float32(2)) # Explicitly cast to np.float32
+        gray_code_column = np.hstack((np.zeros(half_grid_size, dtype=np.float32), np.ones(half_grid_size, dtype=np.float32))) # Explicitly cast to np.float32
+        for i in range(int(self.bits_per_symbol / np.float32(2) - np.float32(1))): # Use self.bits_per_symbol # Explicitly cast to np.float32
+            prev_column = gray_code_column if i == 0 else gray_code_column[-1, :] # Fix 2: Changed to integer slice
             gray_code_column = np.vstack(
-                (gray_code_column, np.hstack((prev_column[::2], prev_column[::-2]))),
+                (gray_code_column, np.hstack((prev_column[::2], prev_column[::-2]))), # Fix 2: Changed to integer slices
             )
         gray_code_column = gray_code_column.T
-        bit_mapping = np.zeros((qam_order, bits_per_symbol))
+        bit_mapping = np.zeros((qam_order, self.bits_per_symbol), dtype=np.int32) # Use self.bits_per_symbol
 
         # Assign Gray code bits to I and Q dimensions
         for grid_value in iq:
@@ -296,36 +297,35 @@ class QAM(_ModulatorBase):
 
         # Sort by bit-pattern index so symbol_mapping[i] corresponds to bit pattern i
         bit_pattern_to_index = np.sum(
-            bit_mapping * 2 ** np.arange(bits_per_symbol - 1, -1, -1),
+            bit_mapping * np.float32(2) ** np.arange(self.bits_per_symbol - 1, -1, -1), # Explicitly cast to np.float32
             axis=1,
-            dtype=int,
+            dtype=np.int32,
         )
 
         self.bit_mapping = bit_mapping[np.argsort(bit_pattern_to_index), :]
         self.symbol_mapping = symbols[np.argsort(bit_pattern_to_index)]
-        self.bits_per_symbol = bits_per_symbol
         self.qam_order = qam_order
 
-    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
+    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Convert bit stream to QAM symbols."""
         if len(bitstream) == 0:
-            return np.array([], dtype=complex)
+            return np.array([], dtype=np.complex64)
         bitstream = bitstream.reshape(
             int(np.size(bitstream) / self.bits_per_symbol),
             self.bits_per_symbol,
         )
         return self.symbol_mapping[
             np.sum(
-                bitstream * 2 ** np.arange(self.bits_per_symbol - 1, -1, -1),
+                bitstream * np.float32(2) ** np.arange(self.bits_per_symbol - 1, -1, -1), # Explicitly cast to np.float32
                 axis=1,
-                dtype=int,
+                dtype=np.int32,
             )
         ]
 
-    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray[np.int32, Any]: # Added return type hint
         """Convert QAM symbols to hard-decision bits."""
         if len(symbols) == 0:
-            return np.array([], dtype=int)
+            return np.array([], dtype=np.int32)
         distance_symbols_to_constellation = np.abs(
             symbols.reshape(np.size(symbols), 1, order="F") - self.symbol_mapping,
         )
@@ -334,8 +334,8 @@ class QAM(_ModulatorBase):
     def symbols2bits_soft(
         self,
         symbols: np.ndarray,
-        sigma_sq: float | None = None,
-    ) -> np.ndarray:
+        sigma_sq: np.float32 | None = None, # Changed to np.float32
+    ) -> np.ndarray[np.float32, Any]: # Added return type hint
         """Compute log-likelihood ratios (LLRs) using max-log-MAP approximation.
 
         For each bit position, LLR = min distance to constellation point with bit=1
@@ -344,7 +344,7 @@ class QAM(_ModulatorBase):
         Source: https://en.wikipedia.org/wiki/Maximum_a_posteriori_estimation
         """
         if len(symbols) == 0:
-            return np.array([], dtype=float)
+            return np.array([], dtype=np.float32)
 
         if sigma_sq is None:
             sigma_sq = estimate_noise_variance(symbols, self.symbol_mapping)
@@ -353,10 +353,10 @@ class QAM(_ModulatorBase):
             np.abs(
                 symbols.reshape(-1, 1) - self.symbol_mapping[np.newaxis, :],
             )
-            ** 2
+            ** np.float32(2) # Explicitly cast to np.float32
         )
 
-        llrs = np.zeros((len(symbols), self.bits_per_symbol))
+        llrs = np.zeros((len(symbols), self.bits_per_symbol), dtype=np.float32)
         for bit_idx in range(self.bits_per_symbol):
             bit_is_zero = self.bit_mapping[:, bit_idx] == 0
             bit_is_one = ~bit_is_zero

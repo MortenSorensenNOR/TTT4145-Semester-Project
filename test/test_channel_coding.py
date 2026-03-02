@@ -19,11 +19,11 @@ CODEWORD_LENGTH = 648
 MESSAGE_LENGTH = 324
 MAX_DENSITY = 0.05
 MAX_BIT_ERRORS = 10
-RATE_TOLERANCE = 0.01
+RATE_TOLERANCE = np.float32(0.01)
 MIN_ROW_CONNECTIONS = 2
 MIN_COL_CONNECTIONS = 1
 BASE_MATRIX_COLS = 24
-LLR_SCALE = 10
+LLR_SCALE = np.float32(10.0)
 
 
 @dataclass(frozen=True)
@@ -63,12 +63,12 @@ def ldpc_config() -> LDPCConfig:
 def random_message() -> np.ndarray:
     """Generate random 324-bit message."""
     rng = np.random.default_rng(42)
-    return rng.integers(0, 2, size=MESSAGE_LENGTH)
+    return rng.integers(0, 2, size=MESSAGE_LENGTH, dtype=np.int32)
 
 
 def _expand_base_matrix(matrix: np.ndarray, num_rows: int, z_size: int) -> np.ndarray:
     """Expand a base matrix to a full parity-check matrix."""
-    h_mat = np.zeros((num_rows * z_size, BASE_MATRIX_COLS * z_size), dtype=int)
+    h_mat = np.zeros((num_rows * z_size, BASE_MATRIX_COLS * z_size), dtype=np.int32)
     for i in range(num_rows):
         for j in range(BASE_MATRIX_COLS):
             shift = matrix[i, j]
@@ -95,14 +95,14 @@ class TestLDPCEncoding:
         """Encode then decode should recover the original message."""
         codeword = ldpc_encode(random_message, ldpc_config)
         tx = 1 - 2 * codeword
-        llr = LLR_SCALE * tx
+        llr = LLR_SCALE * tx.astype(np.float32)
         decoded = ldpc_decode(llr, ldpc_config, max_iterations=20)
         np.testing.assert_array_equal(decoded, random_message)
 
     def test_different_messages_different_codewords(self, ldpc_config: LDPCConfig) -> None:
         """Different messages should produce different codewords."""
-        msg1 = np.zeros(MESSAGE_LENGTH, dtype=int)
-        msg2 = np.ones(MESSAGE_LENGTH, dtype=int)
+        msg1 = np.zeros(MESSAGE_LENGTH, dtype=np.int32)
+        msg2 = np.ones(MESSAGE_LENGTH, dtype=np.int32)
         cw1 = ldpc_encode(msg1, ldpc_config)
         cw2 = ldpc_encode(msg2, ldpc_config)
         if np.array_equal(cw1, cw2):
@@ -116,7 +116,7 @@ class TestLDPCDecoding:
         """Perfect channel should decode perfectly."""
         codeword = ldpc_encode(random_message, ldpc_config)
         tx = 1 - 2 * codeword
-        llr = LLR_SCALE * tx
+        llr = LLR_SCALE * tx.astype(np.float32)
         decoded = ldpc_decode(llr, ldpc_config, max_iterations=20)
         np.testing.assert_array_equal(decoded, random_message)
 
@@ -132,13 +132,13 @@ class TestLDPCDecoding:
         code_rate = CodeRates.HALF_RATE.value_float
 
         tx = 1 - 2 * codeword
-        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=1)
-        snr_linear = 10 ** (snr_db / 10)
-        noise_std = 1 / np.sqrt(2 * snr_linear)
+        snr_db = ebn0_to_snr(ebn0_db, code_rate, bits_per_symbol=1).astype(np.float32)
+        snr_linear = np.float32(10) ** (snr_db / np.float32(10))
+        noise_std = np.float32(1) / np.sqrt(np.float32(2) * snr_linear).astype(np.float32)
 
         rng = np.random.default_rng(123)
-        rx = tx + rng.standard_normal(CODEWORD_LENGTH) * noise_std
-        llr = 2 * rx / (noise_std**2)
+        rx = tx + rng.standard_normal(CODEWORD_LENGTH, dtype=np.float32) * noise_std
+        llr = np.float32(2) * rx / (noise_std**2)
 
         decoded = ldpc_decode(llr, ldpc_config, max_iterations=50)
         bit_errors = np.sum(random_message != decoded)
@@ -149,7 +149,7 @@ class TestLDPCDecoding:
         """Decoded message should be k bits."""
         codeword = ldpc_encode(random_message, ldpc_config)
         tx = 1 - 2 * codeword
-        llr = LLR_SCALE * tx
+        llr = LLR_SCALE * tx.astype(np.float32)
         decoded = ldpc_decode(llr, ldpc_config)
         np.testing.assert_equal(len(decoded), MESSAGE_LENGTH)
 
@@ -165,7 +165,7 @@ class TestLDPCStructure:
     def test_h_matrix_sparse(self, ldpc_config: LDPCConfig) -> None:
         """H matrix should be sparse (low density)."""
         h_mat = ldpc_get_h_matrix(ldpc_config)
-        density = np.sum(h_mat) / (MESSAGE_LENGTH * CODEWORD_LENGTH)
+        density = np.float32(np.sum(h_mat)) / (MESSAGE_LENGTH * CODEWORD_LENGTH)
         if density >= MAX_DENSITY:
             pytest.fail(f"H matrix too dense: {density:.3f}")
 
@@ -210,7 +210,7 @@ class TestLDPCBaseMatrix:
         """Expanded H matrix should be sparse (LDPC property)."""
         matrix = get_ldpc_base_matrix(cfg.code_rate, cfg.n)
         h_mat = _expand_base_matrix(matrix, cfg.num_parity_rows, cfg.z)
-        density = np.sum(h_mat) / h_mat.size
+        density = np.float32(np.sum(h_mat)) / h_mat.size
         if density >= MAX_DENSITY:
             pytest.fail(f"H matrix too dense: {density:.3f}")
 
@@ -239,12 +239,12 @@ class TestLDPCBaseMatrixCodeRateConsistency:
     @pytest.mark.parametrize("cfg", LDPC_CONFIGS)
     def test_code_rate_matches_dimensions(self, cfg: LdpcTestConfig) -> None:
         """Verify k/n matches the expected code rate."""
-        actual_rate = cfg.k / cfg.n
+        actual_rate = np.float32(cfg.k) / np.float32(cfg.n)
         expected_rates = {
-            CodeRates.HALF_RATE: 0.5,
-            CodeRates.TWO_THIRDS_RATE: 2 / 3,
-            CodeRates.THREE_QUARTER_RATE: 0.75,
-            CodeRates.FIVE_SIXTH_RATE: 5 / 6,
+            CodeRates.HALF_RATE: np.float32(0.5),
+            CodeRates.TWO_THIRDS_RATE: np.float32(2) / np.float32(3),
+            CodeRates.THREE_QUARTER_RATE: np.float32(0.75),
+            CodeRates.FIVE_SIXTH_RATE: np.float32(5) / np.float32(6),
         }
         expected = expected_rates[cfg.code_rate]
         if abs(actual_rate - expected) >= RATE_TOLERANCE:

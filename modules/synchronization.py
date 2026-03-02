@@ -6,6 +6,7 @@
 """
 
 from dataclasses import dataclass, field
+from typing import Any # Added for np.ndarray type hints
 
 import numpy as np
 
@@ -16,10 +17,10 @@ _SMALLEST_PRIME = 2
 
 def _is_prime(n: int) -> bool:
     """Check if n is prime using trial division."""
-    return n >= _SMALLEST_PRIME and all(n % k != 0 for k in range(_SMALLEST_PRIME, int(n**0.5) + 1))
+    return n >= _SMALLEST_PRIME and all(n % k != np.int32(0) for k in range(_SMALLEST_PRIME, int(n**np.float32(0.5)) + np.int32(1))) # Explicitly cast to np.int32
 
 
-def generate_zadoff_chu(u: int = 7, n_zc: int = 61) -> np.ndarray:
+def generate_zadoff_chu(u: int = 7, n_zc: int = 61) -> np.ndarray[np.complex64, Any]: # Added return type hint
     """Generate a Zadoff-Chu sequence of length n_zc with root u.
 
     Source is https://en.wikipedia.org/wiki/Zadoff%E2%80%93Chu_sequence
@@ -27,10 +28,10 @@ def generate_zadoff_chu(u: int = 7, n_zc: int = 61) -> np.ndarray:
     if not _is_prime(n_zc):
         msg = f"n_zc must be prime, got {n_zc}"
         raise ValueError(msg)
-    c_f = n_zc % 2
-    q = 0
-    n = np.arange(0, n_zc, 1)
-    return np.exp(-1j * (np.pi * u * n * (n + c_f + 2 * q)) / n_zc)
+    c_f = n_zc % np.int32(2) # Explicitly cast to np.int32
+    q = np.int32(0) # Explicitly cast to np.int32
+    n = np.arange(np.int32(0), n_zc, np.int32(1), dtype=np.int32) # Explicitly cast to np.int32
+    return np.exp(np.complex64(-1j) * (np.float32(np.pi) * np.float32(u) * n.astype(np.float32) * (n.astype(np.float32) + np.float32(c_f) + np.float32(2) * np.float32(q))) / np.float32(n_zc)).astype(np.complex64) # Explicitly cast to np.float32
 
 
 @dataclass
@@ -40,8 +41,8 @@ class SynchronizerConfig:
     n_long: int = 139
     zc_root: int = 7
     n_short_reps: int = 8
-    peak_threshold: float = 0.5       # relative threshold for finding repeat peaks
-    detection_threshold: float = 0.5  # absolute normalized threshold (noise ~0.05-0.1, signal ~0.5-1.0)
+    peak_threshold: np.float32 = np.float32(0.5)       # relative threshold for finding repeat peaks # Changed type hint and default
+    detection_threshold: np.float32 = np.float32(0.5)  # absolute normalized threshold (noise ~0.05-0.1, signal ~0.5-1.0) # Changed type hint and default
     peak_margin_factor: int = 2
     long_margin_factor: int = 5
 
@@ -53,13 +54,13 @@ class SynchronizationResult:
     success: bool = True
     reason: str = ""
     d_hat: int = 0
-    cfo_hat_hz: float = 0.0
+    cfo_hat_hz: np.float32 = np.float32(0.0) # Changed type hint and default
     long_zc_start: int = 0
     peak_indices: list[int] = field(default_factory=list)
     n_phase_diffs: int = 0
 
 
-def build_preamble(config: SynchronizerConfig | None = None) -> np.ndarray:
+def build_preamble(config: SynchronizerConfig | None = None) -> np.ndarray[np.complex64, Any]: # Added return type hint
     """Build a ZC preamble at symbol rate: n_short_reps x ZC_short + ZC_long."""
     if config is None:
         config = SynchronizerConfig()
@@ -98,8 +99,8 @@ class Synchronizer:
             # (double RRC = raised cosine)
             tx_short = upsample_and_filter(self.zc_short, sps, rrc_taps)
             tx_long = upsample_and_filter(self.zc_long, sps, rrc_taps)
-            self._template_short = np.convolve(tx_short, rrc_taps, mode="same")
-            self._template_long = np.convolve(tx_long, rrc_taps, mode="same")
+            self._template_short = np.convolve(tx_short, rrc_taps, mode="same").astype(np.complex64) # Ensure np.complex64
+            self._template_long = np.convolve(tx_long, rrc_taps, mode="same").astype(np.complex64) # Ensure np.complex64
         else:
             self.rrc_taps = None
             self._template_short = self.zc_short
@@ -108,11 +109,11 @@ class Synchronizer:
         self.preamble = build_preamble(config)
 
     @property
-    def template_short(self) -> np.ndarray:
+    def template_short(self) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Return the short ZC correlation template."""
         return self._template_short
 
-    def detect_preamble(self, rx: np.ndarray, sample_rate: float) -> SynchronizationResult:
+    def detect_preamble(self, rx: np.ndarray, sample_rate: np.float32) -> SynchronizationResult: # Changed type hint
         """Detect preamble and estimate CFO and timing.
 
         CFO is estimated from the phase rotation between consecutive matched-filter
@@ -135,11 +136,11 @@ class Synchronizer:
         # Absolute detection threshold 
         # Normalize by template energy and local signal energy.
         # A real preamble produces a peak near 1.0; noise stays well below.
-        template_energy = np.sum(np.abs(self._template_short) ** 2)
+        template_energy = np.sum(np.abs(self._template_short) ** np.float32(2)).astype(np.float32) # Ensure np.float32
         n_template = len(self._template_short)
         # Sliding window signal energy (approximate with block average)
-        local_energy = np.convolve(np.abs(rx) ** 2, np.ones(n_template), mode="same")
-        local_energy = np.maximum(local_energy, 1e-12)  # avoid division by zero
+        local_energy = np.convolve(np.abs(rx) ** np.float32(2), np.ones(n_template, dtype=np.float32), mode="same") # Ensure np.float32
+        local_energy = np.maximum(local_energy, np.float32(1e-12))  # avoid division by zero # Explicitly cast to np.float32
         corr_normalized = corr_mag / np.sqrt(template_energy * local_energy[:len(corr_mag)])
 
         global_max_idx = np.argmax(corr_mag)
@@ -164,47 +165,47 @@ class Synchronizer:
         # current_idx should now be at the first zc_short -> find the rest going forward
         first_peak_idx = current_idx
         peak_indices = [first_peak_idx]
-        for _i in range(1, self.config.n_short_reps):
-            search_start = peak_indices[-1] + n_short_samples - peak_margin
-            search_end = min(len(corr_mag), peak_indices[-1] + n_short_samples + peak_margin + 1)
+        for _i in range(np.int32(1), self.config.n_short_reps): # Explicitly cast to np.int32
+            search_start = peak_indices[-np.int32(1)] + n_short_samples - peak_margin # Explicitly cast to np.int32
+            search_end = min(len(corr_mag), peak_indices[-np.int32(1)] + n_short_samples + peak_margin + np.int32(1)) # Explicitly cast to np.int32
             if search_end <= search_start:
                 break
             region = corr_mag[search_start:search_end]
             next_peak = search_start + np.argmax(region)
             peak_indices.append(next_peak)
 
-        min_peaks = 2
+        min_peaks = np.int32(2) # Explicitly cast to np.int32
         if len(peak_indices) < min_peaks:
             return SynchronizationResult(success=False, reason="Couldn't find enough ZC peaks")
 
         # CFO estimation
         phase_diffs = []
-        for i in range(len(peak_indices) - 1):
+        for i in range(len(peak_indices) - np.int32(1)): # Explicitly cast to np.int32
             p1 = corr_short[peak_indices[i]]
-            p2 = corr_short[peak_indices[i + 1]]
+            p2 = corr_short[peak_indices[i + np.int32(1)]] # Explicitly cast to np.int32
             phase_diffs.append(np.angle(p2 * np.conj(p1)))
 
         # average the phase differences
-        avg_phase_diff = np.mean(phase_diffs)
-        cfo_hat = float(avg_phase_diff / (2 * np.pi * n_short_samples) * sample_rate)
+        avg_phase_diff = np.mean(np.array(phase_diffs, dtype=np.float32))
+        cfo_hat = np.float32(avg_phase_diff / (np.float32(2) * np.float32(np.pi) * np.float32(n_short_samples)) * sample_rate) # Explicitly cast to np.float32
 
         # coarse timing estimate
-        d_hat = peak_indices[0]
+        d_hat = peak_indices[np.int32(0)] # Explicitly cast to np.int32
 
         # Fine timing: CFO-correct and correlate only the expected long-ZC region
-        cfo_hat_norm = avg_phase_diff / (2 * np.pi * n_short_samples)
+        cfo_hat_norm = avg_phase_diff / (np.float32(2) * np.float32(np.pi) * np.float32(n_short_samples)) # Explicitly cast to np.float32
         long_margin = self.config.long_margin_factor * sps
         expected_long_start = d_hat + self.config.n_short_reps * n_short_samples
         template_len = len(self._template_long)
 
-        region_start = max(expected_long_start - long_margin, 0)
-        region_end = min(len(rx), expected_long_start + 2 * long_margin + template_len)
+        region_start = max(expected_long_start - long_margin, np.int32(0)) # Explicitly cast to np.int32
+        region_end = min(len(rx), expected_long_start + np.int32(2) * long_margin + template_len) # Explicitly cast to np.int32
 
         if region_end - region_start < template_len:
             return SynchronizationResult(success=False, reason="Not enough samples for fine timing")
 
-        n_region = np.arange(region_start, region_end)
-        rx_region = rx[region_start:region_end] * np.exp(-1j * 2 * np.pi * cfo_hat_norm * n_region)
+        n_region = np.arange(region_start, region_end, dtype=np.int32) # Explicitly cast to np.int32
+        rx_region = rx[region_start:region_end] * np.exp(np.complex64(-1j) * np.float32(2) * np.float32(np.pi) * cfo_hat_norm * n_region.astype(np.float32)).astype(np.complex64) # Explicitly cast to np.float32
 
         corr_region = np.correlate(rx_region, self._template_long, mode="valid")
         long_zc_start = region_start + np.argmax(np.abs(corr_region))
@@ -218,13 +219,13 @@ class Synchronizer:
             n_phase_diffs=len(phase_diffs),
         )
 
-    def _matched_filter(self, rx: np.ndarray, signal: np.ndarray) -> np.ndarray:
+    def _matched_filter(self, rx: np.ndarray, signal: np.ndarray) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Linear cross-correlation matched filter via FFT.
 
         Zero-pads to avoid circular wrap-around artefacts.
 
         Source: https://en.wikipedia.org/wiki/Matched_filter
         """
-        n_fft = len(rx) + len(signal) - 1
+        n_fft = len(rx) + len(signal) - np.int32(1) # Explicitly cast to np.int32
         result = np.fft.ifft(np.fft.fft(rx, n_fft) * np.conj(np.fft.fft(signal, n_fft)))
-        return result[: len(rx)]
+        return result[: len(rx)].astype(np.complex64) # Ensure np.complex64

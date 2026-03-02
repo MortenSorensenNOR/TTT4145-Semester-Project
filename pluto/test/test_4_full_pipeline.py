@@ -32,7 +32,7 @@ from pluto.decode import FrameDecoder
 from pluto.loopback import setup_pluto, transmit_and_receive
 
 PLOT_DIR = "examples/data"
-RRC_ALPHA = 0.35
+RRC_ALPHA = np.float32(0.35)
 RRC_NUM_TAPS = 101
 GUARD_SAMPLES = 500
 PLOT_SNR_THRESHOLD = 4
@@ -53,7 +53,7 @@ class TestCase:
     """Parameters for a single BER test run."""
 
     mod_scheme: ModulationSchemes
-    snr_db: float
+    snr_db: np.float32
     n_payload_bits: int
 
 
@@ -71,7 +71,7 @@ class RadioContext:
 
 def add_awgn(
     signal: np.ndarray,
-    snr_db: float,
+    snr_db: np.float32,
     *,
     return_noise: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray, tuple[int, int]]:
@@ -86,7 +86,7 @@ def add_awgn(
     window = 1000
     if len(signal) > window:
         # Sliding window to find max power region
-        power_profile = np.convolve(np.abs(signal) ** 2, np.ones(window) / window, mode="valid")
+        power_profile = np.convolve(np.abs(signal) ** 2, np.ones(window, dtype=np.float32) / np.float32(window), mode="valid")
         peak_idx = np.argmax(power_profile)
         # Measure power in region around peak
         start = max(0, peak_idx)
@@ -97,8 +97,8 @@ def add_awgn(
         sig_power = np.mean(np.abs(signal) ** 2)
         active_region = (0, len(signal))
 
-    noise_power = sig_power / (10 ** (snr_db / 10))
-    noise = np.sqrt(noise_power / 2) * (rng.standard_normal(len(signal)) + 1j * rng.standard_normal(len(signal)))
+    noise_power = sig_power / (np.float32(10) ** (snr_db / np.float32(10)))
+    noise = np.sqrt(noise_power / np.float32(2)).astype(np.float32) * (rng.standard_normal(len(signal), dtype=np.float32) + np.complex64(1j) * rng.standard_normal(len(signal), dtype=np.float32))
     noisy_signal = signal + noise
 
     if return_noise:
@@ -156,8 +156,7 @@ def run_ber_test(
     snr_db = test_case.snr_db
     n_payload_bits = test_case.n_payload_bits
 
-    t0 = time.perf_counter()
-    tx_bits = rng.integers(0, 2, n_payload_bits)
+    tx_bits = rng.integers(0, 2, n_payload_bits, dtype=np.int32)
 
     sync_config = radio.sync.config
     build_params = FrameBuildParams(
@@ -171,7 +170,7 @@ def run_ber_test(
     )
 
     tx_signal = upsample_and_filter(frame_symbols, SPS, radio.h_rrc)
-    zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
+    zeros = np.zeros(GUARD_SAMPLES, dtype=np.complex64)
     tx_signal = np.concatenate([zeros, tx_signal, zeros])
     timings["tx_build"] = time.perf_counter() - t0
 
@@ -192,7 +191,7 @@ def run_ber_test(
 
     t0 = time.perf_counter()
     radio.pipeline.pilot_config = radio.pilot_config
-    decoder = FrameDecoder(radio.sync, radio.frame_constructor, SAMPLE_RATE, radio.pipeline)
+    decoder = FrameDecoder(radio.sync, radio.frame_constructor, np.float32(SAMPLE_RATE), radio.pipeline)
     result = decoder.try_decode(rx_filtered, global_sample_offset=0)
     timings["decode_total"] = time.perf_counter() - t0
 
@@ -207,7 +206,7 @@ def run_ber_test(
         return {"success": False, "ber": 0.5, "errors": n_payload_bits // 2, "timings": timings}
 
     errors = np.sum(tx_bits != rx_bits)
-    ber = errors / len(tx_bits)
+    ber = np.float32(errors) / len(tx_bits)
 
     return {
         "success": True,
@@ -224,7 +223,7 @@ def plot_signal_vs_noise(
     signal: np.ndarray,
     noise: np.ndarray,
     active_region: tuple[int, int],
-    snr_db: float,
+    snr_db: np.float32,
 ) -> "Figure":
     """Plot signal and noise to visually verify noise levels."""
     start, end = active_region
@@ -234,7 +233,7 @@ def plot_signal_vs_noise(
 
     fig, axes = plt.subplots(3, 1, figsize=(14, 10))
 
-    t = np.arange(plot_start, plot_end)
+    t = np.arange(plot_start, plot_end, dtype=np.int32)
 
     # Clean signal (before noise)
     clean = signal[plot_start:plot_end] - noise[plot_start:plot_end]
@@ -283,20 +282,13 @@ def _extract_payload_symbols(
     pilot_config: PilotConfig,
 ) -> np.ndarray:
     """Extract and preprocess payload symbols from the received signal."""
-    # CFO correction
-    cfo_hz = sync_result.cfo_hat_hz
-    n_vec = np.arange(len(rx_filtered))
-    rx_corrected = rx_filtered * np.exp(-1j * 2 * np.pi * cfo_hz / SAMPLE_RATE * n_vec)
+    rx_corrected = rx_filtered * np.exp(np.complex64(-1j) * np.float32(2) * np.float32(np.pi) * np.float32(cfo_hz) / np.float32(SAMPLE_RATE) * n_vec)
 
     # Extract signal from after long ZC preamble
     data_start = sync_result.long_zc_start + 139 * SPS
     rx_data = rx_corrected[data_start:]
 
-    # Phase correction using BPSK header
-    n_header_symbols = 72
-    header_symbols = rx_data[::SPS][:n_header_symbols]
-    phase_est = np.angle(np.sum(header_symbols * np.sign(np.real(header_symbols))))
-    rx_data = rx_data * np.exp(-1j * phase_est)
+    rx_data = rx_data * np.exp(np.complex64(-1j) * phase_est)
 
     # Normalize
     power = np.mean(np.abs(rx_data[:1000]) ** 2)
@@ -310,7 +302,7 @@ def _extract_payload_symbols(
     # Filter out pilots
     payload_symbols_all = rx_payload[::SPS]
     n_payload_symbols = len(payload_symbols_all)
-    n_data_est = int(n_payload_symbols * pilot_config.spacing / (pilot_config.spacing + 1))
+    n_data_est = int(n_payload_symbols * np.float32(pilot_config.spacing) / (np.float32(pilot_config.spacing) + np.float32(1)))
     if n_data_est > 0:
         d_idx = data_indices(n_data_est, pilot_config)
         d_idx = d_idx[d_idx < len(payload_symbols_all)]
@@ -324,14 +316,14 @@ def _prepare_rx_payload(
 ) -> np.ndarray:
     """Prepare the raw (non-downsampled) RX payload for eye diagrams."""
     cfo_hz = sync_result.cfo_hat_hz
-    n_vec = np.arange(len(rx_filtered))
-    rx_corrected = rx_filtered * np.exp(-1j * 2 * np.pi * cfo_hz / SAMPLE_RATE * n_vec)
+    n_vec = np.arange(len(rx_filtered), dtype=np.int32)
+    rx_corrected = rx_filtered * np.exp(np.complex64(-1j) * np.float32(2) * np.float32(np.pi) * np.float32(cfo_hz) / np.float32(SAMPLE_RATE) * n_vec)
     data_start = sync_result.long_zc_start + 139 * SPS
     rx_data = rx_corrected[data_start:]
     n_header_symbols = 72
     header_symbols = rx_data[::SPS][:n_header_symbols]
     phase_est = np.angle(np.sum(header_symbols * np.sign(np.real(header_symbols))))
-    rx_data = rx_data * np.exp(-1j * phase_est)
+    rx_data = rx_data * np.exp(np.complex64(-1j) * phase_est)
     power = np.mean(np.abs(rx_data[:1000]) ** 2)
     if power > 0:
         rx_data = rx_data / np.sqrt(power)
@@ -346,7 +338,7 @@ def _plot_eye_diagrams(
 ) -> None:
     """Plot I and Q eye diagrams on the first two axes."""
     eye_len = 2 * SPS
-    t_eye = np.linspace(-1, 1, eye_len)
+    t_eye = np.linspace(np.float32(-1), np.float32(1), eye_len, dtype=np.float32)
 
     # Eye diagram - I
     ax = axes[0]
@@ -379,7 +371,7 @@ def plot_constellation_and_eye(
     rx_filtered: np.ndarray,
     sync_result: SynchronizationResult,
     mod_scheme: ModulationSchemes,
-    snr_db: float,
+    snr_db: np.float32,
     title: str,
 ) -> "Figure | None":
     """Plot constellation and eye diagram for a single test."""
@@ -444,8 +436,8 @@ def _collect_ber_results(
                 else:
                     pass
 
-            avg_ber = np.mean(bers) if bers else 0.5
-            ber_results[mod_scheme].append(float(avg_ber))
+            avg_ber = np.mean(bers) if bers else np.float32(0.5)
+            ber_results[mod_scheme].append(np.float32(avg_ber))
 
             # Store result for mid-range SNR for plotting
             if snr_db == PLOT_SNR_THRESHOLD and last_result and last_result["success"]:
@@ -468,7 +460,7 @@ def _plot_ber_curve(
 
     for mod_scheme in mod_schemes:
         bers = ber_results[mod_scheme]
-        bers_plot = [max(b, 1e-5) for b in bers]
+        bers_plot = [max(b, np.float32(1e-5)) for b in bers]
         ax.semilogy(
             snr_values,
             bers_plot,
@@ -516,7 +508,7 @@ def main() -> None:
     )
 
     # Test parameters - fine granularity, 0.5 dB steps
-    snr_values = [float(x) for x in np.arange(-6, 4.1, 0.5)]
+    snr_values = [np.float32(x) for x in np.arange(np.float32(-6), np.float32(4.1), np.float32(0.5))]
     mod_schemes = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.QAM16]
     n_payload_bits = 200
     n_trials = 3
@@ -527,8 +519,8 @@ def main() -> None:
     _plot_ber_curve(snr_values, ber_results, mod_schemes, cfo_hz)
 
     # Generate noise diagnostic plot at low SNR
-    diag_snr = -4.0
-    tx_bits = rng.integers(0, 2, n_payload_bits)
+    diag_snr = np.float32(-4.0)
+    tx_bits = rng.integers(0, 2, n_payload_bits, dtype=np.int32)
     build_params = FrameBuildParams(
         frame_constructor=frame_constructor, sync_config=sync_config, pilot_config=pilot_config, pipeline=pipeline,
     )
@@ -536,7 +528,7 @@ def main() -> None:
         tx_bits, build_params, ModulationSchemes.QPSK, CodeRates.HALF_RATE,
     )
     tx_signal = upsample_and_filter(frame_symbols, SPS, h_rrc)
-    zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
+    zeros = np.zeros(GUARD_SAMPLES, dtype=np.complex64)
     tx_signal = np.concatenate([zeros, tx_signal, zeros])
     rx_raw = transmit_and_receive(sdr, tx_signal, rx_delay_ms=50, n_captures=5)
     rx_noisy, noise, active_region = add_awgn(rx_raw, diag_snr, return_noise=True)

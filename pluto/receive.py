@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -28,16 +28,16 @@ class _MatchedFilter:
         self._h = h_rrc
         if h_rrc is not None:
             self._overlap = len(h_rrc) - 1
-            self._state = np.zeros(self._overlap, dtype=complex)
+            self._state = np.zeros(self._overlap, dtype=np.complex64)
 
-    def __call__(self, rx: np.ndarray) -> np.ndarray:
+    def __call__(self, rx: np.ndarray) -> np.ndarray[np.complex64, Any]: # Added return type hint
         if self._h is None:
             return rx
         # Overlap-save: prepend previous tail so the convolution is
         # continuous across calls, then save the new tail for next time.
         chunk = np.concatenate([self._state, rx])
         self._state = chunk[-self._overlap :]
-        return np.convolve(chunk, self._h, mode="valid")
+        return np.convolve(chunk, self._h, mode="valid").astype(np.complex64) # Ensure np.complex64
 
 
 class _RxBuffer:
@@ -48,7 +48,7 @@ class _RxBuffer:
     """
 
     def __init__(self) -> None:
-        self._buffer = np.empty(0, dtype=complex)
+        self._buffer = np.empty(0, dtype=np.complex64)
         self._start = 0
         self._sample_offset = 0
 
@@ -58,11 +58,11 @@ class _RxBuffer:
         return self._sample_offset
 
     @property
-    def samples(self) -> np.ndarray:
+    def samples(self) -> np.ndarray[np.complex64, Any]: # Added return type hint
         """Zero-copy view of the current buffered samples."""
         return self._buffer[self._start :]
 
-    def append(self, samples: np.ndarray) -> None:
+    def append(self, samples: np.ndarray[np.complex64, Any]) -> None: # Added type hint
         """Append new samples, compacting any discarded prefix in one pass."""
         if self._start > 0:
             self._buffer = np.concatenate([self._buffer[self._start :], samples])
@@ -106,7 +106,7 @@ def run_receiver(
     try:
         while True:
             try:
-                rx = sdr.rx()
+                rx = sdr.rx().astype(np.complex64) # Ensure np.complex64
             except OSError:
                 logger.exception("RX: SDR read failed — stopping receiver")
                 break

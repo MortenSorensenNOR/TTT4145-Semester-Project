@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any # Added for np.ndarray type hints
 
 try:
     import numba
@@ -39,7 +40,7 @@ class CodeRates(Enum):
         return fractions[self]
 
     @property
-    def value_float(self) -> float:
+    def value_float(self) -> np.float32: # Changed to np.float32
         """Return the numeric code rate value (k/n ratio).
 
         Returns:
@@ -47,7 +48,7 @@ class CodeRates(Enum):
 
         """
         num, denom = self.rate_fraction
-        return num / denom
+        return np.float32(num / denom) # Explicitly cast to np.float32
 
 
 class Golay:
@@ -75,12 +76,13 @@ class Golay:
                 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1],
                 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1],
             ],
+            dtype=np.int32, # Changed to np.int32
         )
 
         self.parity = self.matrix[:, 12:]
-        self.h_matrix = np.hstack([self.parity.T, np.eye(12, dtype=int)])
+        self.h_matrix = np.hstack([self.parity.T, np.eye(12, dtype=np.int32)]) # Changed to np.int32
 
-    def encode(self, message: np.ndarray) -> np.ndarray:
+    def encode(self, message: np.ndarray) -> np.ndarray[np.int32, Any]: # Added return type hint
         """Encode a binary message using Golay (24,12) code."""
         if message.shape[0] % self.message_length != 0:
             msg = "Message must have a length that is a multiple of 12"
@@ -90,9 +92,9 @@ class Golay:
             raise ValueError(msg)
         blocks = message.reshape(-1, 12)  # shape (num_blocks, 12)
         encoded = (blocks @ self.matrix) % 2  # shape (num_blocks, 24)
-        return encoded.flatten()
+        return encoded.flatten().astype(np.int32) # Ensure np.int32
 
-    def decode(self, received: np.ndarray) -> np.ndarray:
+    def decode(self, received: np.ndarray) -> np.ndarray[np.int32, Any]: # Added return type hint
         """Decode a Golay-encoded signal."""
         if received.shape[0] % self.block_length != 0:
             msg = "Received signal must have a length that is a multiple of 24"
@@ -104,9 +106,9 @@ class Golay:
             corrected = self._decode_block(r)
             decoded.append(corrected[:12])
 
-        return np.concatenate(decoded)
+        return np.concatenate(decoded).astype(np.int32) # Ensure np.int32
 
-    def _decode_block(self, block: np.ndarray) -> np.ndarray:
+    def _decode_block(self, block: np.ndarray) -> np.ndarray[np.int32, Any]: # Added return type hint
         """Decode a single 24-bit Golay block with error correction."""
         max_correctable = 3
         max_secondary_errors = 2
@@ -115,14 +117,14 @@ class Golay:
         def weight(v: np.ndarray) -> int:
             return int(np.sum(v))
 
-        def unit(i: int, n: int) -> np.ndarray:
-            e = np.zeros(n, dtype=int)
+        def unit(i: int, n: int) -> np.ndarray[np.int32, Any]: # Changed return type hint
+            e = np.zeros(n, dtype=np.int32) # Changed to np.int32
             e[i] = 1
             return e
 
         s = (block @ self.h_matrix.T) % 2
         if weight(s) <= max_correctable:
-            e = np.concatenate([np.zeros(half_block, dtype=int), s])
+            e = np.concatenate([np.zeros(half_block, dtype=np.int32), s]) # Changed to np.int32
             return (block + e) % 2
 
         for i in range(half_block):
@@ -133,7 +135,7 @@ class Golay:
         s_parity = (s @ self.parity) % 2
 
         if weight(s_parity) <= max_correctable:
-            e = np.concatenate([s_parity, np.zeros(half_block, dtype=int)])
+            e = np.concatenate([s_parity, np.zeros(half_block, dtype=np.int32)]) # Changed to np.int32
             return (block + e) % 2
 
         for i in range(half_block):
@@ -164,8 +166,8 @@ _N648_R12 = np.array(
         [11, -1, -1, -1, 19, -1, -1, -1, 13, -1, 3, 17, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1],
         [25, -1, 8, -1, 23, 18, -1, 14, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0],
         [3, -1, -1, -1, 16, -1, -1, 2, 25, 5, -1, -1, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0],
-    ],
-    dtype=int,
+            ],
+    dtype=np.int32, # Changed to np.int32
 )
 
 _N648_R23 = np.array(
@@ -179,7 +181,7 @@ _N648_R23 = np.array(
         [14, 23, 21, 11, 20, -1, 24, -1, 18, -1, 19, -1, -1, -1, -1, 22, -1, -1, -1, -1, -1, -1, 0, 0],
         [17, 11, 11, 20, -1, 21, -1, 26, -1, 3, -1, -1, 18, -1, 26, -1, 1, -1, -1, -1, -1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 _N648_R34 = np.array(
@@ -191,7 +193,7 @@ _N648_R34 = np.array(
         [24, 5, 26, 7, 1, -1, -1, 15, 24, 15, -1, 8, -1, 13, -1, 13, -1, 11, -1, -1, -1, -1, 0, 0],
         [2, 2, 19, 14, 24, 1, 15, 19, -1, 21, -1, 2, -1, 24, -1, 3, -1, 2, 1, -1, -1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 _N648_R56 = np.array(
@@ -201,7 +203,7 @@ _N648_R56 = np.array(
         [22, 16, 4, 3, 10, 21, 12, 5, 21, 14, 19, 5, -1, 8, 5, 18, 11, 5, 5, 15, 0, -1, 0, 0],
         [7, 7, 14, 14, 4, 16, 16, 24, 24, 10, 1, 7, 15, 6, 10, 26, 8, 18, 21, 14, 1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 # n=1296, Z=54
@@ -220,7 +222,7 @@ _N1296_R12 = np.array(
         [-1, 18, -1, -1, 23, -1, -1, 8, 0, 35, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0],
         [49, -1, 17, -1, 30, -1, -1, -1, 34, -1, 19, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 _N1296_R23 = np.array(
@@ -234,7 +236,7 @@ _N1296_R23 = np.array(
         [9, 24, 13, 22, 28, -1, -1, 37, -1, -1, 25, -1, -1, 52, -1, 13, -1, -1, -1, -1, -1, -1, 0, 0],
         [32, 22, 4, 21, 16, -1, -1, -1, 27, 28, -1, -1, 38, -1, -1, -1, 8, 1, -1, -1, -1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 _N1296_R34 = np.array(
@@ -246,7 +248,7 @@ _N1296_R34 = np.array(
         [1, 32, 11, 23, 10, 44, 12, 7, -1, 48, -1, 4, -1, 9, -1, 17, -1, 16, -1, -1, -1, -1, 0, 0],
         [13, 7, 15, 47, 23, 16, 47, -1, 43, -1, 29, -1, 52, -1, 2, -1, 53, -1, 1, -1, -1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 _N1296_R56 = np.array(
@@ -256,7 +258,7 @@ _N1296_R56 = np.array(
         [7, 2, 51, 31, 46, 23, 16, 11, 53, 40, 10, 7, 46, 53, 33, 35, -1, 25, 35, 38, 0, -1, 0, 0],
         [19, 48, 41, 1, 10, 7, 36, 47, 5, 29, 52, 52, 31, 10, 26, 6, 3, 2, -1, 51, 1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 # n=1944, Z=81
@@ -275,7 +277,7 @@ _N1944_R12 = np.array(
         [2, 56, -1, 57, 35, -1, -1, -1, -1, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0],
         [24, -1, 61, -1, 60, -1, -1, 27, 51, -1, -1, 16, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 _N1944_R23 = np.array(
@@ -289,7 +291,7 @@ _N1944_R23 = np.array(
         [12, 0, 68, 20, 55, 61, -1, 40, -1, -1, -1, 52, -1, -1, -1, 44, -1, -1, -1, -1, -1, -1, 0, 0],
         [58, 8, 34, 64, 78, -1, -1, 11, 78, 24, -1, -1, -1, -1, -1, 58, 1, -1, -1, -1, -1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 _N1944_R34 = np.array(
@@ -301,7 +303,7 @@ _N1944_R34 = np.array(
         [3, 62, 7, 80, 68, 26, -1, 80, 55, -1, 36, -1, 26, -1, 9, -1, 72, -1, -1, -1, -1, -1, 0, 0],
         [26, 75, 33, 21, 69, 59, 3, 38, -1, -1, -1, 35, -1, 62, 36, 26, -1, -1, 1, -1, -1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 _N1944_R56 = np.array(
@@ -311,11 +313,11 @@ _N1944_R56 = np.array(
         [51, 15, 0, 80, 24, 25, 42, 54, 44, 71, 71, 9, 67, 35, -1, 58, -1, 29, -1, 53, 0, -1, 0, 0],
         [16, 29, 36, 41, 44, 56, 59, 37, 50, 24, -1, 65, 4, 65, 52, -1, 4, -1, 73, 52, 1, -1, -1, 0],
     ],
-    dtype=int,
+    dtype=np.int32, # Changed to np.int32
 )
 
 
-def get_ldpc_base_matrix(code_rate: CodeRates, n: int) -> np.ndarray:
+def get_ldpc_base_matrix(code_rate: CodeRates, n: int) -> np.ndarray[np.int32, Any]: # Added return type hint
     """Return the base matrix for the given code rate and block length."""
     matrices = {
         648: {
@@ -382,9 +384,9 @@ class LDPCConfig:
 # ---------------------------------------------------------------------------
 # LDPC module-level caches
 # ---------------------------------------------------------------------------
-_h_cache: dict[LDPCConfig, np.ndarray] = {}
-_encoding_cache: dict[LDPCConfig, tuple[np.ndarray, np.ndarray]] = {}
-_decode_cache: dict[LDPCConfig, tuple[sparse.csr_matrix, int, int, np.ndarray, np.ndarray, np.ndarray]] = {}
+_h_cache: dict[LDPCConfig, np.ndarray[np.int32, Any]] = {} # Added dtype to np.ndarray
+_encoding_cache: dict[LDPCConfig, tuple[np.ndarray[np.int32, Any], np.ndarray[np.int32, Any]]] = {} # Added dtype to np.ndarray
+_decode_cache: dict[LDPCConfig, tuple[sparse.csr_matrix, int, int, np.ndarray[np.int32, Any], np.ndarray[np.int64, Any], np.ndarray[np.int64, Any]]] = {} # Added dtype to np.ndarray and np.int64 for check_order, check_bounds
 
 
 # ---------------------------------------------------------------------------
@@ -392,33 +394,33 @@ _decode_cache: dict[LDPCConfig, tuple[sparse.csr_matrix, int, int, np.ndarray, n
 # ---------------------------------------------------------------------------
 
 
-def interleave(bits: np.ndarray, n: int) -> np.ndarray:
+def interleave(bits: np.ndarray, n: int) -> np.ndarray[np.int32, Any]: # Added return type hint
     """Randomly permute bits using a seed derived from the codeword length.
 
     TX and RX produce identical permutations from n alone -- no signaling needed.
     """
     rng = np.random.default_rng(seed=n)
     perm = rng.permutation(len(bits))
-    return bits[perm]
+    return bits[perm].astype(np.int32) # Ensure np.int32
 
 
-def deinterleave(bits: np.ndarray, n: int) -> np.ndarray:
+def deinterleave(bits: np.ndarray, n: int) -> np.ndarray[np.int32, Any]: # Added return type hint
     """Inverse of interleave(): restore original bit order."""
     rng = np.random.default_rng(seed=n)
     perm = rng.permutation(len(bits))
     out = np.empty_like(bits)
     out[perm] = bits
-    return out
+    return out.astype(np.int32) # Ensure np.int32
 
 
-def ldpc_get_supported_payload_lengths(code_rate: CodeRates = CodeRates.HALF_RATE) -> np.ndarray:
+def ldpc_get_supported_payload_lengths(code_rate: CodeRates = CodeRates.HALF_RATE) -> np.ndarray[np.int32, Any]: # Added return type hint
     """Return supported message lengths (k) for LDPC with the given code rate."""
     valid_n = [648, 1296, 1944]
     num, denom = code_rate.rate_fraction
-    return np.array([n * num // denom for n in valid_n])
+    return np.array([n * num // denom for n in valid_n], dtype=np.int32) # Added dtype=np.int32
 
 
-def ldpc_get_h_matrix(config: LDPCConfig) -> np.ndarray:
+def ldpc_get_h_matrix(config: LDPCConfig) -> np.ndarray[np.int32, Any]: # Added return type hint
     """Get (or compute and cache) the full H parity-check matrix."""
     if config not in _h_cache:
         _h_cache[config] = _expand_h(config)
@@ -432,7 +434,7 @@ def ldpc_clear_cache() -> None:
     _decode_cache.clear()
 
 
-def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray:
+def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray[np.int32, Any]: # Added return type hint
     """Encode k-bit message to a n-bit codeword."""
     k = config.k
     if len(message) != k:
@@ -441,7 +443,7 @@ def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray:
 
     g_mat, _ = _get_encoding_structures(config)
     codeword = message @ g_mat % 2
-    return codeword.astype(int)
+    return codeword.astype(np.int32) # Changed to np.int32
 
 
 @_njit
@@ -450,7 +452,7 @@ def _check_node_update(
     c2v: np.ndarray,
     check_order: np.ndarray,
     check_bounds: np.ndarray,
-    alpha: float,
+    alpha: np.float32, # Changed to np.float32
 ) -> None:
     """JIT-compiled check node update (min-sum)."""
     num_checks = len(check_bounds) - 1
@@ -463,16 +465,16 @@ def _check_node_update(
                 c2v[check_order[j]] = 0.0
             continue
 
-        total_sign = 1.0
+        total_sign = np.float32(1.0) # Ensure np.float32
         min1 = np.inf
         min2 = np.inf
         argmin_local = 0
         for j in range(start, end):
             msg = v2c[check_order[j]]
             if msg >= 0:
-                total_sign *= 1.0
+                total_sign *= np.float32(1.0) # Ensure np.float32
             else:
-                total_sign *= -1.0
+                total_sign *= np.float32(-1.0) # Ensure np.float32
             mag = abs(msg)
             if mag < min1:
                 min2 = min1
@@ -483,18 +485,18 @@ def _check_node_update(
 
         for j in range(start, end):
             msg = v2c[check_order[j]]
-            sign = 1.0 if msg >= 0 else -1.0
+            sign = np.float32(1.0) if msg >= 0 else np.float32(-1.0) # Ensure np.float32
             sign_excl = total_sign * sign
             min_excl = min1 if (j - start) != argmin_local else min2
             c2v[check_order[j]] = alpha * sign_excl * min_excl
 
 
 def ldpc_decode(
-    llr_channel: np.ndarray,
+    llr_channel: np.ndarray[np.float32, Any], # Changed to np.float32
     config: LDPCConfig,
     max_iterations: int = 50,
-    alpha: float = 0.75,
-) -> np.ndarray:
+    alpha: np.float32 = np.float32(0.75), # Changed to np.float32
+) -> np.ndarray[np.int32, Any]: # Added return type hint
     """Decode using min-sum belief propagation.
 
     Source: https://en.wikipedia.org/wiki/Low-density_parity-check_code#Message_passing_algorithms
@@ -512,7 +514,7 @@ def ldpc_decode(
     # Message arrays indexed by edge
     v2c = llr[edge_var].copy()
     c2v = np.zeros(num_edges, dtype=np.float32)
-    hard_decision = (llr_channel < 0).astype(int)
+    hard_decision = (llr_channel < 0).astype(np.int32) # Changed to np.int32
 
     for _iteration in range(max_iterations):
         # --- Check node update (min-sum, JIT) ---
@@ -524,7 +526,7 @@ def ldpc_decode(
         v2c[:] = l_total[edge_var] - c2v
 
         # Hard decision + syndrome check (sparse matrix-vector multiply)
-        hard_decision = (l_total < 0).astype(int)
+        hard_decision = (l_total < 0).astype(np.int32) # Changed to np.int32
         syndrome = h_sparse @ hard_decision
         if np.all(syndrome % 2 == 0):
             return hard_decision[:k]
@@ -537,7 +539,7 @@ def ldpc_decode(
 # ---------------------------------------------------------------------------
 
 
-def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray[np.int32, Any], np.ndarray[np.int32, Any]]: # Added return type hint
     """GF(2) Gaussian elimination producing systematic parity-check and generator matrices.
 
     Produces H in the form [P | I_m] so that G = [I_k | P^T], ensuring the first k
@@ -547,7 +549,7 @@ def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     m, n = h.shape
     k = n - m
-    work = np.array(h, dtype=int) % 2
+    work = np.array(h, dtype=np.int32) % 2 # Changed to np.int32
     col_perm = np.arange(n)
 
     for r in range(m):
@@ -577,12 +579,12 @@ def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     # Return original sparse H with columns permuted (not row-reduced work) to preserve
     # the LDPC Tanner graph structure needed for belief propagation decoding.
     P = work[:, :k]
-    g = np.hstack([np.eye(k, dtype=int), P.T])
+    g = np.hstack([np.eye(k, dtype=np.int32), P.T]) # Changed to np.int32
 
     return h[:, col_perm], g.T
 
 
-def _get_encoding_structures(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray]:
+def _get_encoding_structures(config: LDPCConfig) -> tuple[np.ndarray[np.int32, Any], np.ndarray[np.int32, Any]]: # Added return type hint
     """Get or compute the generator matrix G and permuted H matrix."""
     if config in _encoding_cache:
         return _encoding_cache[config]
@@ -592,8 +594,8 @@ def _get_encoding_structures(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray
     h_permuted, g_transposed = _coding_matrix_systematic(h_mat)
     g_mat = g_transposed.T
 
-    g_mat = np.asarray(g_mat, dtype=int)
-    h_permuted = np.asarray(h_permuted, dtype=int)
+    g_mat = np.asarray(g_mat, dtype=np.int32) # Changed to np.int32
+    h_permuted = np.asarray(h_permuted, dtype=np.int32) # Changed to np.int32
 
     _encoding_cache[config] = (g_mat, h_permuted)
     return g_mat, h_permuted
@@ -601,7 +603,7 @@ def _get_encoding_structures(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray
 
 def _get_decode_structures(
     config: LDPCConfig,
-) -> tuple[sparse.csr_matrix, int, int, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[sparse.csr_matrix, int, int, np.ndarray[np.int32, Any], np.ndarray[np.int64, Any], np.ndarray[np.int64, Any]]: # Added return type hint
     """Get cached edge-based structures for BP decoding."""
     if config in _decode_cache:
         return _decode_cache[config]
@@ -621,7 +623,7 @@ def _get_decode_structures(
     return result
 
 
-def _expand_h(config: LDPCConfig) -> np.ndarray:
+def _expand_h(config: LDPCConfig) -> np.ndarray[np.int32, Any]: # Added return type hint
     """Expand base matrix to full H matrix using vectorized circulant placement.
 
     Each entry v >= 0 becomes a Z x Z identity matrix cyclically shifted by v.
@@ -633,7 +635,7 @@ def _expand_h(config: LDPCConfig) -> np.ndarray:
     h_base = get_ldpc_base_matrix(config.code_rate, n)
     num_block_rows, num_block_cols = h_base.shape
 
-    h_mat = np.zeros((num_block_rows * z, num_block_cols * z), dtype=int)
+    h_mat = np.zeros((num_block_rows * z, num_block_cols * z), dtype=np.int32) # Changed to np.int32
 
     bi, bj = np.nonzero(h_base != -1)
     shifts = h_base[bi, bj]
