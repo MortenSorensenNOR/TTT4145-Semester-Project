@@ -12,10 +12,11 @@ extended to other M-PSK schemes.
 import logging
 from dataclasses import dataclass
 
+from matplotlib import figure
 import numpy as np
 import time
 
-from modules.modulation import BPSK, Modulator, QPSK
+from modules.modulation import BPSK, Modulator, QPSK, EightPSK
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,28 @@ def apply_costas_loop(
             corrected_symbols[i] = corrected_sym
             phase_estimates[i] = phase_estimate
 
+    if isinstance(modulator, EightPSK):
+        for i, sym in enumerate(symbols):
+
+            # 1. Phase correction
+            corrected_sym = sym * np.exp(-1j * phase_estimate)
+
+            # 2. 8PSK phase error detector (Mth-power method)
+            error = np.angle(corrected_sym ** 8) / 8.0
+
+            # 3. Loop filter (PI controller)
+            integrator += beta * error
+            proportional = alpha * error
+
+            # 4. Update phase estimate
+            phase_estimate += proportional + integrator
+
+            # 5. Wrap phase
+            phase_estimate = (phase_estimate + np.pi) % (2 * np.pi) - np.pi
+
+            corrected_symbols[i] = corrected_sym
+            phase_estimates[i] = phase_estimate
+
     return corrected_symbols, phase_estimates
 
 
@@ -138,11 +161,11 @@ if __name__ == "__main__":
     import numpy as np
 
     # Test parameters
-    num_symbols = 1000
+    num_symbols = 100
     initial_phase_offset_rad = 0*np.pi / 4  # 45 degrees
 
     costas_config = CostasConfig(loop_noise_bandwidth_normalized=0.05)
-    modulator = BPSK()
+    modulator = EightPSK()
 
 
     # Generate test symbols
@@ -174,7 +197,7 @@ if __name__ == "__main__":
     plt.ylabel("Phase (degrees)")
     plt.grid(visible=True)
     plt.legend()
-    plt.show()
+    plt.savefig("examples/data/phase.png")
 
     # Verify if it converged
     CONVERGENCE_TOLERANCE_DEG = 5
