@@ -67,8 +67,9 @@ def pilot_indices(n_data: int, config: PilotConfig) -> np.ndarray:
 def data_indices(n_data: int, config: PilotConfig) -> np.ndarray:
     """Return the indices of data symbols within the combined stream."""
     n_total = n_total_symbols(n_data, config)
-    p_idx = set(pilot_indices(n_data, config).tolist())
-    return np.array([i for i in range(n_total) if i not in p_idx], dtype=int)
+    p_idx = pilot_indices(n_data, config)
+    d_idx = np.setdiff1d(np.arange(n_total), p_idx, assume_unique=True)
+    return d_idx
 
 
 def pilot_aided_phase_track(
