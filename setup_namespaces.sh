@@ -1,8 +1,9 @@
 #!/bin/bash
 # setup_namespaces.sh — Network namespace helpers for PlutoSDR bridge testing
 #
-# Namespace "ns_a" gets eth1 (192.168.2.x → Pluto A at 192.168.2.1)
-# Namespace "ns_b" gets eth2 (192.168.3.x → Pluto B at 192.168.3.1)
+# Namespace "ns_a" gets the interface on 192.168.2.x (Pluto A at 192.168.2.1)
+# Namespace "ns_b" gets the interface on 192.168.3.x (Pluto B at 192.168.3.1)
+# Interface names are auto-detected by subnet (works with eth1/eth2 and enp*/enx* names)
 #
 # Usage:
 #   sudo ./setup_namespaces.sh setup                  # create namespaces, move interfaces
@@ -17,17 +18,31 @@ set -euo pipefail
 
 NS_A="ns_a"
 NS_B="ns_b"
-ETH_A="eth1"
-ETH_B="eth2"
+ETH_A=""  # auto-detected by subnet at runtime
+ETH_B=""  # auto-detected by subnet at runtime
 PLUTO_A="192.168.2.1"
 PLUTO_B="192.168.3.1"
-UV="$(which uv 2>/dev/null || echo /home/radiotester/.local/bin/uv)"
+UV="$(which uv 2>/dev/null || echo "${SUDO_USER:+/home/$SUDO_USER/.local/bin/uv}")"
+[[ -x "$UV" ]] || UV="/home/radiotester/.local/bin/uv"
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Find the interface that currently holds an IP in the given subnet prefix (e.g. "192.168.2.")
+detect_iface() {
+    local subnet_prefix="$1"
+    ip -o addr show | awk -v pfx="$subnet_prefix" '$4 ~ pfx {print $2; exit}'
+}
+
+# Find the interface inside a namespace by subnet prefix
+detect_iface_in_ns() {
+    local ns="$1" subnet_prefix="$2"
+    ip netns exec "$ns" ip -o addr show 2>/dev/null | awk -v pfx="$subnet_prefix" '$4 ~ pfx {print $2; exit}'
+}
+
 # Run a command inside a namespace, from the project directory
+# Preserves HOME so uv can find its virtualenv/cache
 ns_exec() {
     local ns="$1"; shift
-    ip netns exec "$ns" bash -c "cd $PROJECT_DIR && $*"
+    ip netns exec "$ns" bash -c "cd $PROJECT_DIR && HOME=${SUDO_USER:+/home/$SUDO_USER} $*"
 }
 
 # Run a python module inside a namespace
@@ -37,6 +52,14 @@ ns_python() {
 }
 
 setup() {
+    echo "=== Detecting interfaces ==="
+    ETH_A=$(detect_iface "192.168.2\.")
+    ETH_B=$(detect_iface "192.168.3\.")
+    [[ -n "$ETH_A" ]] || { echo "ERROR: no interface found on 192.168.2.x (Pluto A subnet)"; exit 1; }
+    [[ -n "$ETH_B" ]] || { echo "ERROR: no interface found on 192.168.3.x (Pluto B subnet)"; exit 1; }
+    echo "  Pluto A interface: $ETH_A (192.168.2.x)"
+    echo "  Pluto B interface: $ETH_B (192.168.3.x)"
+
     echo "=== Creating network namespaces ==="
 
     ip netns add "$NS_A" 2>/dev/null || echo "  $NS_A already exists"
@@ -49,12 +72,12 @@ setup() {
     ip link set "$ETH_B" netns "$NS_B"
 
     echo "  Configuring $ETH_A in $NS_A"
-    ip netns exec "$NS_A" ip addr add 192.168.2.10/24 dev "$ETH_A"
+    ip netns exec "$NS_A" ip addr add 192.168.2.10/24 dev "$ETH_A" 2>/dev/null || true
     ip netns exec "$NS_A" ip link set "$ETH_A" up
     ip netns exec "$NS_A" ip link set lo up
 
     echo "  Configuring $ETH_B in $NS_B"
-    ip netns exec "$NS_B" ip addr add 192.168.3.10/24 dev "$ETH_B"
+    ip netns exec "$NS_B" ip addr add 192.168.3.10/24 dev "$ETH_B" 2>/dev/null || true
     ip netns exec "$NS_B" ip link set "$ETH_B" up
     ip netns exec "$NS_B" ip link set lo up
 
@@ -71,12 +94,16 @@ setup() {
 
 teardown() {
     echo "=== Tearing down namespaces ==="
-    ip netns exec "$NS_A" ip link set "$ETH_A" netns 1 2>/dev/null || true
-    ip netns exec "$NS_B" ip link set "$ETH_B" netns 1 2>/dev/null || true
+    # Detect interface names from inside the namespaces (they were moved there during setup)
+    ETH_A=$(detect_iface_in_ns "$NS_A" "192.168.2\.")
+    ETH_B=$(detect_iface_in_ns "$NS_B" "192.168.3\.")
+    # Move interfaces back to default namespace (pid 1) before deleting namespaces
+    [[ -n "$ETH_A" ]] && ip netns exec "$NS_A" ip link set "$ETH_A" netns 1 2>/dev/null || true
+    [[ -n "$ETH_B" ]] && ip netns exec "$NS_B" ip link set "$ETH_B" netns 1 2>/dev/null || true
     ip netns del "$NS_A" 2>/dev/null || true
     ip netns del "$NS_B" 2>/dev/null || true
-    ip link set "$ETH_A" up 2>/dev/null || true
-    ip link set "$ETH_B" up 2>/dev/null || true
+    [[ -n "$ETH_A" ]] && ip link set "$ETH_A" up 2>/dev/null || true
+    [[ -n "$ETH_B" ]] && ip link set "$ETH_B" up 2>/dev/null || true
     echo "  Done. May need to restart NetworkManager/dhclient for DHCP."
 }
 
