@@ -27,7 +27,10 @@ N_PAYLOAD_SYMBOLS = 200
 
 
 def run_sync_test(
-    sdr: adi.Pluto, h_rrc: np.ndarray, sync: Synchronizer, injected_cfo: float = 0,
+    sdr: adi.Pluto,
+    h_rrc: np.ndarray,
+    sync: Synchronizer,
+    injected_cfo: float = 0,
 ) -> dict:
     """Run a single sync test and return results."""
     rng = np.random.default_rng()
@@ -108,7 +111,10 @@ def plot_sync_result(result: dict, title: str) -> "Figure":
 
 
 def test_with_cfo_offset(
-    tx_lo: int, rx_lo: int, h_rrc: np.ndarray, sync: Synchronizer,
+    tx_lo: int,
+    rx_lo: int,
+    h_rrc: np.ndarray,
+    sync: Synchronizer,
 ) -> dict:
     """Test synchronization with specific TX/RX LO settings."""
     injected_cfo = tx_lo - rx_lo  # CFO as seen by receiver

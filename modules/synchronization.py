@@ -36,11 +36,12 @@ def generate_zadoff_chu(u: int = 7, n_zc: int = 61) -> np.ndarray:
 @dataclass
 class SynchronizerConfig:
     """Configuration for the synchronizer."""
+
     n_short: int = 19
     n_long: int = 139
     zc_root: int = 7
     n_short_reps: int = 8
-    peak_threshold: float = 0.5       # relative threshold for finding repeat peaks
+    peak_threshold: float = 0.5  # relative threshold for finding repeat peaks
     detection_threshold: float = 0.5  # absolute normalized threshold (noise ~0.05-0.1, signal ~0.5-1.0)
     peak_margin_factor: int = 2
     long_margin_factor: int = 5
@@ -112,6 +113,75 @@ class Synchronizer:
         """Return the short ZC correlation template."""
         return self._template_short
 
+    def _find_short_peaks(
+        self,
+        corr_mag: np.ndarray,
+        global_max_idx: int,
+    ) -> list[int]:
+        """Find correlation peaks of all repeated short ZC sequences."""
+        sps = self.sps
+        n_short_samples = self.config.n_short * sps
+        peak_margin = self.config.peak_margin_factor * sps
+
+        # Walk backwards from global max to find first peak
+        current_idx = global_max_idx
+        while current_idx >= n_short_samples:
+            search_start = current_idx - n_short_samples - peak_margin
+            search_end = current_idx - n_short_samples + peak_margin + 1
+            if search_start < 0:
+                break
+            prev_region = corr_mag[search_start:search_end]
+            threshold = self.config.peak_threshold * corr_mag[global_max_idx]
+            if len(prev_region) > 0 and np.max(prev_region) > threshold:
+                current_idx = search_start + np.argmax(prev_region)
+            else:
+                break
+
+        # Walk forward from first peak to collect the rest
+        peak_indices = [current_idx]
+        for _i in range(1, self.config.n_short_reps):
+            search_start = peak_indices[-1] + n_short_samples - peak_margin
+            search_end = min(
+                len(corr_mag),
+                peak_indices[-1] + n_short_samples + peak_margin + 1,
+            )
+            if search_end <= search_start:
+                break
+            region = corr_mag[search_start:search_end]
+            peak_indices.append(search_start + np.argmax(region))
+
+        return peak_indices
+
+    def _fine_timing(
+        self,
+        rx: np.ndarray,
+        d_hat: int,
+        cfo_hat_norm: float,
+    ) -> int | None:
+        """Refine timing by CFO-correcting and correlating the long ZC region."""
+        sps = self.sps
+        n_short_samples = self.config.n_short * sps
+        long_margin = self.config.long_margin_factor * sps
+        expected_long_start = d_hat + self.config.n_short_reps * n_short_samples
+        template_len = len(self._template_long)
+
+        region_start = max(expected_long_start - long_margin, 0)
+        region_end = min(
+            len(rx),
+            expected_long_start + 2 * long_margin + template_len,
+        )
+
+        if region_end - region_start < template_len:
+            return None
+
+        n_region = np.arange(region_start, region_end)
+        rx_region = rx[region_start:region_end] * np.exp(
+            -1j * 2 * np.pi * cfo_hat_norm * n_region,
+        )
+
+        corr_region = np.correlate(rx_region, self._template_long, mode="valid")
+        return region_start + int(np.argmax(np.abs(corr_region)))
+
     def detect_preamble(self, rx: np.ndarray, sample_rate: float) -> SynchronizationResult:
         """Detect preamble and estimate CFO and timing.
 
@@ -125,95 +195,55 @@ class Synchronizer:
         """
         sps = self.sps
         n_short_samples = self.config.n_short * sps
-        peak_margin = self.config.peak_margin_factor * sps
 
         corr_short = self._matched_filter(rx, self._template_short)
         corr_mag = np.abs(corr_short)
         if len(corr_mag) == 0:
             return SynchronizationResult(success=False)
 
-        # Absolute detection threshold 
         # Normalize by template energy and local signal energy.
-        # A real preamble produces a peak near 1.0; noise stays well below.
         template_energy = np.sum(np.abs(self._template_short) ** 2)
         n_template = len(self._template_short)
-        # Sliding window signal energy (approximate with block average)
         local_energy = np.convolve(np.abs(rx) ** 2, np.ones(n_template), mode="same")
-        local_energy = np.maximum(local_energy, 1e-12)  # avoid division by zero
-        corr_normalized = corr_mag / np.sqrt(template_energy * local_energy[:len(corr_mag)])
+        local_energy = np.maximum(local_energy, 1e-12)
+        corr_normalized = corr_mag / np.sqrt(
+            template_energy * local_energy[: len(corr_mag)],
+        )
 
         global_max_idx = np.argmax(corr_mag)
         if corr_normalized[global_max_idx] < self.config.detection_threshold:
             return SynchronizationResult(success=False, reason="Below detection threshold")
 
-
-        # find the peaks of all the repetitions of zc_short
-        peak_indices = []
-        current_idx = global_max_idx
-        while current_idx >= n_short_samples:
-            search_start = current_idx - n_short_samples - peak_margin
-            search_end = current_idx - n_short_samples + peak_margin + 1
-            if search_start < 0:
-                break
-            prev_region = corr_mag[search_start:search_end]
-            if len(prev_region) > 0 and np.max(prev_region) > self.config.peak_threshold * corr_mag[global_max_idx]:
-                current_idx = search_start + np.argmax(prev_region)
-            else:
-                break
-
-        # current_idx should now be at the first zc_short -> find the rest going forward
-        first_peak_idx = current_idx
-        peak_indices = [first_peak_idx]
-        for _i in range(1, self.config.n_short_reps):
-            search_start = peak_indices[-1] + n_short_samples - peak_margin
-            search_end = min(len(corr_mag), peak_indices[-1] + n_short_samples + peak_margin + 1)
-            if search_end <= search_start:
-                break
-            region = corr_mag[search_start:search_end]
-            next_peak = search_start + np.argmax(region)
-            peak_indices.append(next_peak)
+        peak_indices = self._find_short_peaks(corr_mag, global_max_idx)
 
         min_peaks = 2
         if len(peak_indices) < min_peaks:
             return SynchronizationResult(success=False, reason="Couldn't find enough ZC peaks")
 
-        # CFO estimation
+        # CFO estimation via phase rotation between consecutive peaks
         phase_diffs = []
         for i in range(len(peak_indices) - 1):
             p1 = corr_short[peak_indices[i]]
             p2 = corr_short[peak_indices[i + 1]]
             phase_diffs.append(np.angle(p2 * np.conj(p1)))
 
-        # average the phase differences
         avg_phase_diff = np.mean(phase_diffs)
         cfo_hat = float(avg_phase_diff / (2 * np.pi * n_short_samples) * sample_rate)
-
-        # coarse timing estimate
         d_hat = peak_indices[0]
 
-        # Fine timing: CFO-correct and correlate only the expected long-ZC region
         cfo_hat_norm = avg_phase_diff / (2 * np.pi * n_short_samples)
-        long_margin = self.config.long_margin_factor * sps
-        expected_long_start = d_hat + self.config.n_short_reps * n_short_samples
-        template_len = len(self._template_long)
-
-        region_start = max(expected_long_start - long_margin, 0)
-        region_end = min(len(rx), expected_long_start + 2 * long_margin + template_len)
-
-        if region_end - region_start < template_len:
-            return SynchronizationResult(success=False, reason="Not enough samples for fine timing")
-
-        n_region = np.arange(region_start, region_end)
-        rx_region = rx[region_start:region_end] * np.exp(-1j * 2 * np.pi * cfo_hat_norm * n_region)
-
-        corr_region = np.correlate(rx_region, self._template_long, mode="valid")
-        long_zc_start = region_start + np.argmax(np.abs(corr_region))
+        long_zc_start = self._fine_timing(rx, d_hat, cfo_hat_norm)
+        if long_zc_start is None:
+            return SynchronizationResult(
+                success=False,
+                reason="Not enough samples for fine timing",
+            )
 
         return SynchronizationResult(
             success=True,
             d_hat=int(d_hat),
             cfo_hat_hz=cfo_hat,
-            long_zc_start=int(long_zc_start),
+            long_zc_start=long_zc_start,
             peak_indices=[int(p) for p in peak_indices],
             n_phase_diffs=len(phase_diffs),
         )

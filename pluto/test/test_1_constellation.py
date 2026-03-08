@@ -49,7 +49,9 @@ def normalize_and_extract(rx_filtered: np.ndarray, n_symbols: int, sps: int) -> 
 
 
 def test_constellation(
-    modulator: BPSK | QPSK | QAM, h_rrc: np.ndarray, sdr: adi.Pluto,
+    modulator: BPSK | QPSK | QAM,
+    h_rrc: np.ndarray,
+    sdr: adi.Pluto,
 ) -> tuple[np.ndarray, float]:
     """Test a single modulation scheme and return (rx_symbols, evm)."""
     rng = np.random.default_rng()

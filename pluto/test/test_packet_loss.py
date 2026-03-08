@@ -32,25 +32,22 @@ from enum import Enum, auto
 
 import numpy as np
 
-from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
-from modules.util import bytes_to_bits, text_to_bits
+from modules.frame_constructor import FrameConstructor
+from modules.pilots import n_total_symbols
+from modules.util import bytes_to_bits
 from pluto import create_pluto
 from pluto.config import (
     CENTER_FREQ,
     CODING_RATE,
     DAC_SCALE,
-    DEFAULT_TX_GAIN,
     MOD_SCHEME,
-    NODE_DST,
-    NODE_SRC,
-    PIPELINE,
     SAMPLE_RATE,
     configure_rx,
     configure_tx,
     get_modulator,
 )
-from pluto.decode import FrameDecoder, FrameResult, _HEADER_BPSK, create_decoder
-from pluto.receive import _MatchedFilter, _RxBuffer, run_receiver
+from pluto.decode import FrameDecoder, FrameResult, create_decoder
+from pluto.receive import run_receiver
 from pluto.transmit import build_tx_signal_from_bits, max_payload_bits
 
 logger = logging.getLogger(__name__)
@@ -106,9 +103,10 @@ class DecodeAttempt:
 
 
 class InstrumentedDecoder:
-    """Wraps FrameDecoder to report *why* decoding failed, not just None."""
+    """Wrap FrameDecoder to report *why* decoding failed, not just None."""
 
     def __init__(self, decoder: FrameDecoder) -> None:
+        """Initialize with a FrameDecoder to instrument."""
         self.decoder = decoder
         self.sync = decoder.sync
         self.pipeline = decoder.pipeline
@@ -120,6 +118,7 @@ class InstrumentedDecoder:
 
     @property
     def rrc_taps(self) -> np.ndarray | None:
+        """Return RRC filter taps from the wrapped decoder."""
         return self.decoder.rrc_taps
 
     def try_decode(
@@ -134,35 +133,37 @@ class InstrumentedDecoder:
 
         samples_from_zc = rx_filtered[detection.long_zc_start :]
         global_start = global_sample_offset + detection.long_zc_start
-        symbols = self.decoder._recover_symbols(samples_from_zc, detection.cfo_hat_hz, global_start)
+        symbols = self.decoder.recover_symbols(samples_from_zc, detection.cfo_hat_hz, global_start)
 
         if len(symbols) < self.header_n_symbols:
             return DecodeAttempt(DecodeStage.INSUFFICIENT_SYMBOLS, cfo_hz=detection.cfo_hat_hz)
 
-        header, header_final_phase = self.decoder._demodulate_header(symbols)
+        header, header_final_phase = self.decoder.demodulate_header(symbols)
         if header is None:
             return DecodeAttempt(DecodeStage.HEADER_CRC_FAIL, cfo_hz=detection.cfo_hat_hz)
 
         try:
             modulator = get_modulator(header.mod_scheme)
             n_coded = self.frame_constructor.payload_coded_n_bits(
-                header, channel_coding=self.pipeline.channel_coding
+                header,
+                channel_coding=self.pipeline.channel_coding,
             )
         except ValueError:
             return DecodeAttempt(DecodeStage.INVALID_HEADER, cfo_hz=detection.cfo_hat_hz)
 
-        from modules.pilots import n_total_symbols
-
         n_data_symbols = n_coded // modulator.bits_per_symbol
-        n_total_payload = (
-            n_total_symbols(n_data_symbols, self.pilot_config) if self.pipeline.pilots else n_data_symbols
-        )
+        n_total_payload = n_total_symbols(n_data_symbols, self.pilot_config) if self.pipeline.pilots else n_data_symbols
 
         if len(symbols) < self.header_n_symbols + n_total_payload:
             return DecodeAttempt(DecodeStage.INSUFFICIENT_PAYLOAD, cfo_hz=detection.cfo_hat_hz)
 
-        payload_bits = self.decoder._decode_payload(
-            symbols, header, modulator, n_data_symbols, n_total_payload, header_final_phase
+        payload_bits = self.decoder.decode_payload(
+            symbols,
+            header,
+            modulator,
+            n_data_symbols,
+            n_total_payload,
+            header_final_phase,
         )
 
         # Compute consumed samples for buffer advancement
@@ -192,6 +193,15 @@ class InstrumentedDecoder:
 
 # ── RX stats tracking ─────────────────────────────────────────────────────
 
+_STAGE_COUNTER_MAP: dict[DecodeStage, str] = {
+    DecodeStage.HEADER_CRC_FAIL: "header_fail",
+    DecodeStage.PAYLOAD_CRC_FAIL: "payload_fail",
+    DecodeStage.NO_PREAMBLE: "no_preamble_chunks",
+    DecodeStage.INSUFFICIENT_SYMBOLS: "insufficient_symbols",
+    DecodeStage.INVALID_HEADER: "invalid_header",
+    DecodeStage.INSUFFICIENT_PAYLOAD: "insufficient_payload",
+}
+
 
 @dataclass
 class RxStats:
@@ -210,6 +220,7 @@ class RxStats:
     cfo_values: list[float] = field(default_factory=list)
 
     def record(self, attempt: DecodeAttempt) -> None:
+        """Record a decode attempt and update stage counters."""
         stage = attempt.stage
         if attempt.cfo_hz is not None:
             self.cfo_values.append(attempt.cfo_hz)
@@ -221,18 +232,9 @@ class RxStats:
                 if seq is not None:
                     self.received_seqs.add(seq)
                     self.max_seq_seen = max(self.max_seq_seen, seq)
-        elif stage == DecodeStage.HEADER_CRC_FAIL:
-            self.header_fail += 1
-        elif stage == DecodeStage.PAYLOAD_CRC_FAIL:
-            self.payload_fail += 1
-        elif stage == DecodeStage.NO_PREAMBLE:
-            self.no_preamble_chunks += 1
-        elif stage == DecodeStage.INSUFFICIENT_SYMBOLS:
-            self.insufficient_symbols += 1
-        elif stage == DecodeStage.INVALID_HEADER:
-            self.invalid_header += 1
-        elif stage == DecodeStage.INSUFFICIENT_PAYLOAD:
-            self.insufficient_payload += 1
+        elif stage in _STAGE_COUNTER_MAP:
+            attr = _STAGE_COUNTER_MAP[stage]
+            setattr(self, attr, getattr(self, attr) + 1)
 
     @property
     def detected(self) -> int:
@@ -241,9 +243,11 @@ class RxStats:
 
     @property
     def elapsed(self) -> float:
+        """Return seconds elapsed since stats were created."""
         return time.time() - self.start_time
 
     def report(self) -> str:
+        """Generate a human-readable packet loss report."""
         lines = [
             "",
             "=" * 60,
@@ -266,7 +270,7 @@ class RxStats:
             not_detected = max(0, not_detected)  # floor at 0
 
             lines += [
-                f"  Sequence numbers seen:      0–{self.max_seq_seen} ({expected} expected)",
+                f"  Sequence numbers seen:      0-{self.max_seq_seen} ({expected} expected)",
                 f"    → Received unique:        {len(self.received_seqs)}",
                 f"    → Missing (total):        {missed}",
                 f"    → Est. not detected:      {not_detected}",
@@ -274,11 +278,15 @@ class RxStats:
             ]
 
             if expected > 0:
+                psr = len(self.received_seqs) / expected * 100
+                dr = self.detected / expected * 100
+                hdr = (self.detected - self.header_fail) / max(1, self.detected) * 100
+                pldr = self.success / max(1, self.detected - self.header_fail) * 100
                 lines += [
-                    f"  Packet success rate:        {len(self.received_seqs)/expected*100:.1f}%",
-                    f"  Detection rate:             {self.detected/expected*100:.1f}%  (of expected)",
-                    f"  Header decode rate:         {(self.detected - self.header_fail)/max(1,self.detected)*100:.1f}%  (of detected)",
-                    f"  Payload decode rate:        {self.success/max(1,self.detected - self.header_fail)*100:.1f}%  (of header OK)",
+                    f"  Packet success rate:        {psr:.1f}%",
+                    f"  Detection rate:             {dr:.1f}%  (of expected)",
+                    f"  Header decode rate:         {hdr:.1f}%  (of detected)",
+                    f"  Payload decode rate:        {pldr:.1f}%  (of header OK)",
                     "",
                 ]
 
@@ -341,7 +349,10 @@ def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
 
     logger.info(
         "TX: %d packets, %.0fms interval, %.1fs total (gain=%.0f dB)",
-        count, interval * 1000, total_duration, tx_gain,
+        count,
+        interval * 1000,
+        total_duration,
+        tx_gain,
     )
 
     sdr.tx(tx_buffer)
@@ -357,7 +368,8 @@ def run_tx(pluto_ip: str, tx_gain: float, interval: float, count: int) -> None:
 # ── RX mode ───────────────────────────────────────────────────────────────
 
 
-def run_rx(pluto_ip: str, cfo_offset: int, duration: float | None) -> None:
+def run_rx(pluto_ip: str, cfo_offset: int) -> None:
+    """Listen for numbered packets and log decoded sequence numbers."""
     sdr = create_pluto(f"ip:{pluto_ip}")
     rx_freq = CENTER_FREQ + cfo_offset
     configure_rx(sdr, freq=rx_freq)
@@ -370,10 +382,12 @@ def run_rx(pluto_ip: str, cfo_offset: int, duration: float | None) -> None:
     logger.info("RX: listening on %.0f Hz (CFO offset %+d Hz)...", rx_freq, cfo_offset)
     run_receiver(sdr, decoder, on_frame)
 
+
 # ── CLI ───────────────────────────────────────────────────────────────────
 
 
 def main() -> None:
+    """Parse CLI arguments and run TX or RX mode."""
     parser = argparse.ArgumentParser(description="Packet loss diagnostic tool")
     sub = parser.add_subparsers(dest="mode", required=True)
 
@@ -386,7 +400,12 @@ def main() -> None:
     rx_parser = sub.add_parser("rx", help="Receive and classify packets")
     rx_parser.add_argument("--pluto-ip", default="192.168.2.1")
     rx_parser.add_argument("--cfo-offset", type=int, default=0, help="RX CFO offset in Hz")
-    rx_parser.add_argument("--duration", type=float, default=None, help="Stop after N seconds (default: run until Ctrl-C)")
+    rx_parser.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help="Stop after N seconds (default: run until Ctrl-C)",
+    )
 
     args = parser.parse_args()
 
@@ -395,7 +414,7 @@ def main() -> None:
     if args.mode == "tx":
         run_tx(args.pluto_ip, args.tx_gain, args.interval, args.count)
     else:
-        run_rx(args.pluto_ip, args.cfo_offset, args.duration)
+        run_rx(args.pluto_ip, args.cfo_offset)
 
 
 if __name__ == "__main__":

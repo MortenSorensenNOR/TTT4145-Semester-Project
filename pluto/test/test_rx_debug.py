@@ -38,7 +38,6 @@ def main() -> None:
 
     sdr.rx()  # flush
 
-
     try:
         while True:
             samples = sdr.rx()
@@ -62,7 +61,6 @@ def main() -> None:
                 sig_power = np.mean(np.abs(filtered[: short_len * 4]) ** 2)
                 ref_power = np.mean(np.abs(np.repeat(short_zc, SPS)) ** 2)
                 max_corr / (np.sqrt(sig_power * ref_power) * len(short_zc) * SPS + 1e-12)
-
 
                 if result.success:
                     pass

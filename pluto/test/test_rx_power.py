@@ -26,7 +26,6 @@ def main() -> None:
 
     sdr.rx()  # flush stale buffer
 
-
     try:
         while True:
             samples = sdr.rx()

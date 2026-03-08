@@ -155,6 +155,7 @@ class QPSK(_ModulatorBase):
 
         return np.column_stack([llr_bit0, llr_bit1])
 
+
 class EightPSK(_ModulatorBase):
     """8 Phase Shift Keying modulation (Gray-coded).
 
@@ -163,24 +164,26 @@ class EightPSK(_ModulatorBase):
 
     def __init__(self) -> None:
         """Initialize QPSK modulation scheme."""
-        # Gray-coded 8-PSK: 000 -> -1-1j, 001 -> -1+0j, 011 -> -1+1j, 010 0+1j, 110 -> +1+1j, 111 -> 1+0j, 101 -> 1-1j, 100 -> 0-1j
+        # Gray-coded 8-PSK constellation
         self.qam_order = 8
         self.bits_per_symbol = 3
 
-        # Gray-coded 8-PSK: 000 -> -1-1j, 001 -> -1+0j, 011 -> -1+1j, 010 0+1j, 110 -> +1+1j, 111 -> 1+0j, 101 -> 1-1j, 100 -> 0-1j
-        symbols = np.exp(1j * np.arange(self.qam_order) * np.pi / 4) # Angles 0, pi/4, pi/2, ...
+        # Gray-coded 8-PSK constellation points
+        symbols = np.exp(1j * np.arange(self.qam_order) * np.pi / 4)  # Angles 0, pi/4, pi/2, ...
         # Custom bit assignment as per user request
-        bit_mapping = np.array([
-            [1, 1, 1],  # Index 0 (0 deg)
-            [1, 1, 0],  # Index 1 (45 deg)
-            [0, 1, 0],  # Index 2 (90 deg)
-            [0, 1, 1],  # Index 3 (135 deg)
-            [0, 0, 1],  # Index 4 (180 deg)
-            [0, 0, 0],  # Index 5 (225 deg)
-            [1, 0, 0],  # Index 6 (270 deg)
-            [1, 0, 1]   # Index 7 (315 deg)
-        ])
-        
+        bit_mapping = np.array(
+            [
+                [1, 1, 1],  # Index 0 (0 deg)
+                [1, 1, 0],  # Index 1 (45 deg)
+                [0, 1, 0],  # Index 2 (90 deg)
+                [0, 1, 1],  # Index 3 (135 deg)
+                [0, 0, 1],  # Index 4 (180 deg)
+                [0, 0, 0],  # Index 5 (225 deg)
+                [1, 0, 0],  # Index 6 (270 deg)
+                [1, 0, 1],  # Index 7 (315 deg)
+            ],
+        )
+
         # Sort by bit-pattern index so symbol_mapping[i] corresponds to bit pattern i
         bit_pattern_to_index = np.sum(
             bit_mapping * 2 ** np.arange(self.bits_per_symbol - 1, -1, -1),
@@ -190,7 +193,6 @@ class EightPSK(_ModulatorBase):
 
         self.bit_mapping = bit_mapping[np.argsort(bit_pattern_to_index), :]
         self.symbol_mapping = symbols[np.argsort(bit_pattern_to_index)]
-
 
     def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
         """Convert bit stream to 8-PSK symbols."""
@@ -207,7 +209,7 @@ class EightPSK(_ModulatorBase):
                 dtype=int,
             )
         ]
-    
+
     def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
         """Convert 8-PSK symbols to hard-decision bits."""
         if len(symbols) == 0:
@@ -249,7 +251,6 @@ class EightPSK(_ModulatorBase):
             llrs[:, bit_idx] = (min_dist_one - min_dist_zero) / sigma_sq
 
         return llrs
-
 
 
 class QAM(_ModulatorBase):

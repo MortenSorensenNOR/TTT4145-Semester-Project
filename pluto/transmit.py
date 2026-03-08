@@ -4,9 +4,9 @@ Pipeline: payload bits -> frame encode -> modulate -> preamble + frame -> pulse 
 """
 
 import logging
+import time
 
 import numpy as np
-import time
 
 from modules.channel_coding import CodeRates, ldpc_get_supported_payload_lengths
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
@@ -144,10 +144,10 @@ if __name__ == "__main__":
     # ── Transmit ──────────────────────────────────────────────────────
     try:
         while True:
-            for i in range(PACKETS_PER_SECOND):
+            for _i in range(PACKETS_PER_SECOND):
                 start = time.perf_counter()
                 sdr.tx(samples)
-                time.sleep(1/PACKETS_PER_SECOND)
+                time.sleep(1 / PACKETS_PER_SECOND)
 
     except KeyboardInterrupt:
         sdr.tx_destroy_buffer()

@@ -91,7 +91,6 @@ class TimingReport:
             logger.info("%s %s %.1f%% (%.2f ms)", name, bar, pct, entry.duration_ms)
 
 
-
 @contextmanager
 def timed_section(report: TimingReport, name: str) -> Generator[None]:
     """Context manager for timing a code section and adding to report."""
@@ -104,7 +103,10 @@ def timed_section(report: TimingReport, name: str) -> Generator[None]:
 
 
 def time_function(
-    func: Callable[..., object], *args: object, iterations: int = 1, **kwargs: object,
+    func: Callable[..., object],
+    *args: object,
+    iterations: int = 1,
+    **kwargs: object,
 ) -> tuple[float, object]:
     """Time a function call and return duration in milliseconds."""
     start = time.perf_counter()
@@ -210,7 +212,10 @@ class TestComponentTiming:
         report.print(sort_by_duration=False)
 
     def test_synchronization_timing(
-        self, synchronizer: Synchronizer, rrc_taps: np.ndarray, rng: np.random.Generator,
+        self,
+        synchronizer: Synchronizer,
+        rrc_taps: np.ndarray,
+        rng: np.random.Generator,
     ) -> None:
         """Time preamble detection."""
         report = TimingReport("SYNCHRONIZATION TIMING")
@@ -477,8 +482,11 @@ class TestPipelineTiming:
         report.print()
 
     def test_full_rx_pipeline(
-        self, rng: np.random.Generator, rrc_taps: np.ndarray,
-        pilot_config: PilotConfig, synchronizer: Synchronizer,
+        self,
+        rng: np.random.Generator,
+        rrc_taps: np.ndarray,
+        pilot_config: PilotConfig,
+        synchronizer: Synchronizer,
     ) -> None:
         """Time step-by-step RX breakdown (mirrors pluto/receive.py)."""
         report = TimingReport("RX PIPELINE TIMING BREAKDOWN")
@@ -567,8 +575,11 @@ class TestPipelineTiming:
         report.print()
 
     def test_tx_vs_rx_comparison(
-        self, rng: np.random.Generator, rrc_taps: np.ndarray,
-        pilot_config: PilotConfig, synchronizer: Synchronizer,
+        self,
+        rng: np.random.Generator,
+        rrc_taps: np.ndarray,
+        pilot_config: PilotConfig,
+        synchronizer: Synchronizer,
     ) -> None:
         """Compare TX and RX timing to show asymmetry."""
         k = 324
@@ -619,7 +630,6 @@ class TestPipelineTiming:
         ldpc_decode(llrs_flat[: ldpc_config.n], ldpc_config, max_iterations=50)
         rx_elapsed_ms = (time.perf_counter() - rx_start) * 1000
         logger.info("RX elapsed: %.2f ms", rx_elapsed_ms)
-
 
 
 # ============================================================================
@@ -743,7 +753,10 @@ class TestScalingBehavior:
         report.print(sort_by_duration=False)
 
     def test_synchronizer_signal_length_scaling(
-        self, synchronizer: Synchronizer, rrc_taps: np.ndarray, rng: np.random.Generator,
+        self,
+        synchronizer: Synchronizer,
+        rrc_taps: np.ndarray,
+        rng: np.random.Generator,
     ) -> None:
         """Time synchronization vs signal length."""
         report = TimingReport("SYNCHRONIZATION SCALING (signal length)")
@@ -836,7 +849,6 @@ class TestMemoryUsage:
             (1620, CodeRates.FIVE_SIXTH_RATE),
         ]
 
-
         total_h = 0
         total_encoding = 0
         total_decode = 0
@@ -888,8 +900,11 @@ class TestPerformanceSummary:
     """Generate a summary of all component timings."""
 
     def test_all_components_summary(
-        self, rng: np.random.Generator, rrc_taps: np.ndarray,
-        pilot_config: PilotConfig, synchronizer: Synchronizer,
+        self,
+        rng: np.random.Generator,
+        rrc_taps: np.ndarray,
+        pilot_config: PilotConfig,
+        synchronizer: Synchronizer,
     ) -> None:
         """Quick summary of all major components."""
         report = TimingReport("ALL COMPONENTS SUMMARY (single run)")

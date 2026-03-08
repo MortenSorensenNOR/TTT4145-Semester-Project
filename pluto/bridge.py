@@ -169,7 +169,7 @@ def tx_thread(tun_fd: int, sdr: adi.Pluto, mtu: int, tx_buffer_len: int) -> None
             # Pad to fixed buffer length
             samples = np.zeros(tx_buffer_len, dtype=complex)
             samples[: len(tx_signal)] = tx_signal * DAC_SCALE
-            sdr.tx(samples)  # type: ignore[union-attr]
+            sdr.tx(samples)
             logger.info("TX: %d bytes", len(packet))
         except Exception:
             logger.exception("TX: failed to transmit packet")
@@ -197,7 +197,7 @@ def rx_thread_bridge(tun_fd: int, sdr: adi.Pluto) -> None:
             logger.exception("RX: TUN write failed")
 
     logger.info("RX thread started")
-    run_receiver(sdr, decoder, on_frame)  # type: ignore[arg-type]
+    run_receiver(sdr, decoder, on_frame)
 
 
 def main() -> None:
@@ -207,7 +207,10 @@ def main() -> None:
     parser.add_argument("--tun", default="pluto0", help="TUN device name (default: pluto0)")
     parser.add_argument("--tx-gain", type=float, default=DEFAULT_TX_GAIN, help="TX gain in dB (default: %(default)s)")
     parser.add_argument(
-        "--rx-cfo-offset", type=int, default=0, help="RX CFO offset in Hz (use test_measure_cfo.py to measure)",
+        "--rx-cfo-offset",
+        type=int,
+        default=0,
+        help="RX CFO offset in Hz (use test_measure_cfo.py to measure)",
     )
     parser.add_argument("--pluto-ip", default="192.168.2.1", help="PlutoSDR IP address (default: %(default)s)")
     args = parser.parse_args()
@@ -229,7 +232,12 @@ def main() -> None:
     # Compute TX buffer size from max-size frame (PlutoSDR requires constant buffer size)
     frame_constructor = FrameConstructor()
     max_bits = max_payload_bits(CODING_RATE)
-    max_signal = build_tx_signal_from_bits(np.zeros(max_bits, dtype=np.uint8), frame_constructor, MOD_SCHEME, CODING_RATE)
+    max_signal = build_tx_signal_from_bits(
+        np.zeros(max_bits, dtype=np.uint8),
+        frame_constructor,
+        MOD_SCHEME,
+        CODING_RATE,
+    )
     tx_buffer_len = len(max_signal)
     sdr.tx_buffer_size = tx_buffer_len
 

@@ -117,7 +117,6 @@ class TestQPSK:
             np.testing.assert_array_less(hamming_dist, QPSK_ORDER - 1)
 
 
-
 class TestEightPSK:
     """Validate EightPSK hard-decision modulation and demodulation."""
 
@@ -241,8 +240,6 @@ class TestEightPSKSoftDecision:
                     np.testing.assert_array_less(0.0, llr_value)
                 else:
                     np.testing.assert_array_less(llr_value, 0.0)
-
-
 
     def test_llr_symmetric_around_origin(self, eight_psk: EightPSK) -> None:
         """Verify antisymmetry of LLR around the origin."""

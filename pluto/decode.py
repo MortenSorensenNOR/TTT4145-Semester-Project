@@ -92,7 +92,6 @@ class FrameDecoder:
         """RRC filter taps, or None when pulse shaping is disabled."""
         return self.sync.rrc_taps
 
-    # type: ignore[union-attr]
     def try_decode(
         self,
         rx_filtered: np.ndarray,
@@ -106,18 +105,16 @@ class FrameDecoder:
 
         samples_from_zc = rx_filtered[detection.long_zc_start :]
         global_start = global_sample_offset + detection.long_zc_start
-        symbols = self._recover_symbols(samples_from_zc, detection.cfo_hat_hz, global_start)
+        symbols = self.recover_symbols(samples_from_zc, detection.cfo_hat_hz, global_start)
         if len(symbols) < self.header_n_symbols:
             logger.debug("Not enough symbols for header")
             return None
 
-        header, header_final_phase = self._demodulate_header(symbols)
-        if header is None:
+        header, header_final_phase = self.demodulate_header(symbols)
+        if header is None or header.length == 0:
+            if header is not None:
+                logger.debug("Header decoded with zero payload length - likely false positive")
             return None
-
-        if header.length == 0:
-            logger.debug("Header decoded with zero payload length — likely false positive")
-            return None  # or DecodeAttempt(DecodeStage.INVALID_HEADER, ...)
 
         try:
             modulator = get_modulator(header.mod_scheme)
@@ -138,7 +135,7 @@ class FrameDecoder:
             logger.debug("Not enough symbols for payload")
             return None
 
-        payload_bits = self._decode_payload(
+        payload_bits = self.decode_payload(
             symbols,
             header,
             modulator,
@@ -161,7 +158,7 @@ class FrameDecoder:
             consumed_samples=consumed,
         )
 
-    def _recover_symbols(
+    def recover_symbols(
         self,
         samples_from_zc: np.ndarray,
         cfo_hz: float,
@@ -218,7 +215,7 @@ class FrameDecoder:
             return symbols
         return symbols / np.sqrt(header_power)
 
-    def _demodulate_header(self, symbols: np.ndarray) -> tuple[FrameHeader | None, float]:
+    def demodulate_header(self, symbols: np.ndarray) -> tuple[FrameHeader | None, float]:
         """Hard-demodulate the BPSK header, applying Costas loop if enabled.
 
         Returns the decoded header and the final Costas phase estimate (0.0 if
@@ -227,7 +224,11 @@ class FrameDecoder:
         header_symbols = symbols[: self.header_n_symbols]
         final_phase = 0.0
         if self.pipeline.costas_loop:
-            header_symbols, phase_estimates = apply_costas_loop(symbols=header_symbols, config=COSTAS_CONFIG, modulator=_HEADER_BPSK)
+            header_symbols, phase_estimates = apply_costas_loop(
+                symbols=header_symbols,
+                config=COSTAS_CONFIG,
+                modulator=_HEADER_BPSK,
+            )
             final_phase = float(phase_estimates[-1])
         header_bits = _HEADER_BPSK.symbols2bits(header_symbols).flatten()
         try:
@@ -236,7 +237,7 @@ class FrameDecoder:
             logger.debug("Header CRC failed")
             return None, final_phase
 
-    def _decode_payload(
+    def decode_payload(
         self,
         symbols: np.ndarray,
         header: FrameHeader,

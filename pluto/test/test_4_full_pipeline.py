@@ -167,7 +167,10 @@ def run_ber_test(
         pipeline=radio.pipeline,
     )
     frame_symbols, _header = build_test_frame(
-        tx_bits, build_params, mod_scheme, CodeRates.HALF_RATE,
+        tx_bits,
+        build_params,
+        mod_scheme,
+        CodeRates.HALF_RATE,
     )
 
     tx_signal = upsample_and_filter(frame_symbols, SPS, radio.h_rrc)
@@ -512,7 +515,12 @@ def main() -> None:
         sdr.rx_lo = int(CENTER_FREQ - cfo_hz)
 
     radio = RadioContext(
-        sdr=sdr, h_rrc=h_rrc, sync=sync, frame_constructor=frame_constructor, pilot_config=pilot_config, pipeline=pipeline,
+        sdr=sdr,
+        h_rrc=h_rrc,
+        sync=sync,
+        frame_constructor=frame_constructor,
+        pilot_config=pilot_config,
+        pipeline=pipeline,
     )
 
     # Test parameters - fine granularity, 0.5 dB steps
@@ -530,10 +538,16 @@ def main() -> None:
     diag_snr = -4.0
     tx_bits = rng.integers(0, 2, n_payload_bits)
     build_params = FrameBuildParams(
-        frame_constructor=frame_constructor, sync_config=sync_config, pilot_config=pilot_config, pipeline=pipeline,
+        frame_constructor=frame_constructor,
+        sync_config=sync_config,
+        pilot_config=pilot_config,
+        pipeline=pipeline,
     )
     frame_symbols, _ = build_test_frame(
-        tx_bits, build_params, ModulationSchemes.QPSK, CodeRates.HALF_RATE,
+        tx_bits,
+        build_params,
+        ModulationSchemes.QPSK,
+        CodeRates.HALF_RATE,
     )
     tx_signal = upsample_and_filter(frame_symbols, SPS, h_rrc)
     zeros = np.zeros(GUARD_SAMPLES, dtype=complex)
@@ -548,7 +562,11 @@ def main() -> None:
     # Plot constellation/eye for each modulation at mid-range SNR
     for mod_scheme, (result, snr_db) in plot_data.items():
         fig = plot_constellation_and_eye(
-            result["rx_filtered"], result["sync_result"], mod_scheme, snr_db, f"{mod_scheme.name}",
+            result["rx_filtered"],
+            result["sync_result"],
+            mod_scheme,
+            snr_db,
+            f"{mod_scheme.name}",
         )
         if fig:
             filename = f"pipeline_{mod_scheme.name}_snr{int(snr_db):+d}dB.png"

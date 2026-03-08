@@ -30,4 +30,4 @@ class SDRTransmitter(Protocol):
 
 def create_pluto(uri: str = "ip:192.168.2.1") -> adi.Pluto:
     """Create PlutoSDR instance."""
-    return adi.Pluto(uri)  # type: ignore[abstract]
+    return adi.Pluto(uri)

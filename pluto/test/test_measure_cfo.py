@@ -1,12 +1,15 @@
 """Measure actual carrier frequency offset using FFT."""
 
 import argparse
+import logging
 from typing import cast
 
 import numpy as np
 
 from pluto import create_pluto
 from pluto.config import CENTER_FREQ, RX_BUFFER_SIZE, SAMPLE_RATE
+
+logger = logging.getLogger(__name__)
 
 
 def measure_cfo_fft(samples: np.ndarray, sample_rate: float) -> float:
@@ -32,7 +35,6 @@ def measure_cfo_fft(samples: np.ndarray, sample_rate: float) -> float:
     return freqs[peak_idx]
 
 
-
 def main() -> None:
     """Measure and display CFO between TX and RX oscillators."""
     parser = argparse.ArgumentParser(description="Measure carrier frequency offset")
@@ -48,7 +50,6 @@ def main() -> None:
 
     sdr.rx()  # flush
 
-
     cfo_measurements = []
 
     try:
@@ -58,11 +59,16 @@ def main() -> None:
             cfo = measure_cfo_fft(samples, SAMPLE_RATE)
             cfo_measurements.append(cfo)
             mean_cfo = np.mean(cfo_measurements)
-            print(f"CFO: {cfo:+.1f} Hz  (mean: {mean_cfo:+.1f} Hz, n={len(cfo_measurements)})")
+            logger.info(
+                "CFO: %+.1f Hz  (mean: %+.1f Hz, n=%d)",
+                cfo,
+                mean_cfo,
+                len(cfo_measurements),
+            )
 
     except KeyboardInterrupt:
         if cfo_measurements:
-            print(f"\nFinal mean CFO: {np.mean(cfo_measurements):+.1f} Hz")
+            logger.info("Final mean CFO: %+.1f Hz", np.mean(cfo_measurements))
 
 
 if __name__ == "__main__":

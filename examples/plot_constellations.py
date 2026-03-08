@@ -1,25 +1,35 @@
-"""Plots the constellations of the modulation schemes."""
+"""Plot the constellations of the modulation schemes."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from modules.modulation import BPSK, QPSK, EightPSK, QAM
+from modules.modulation import BPSK, QAM, QPSK, EightPSK, Modulator
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+
+logger = logging.getLogger(__name__)
 
 
-def plot_constellation(mod, ax, title):
-    """Helper function to plot a constellation."""
+def plot_constellation(mod: Modulator, ax: Axes, title: str) -> None:
+    """Plot a single constellation diagram on the given axes."""
     symbols = mod.symbol_mapping
     ax.scatter(np.real(symbols), np.imag(symbols))
     ax.set_title(title)
     ax.set_xlabel("In-Phase")
     ax.set_ylabel("Quadrature")
-    ax.grid(True)
-    ax.set_aspect('equal', adjustable='box')
+    ax.grid(visible=True)
+    ax.set_aspect("equal", adjustable="box")
     for i, symbol in enumerate(symbols):
-        ax.annotate(f'{mod.bit_mapping[i]}', (np.real(symbol), np.imag(symbol)))
+        ax.annotate(f"{mod.bit_mapping[i]}", (np.real(symbol), np.imag(symbol)))
 
 
-def main():
+def main() -> None:
     """Create and save constellation plots."""
     fig, axs = plt.subplots(2, 2, figsize=(12, 12))
 
@@ -41,7 +51,7 @@ def main():
 
     fig.tight_layout()
     plt.savefig("examples/constellations.png")
-    print("Saved constellation plot to examples/data/constellations.png")
+    logger.info("Saved constellation plot to examples/data/constellations.png")
 
 
 if __name__ == "__main__":

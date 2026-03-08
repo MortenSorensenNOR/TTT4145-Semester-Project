@@ -8,7 +8,10 @@ try:
 
     _njit = numba.njit(cache=True)
 except ImportError:
-    _njit = lambda f: f  # noqa: E731
+
+    def _njit[F](f: F) -> F:
+        """Identity fallback when numba is not installed."""
+        return f
 
 import numpy as np
 from scipy import sparse
@@ -537,12 +540,21 @@ def ldpc_decode(
 # ---------------------------------------------------------------------------
 
 
+def _find_pivot(work: np.ndarray, r: int, target_col: int, n: int, m: int) -> tuple[int, int]:
+    """Find pivot row and column for GF(2) Gaussian elimination step."""
+    for c in list(range(target_col, n)) + list(range(r, target_col)):
+        for row in range(r, m):
+            if work[row, c]:
+                return row, c
+    return -1, -1
+
+
 def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """GF(2) Gaussian elimination producing systematic parity-check and generator matrices.
 
     Produces H in the form [P | I_m] so that G = [I_k | P^T], ensuring the first k
     positions of every codeword equal the message (systematic encoding).
-    Returns (h_sys, g_transposed) where g_transposed.T is the k×n generator matrix.
+    Returns (h_sys, g_transposed) where g_transposed.T is the kxn generator matrix.
     Replaces pyldpc.coding_matrix_systematic.
     """
     m, n = h.shape
@@ -551,17 +563,8 @@ def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     col_perm = np.arange(n)
 
     for r in range(m):
-        # Place pivot at column k+r (parity region), preferring columns k+r..n-1 so
-        # that message columns 0..k-1 are never swapped (preserves systematic property).
         target_col = k + r
-        found_row, found_col = -1, -1
-        for c in list(range(target_col, n)) + list(range(r, target_col)):
-            for row in range(r, m):
-                if work[row, c]:
-                    found_row, found_col = row, c
-                    break
-            if found_row >= 0:
-                break
+        found_row, found_col = _find_pivot(work, r, target_col, n, m)
         if found_row < 0:
             break
         if found_row != r:
@@ -573,11 +576,11 @@ def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             if row != r and work[row, target_col]:
                 work[row] ^= work[r]
 
-    # work = [P | I_m]; G = [I_k | P^T] — identity in first k columns gives systematic encoding.
+    # work = [P | I_m]; G = [I_k | P^T] -- identity in first k columns gives systematic encoding.
     # Return original sparse H with columns permuted (not row-reduced work) to preserve
     # the LDPC Tanner graph structure needed for belief propagation decoding.
-    P = work[:, :k]
-    g = np.hstack([np.eye(k, dtype=int), P.T])
+    parity = work[:, :k]
+    g = np.hstack([np.eye(k, dtype=int), parity.T])
 
     return h[:, col_perm], g.T
 
