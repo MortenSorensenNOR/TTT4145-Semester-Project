@@ -48,11 +48,47 @@ class _ModulatorBase:
     """Shared base providing estimate_noise_variance for all modulators."""
 
     symbol_mapping: np.ndarray
+    bit_mapping: np.ndarray
     bits_per_symbol: int
 
     def estimate_noise_variance(self, symbols: np.ndarray) -> float:
         """Estimate noise variance from received symbols."""
         return estimate_noise_variance(symbols, self.symbol_mapping)
+
+    def symbols2bits_soft(
+        self,
+        symbols: np.ndarray,
+        sigma_sq: float | None = None,
+    ) -> np.ndarray:
+        """Compute log-likelihood ratios (LLRs) using max-log-MAP approximation.
+
+        For each bit position, LLR = min distance to constellation point with bit=1
+        minus min distance to constellation point with bit=0, scaled by 1/sigma_sq.
+        """
+        if len(symbols) == 0:
+            return np.array([], dtype=float)
+
+        if sigma_sq is None:
+            sigma_sq = estimate_noise_variance(symbols, self.symbol_mapping)
+
+        distances_sq = (
+            np.abs(
+                symbols.reshape(-1, 1) - self.symbol_mapping[np.newaxis, :],
+            )
+            ** 2
+        )
+
+        llrs = np.zeros((len(symbols), self.bits_per_symbol))
+        for bit_idx in range(self.bits_per_symbol):
+            bit_is_zero = self.bit_mapping[:, bit_idx] == 0
+            bit_is_one = ~bit_is_zero
+
+            min_dist_zero = np.min(distances_sq[:, bit_is_zero], axis=1)
+            min_dist_one = np.min(distances_sq[:, bit_is_one], axis=1)
+
+            llrs[:, bit_idx] = (min_dist_one - min_dist_zero) / sigma_sq
+
+        return llrs
 
 
 class BPSK(_ModulatorBase):
@@ -217,41 +253,6 @@ class EightPSK(_ModulatorBase):
         indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
         return self.bit_mapping[indices, :]
 
-    def symbols2bits_soft(
-        self,
-        symbols: np.ndarray,
-        sigma_sq: float | None = None,
-    ) -> np.ndarray:
-        """Compute log-likelihood ratios (LLRs) using max-log-MAP approximation.
-
-        For each bit position, LLR = min distance to constellation point with bit=1
-        minus min distance to constellation point with bit=0, scaled by 1/sigma_sq.
-        """
-        if len(symbols) == 0:
-            return np.array([], dtype=float)
-
-        if sigma_sq is None:
-            sigma_sq = estimate_noise_variance(symbols, self.symbol_mapping)
-
-        distances_sq = (
-            np.abs(
-                symbols.reshape(-1, 1) - self.symbol_mapping[np.newaxis, :],
-            )
-            ** 2
-        )
-
-        llrs = np.zeros((len(symbols), self.bits_per_symbol))
-        for bit_idx in range(self.bits_per_symbol):
-            bit_is_zero = self.bit_mapping[:, bit_idx] == 0
-            bit_is_one = ~bit_is_zero
-
-            min_dist_zero = np.min(distances_sq[:, bit_is_zero], axis=1)
-            min_dist_one = np.min(distances_sq[:, bit_is_one], axis=1)
-
-            llrs[:, bit_idx] = (min_dist_one - min_dist_zero) / sigma_sq
-
-        return llrs
-
 
 class QAM(_ModulatorBase):
     """Quadrature Amplitude Modulation with Gray coding.
@@ -331,41 +332,3 @@ class QAM(_ModulatorBase):
             symbols.reshape(np.size(symbols), 1, order="F") - self.symbol_mapping,
         )
         return self.bit_mapping[np.argmin(distance_symbols_to_constellation, axis=1), :]
-
-    def symbols2bits_soft(
-        self,
-        symbols: np.ndarray,
-        sigma_sq: float | None = None,
-    ) -> np.ndarray:
-        """Compute log-likelihood ratios (LLRs) using max-log-MAP approximation.
-
-        For each bit position, LLR = min distance to constellation point with bit=1
-        minus min distance to constellation point with bit=0, scaled by 1/sigma_sq.
-
-        Source: https://en.wikipedia.org/wiki/Maximum_a_posteriori_estimation
-        """
-        if len(symbols) == 0:
-            return np.array([], dtype=float)
-
-        if sigma_sq is None:
-            sigma_sq = estimate_noise_variance(symbols, self.symbol_mapping)
-
-        distances_sq = (
-            np.abs(
-                symbols.reshape(-1, 1) - self.symbol_mapping[np.newaxis, :],
-            )
-            ** 2
-        )
-
-        llrs = np.zeros((len(symbols), self.bits_per_symbol))
-        for bit_idx in range(self.bits_per_symbol):
-            bit_is_zero = self.bit_mapping[:, bit_idx] == 0
-            bit_is_one = ~bit_is_zero
-
-            min_dist_zero = np.min(distances_sq[:, bit_is_zero], axis=1)
-            min_dist_one = np.min(distances_sq[:, bit_is_one], axis=1)
-
-            # LLR > 0 means bit=0 more likely
-            llrs[:, bit_idx] = (min_dist_one - min_dist_zero) / sigma_sq
-
-        return llrs

@@ -2,8 +2,8 @@
 
 import matplotlib.pyplot as plt
 
+from examples.plotting import plot_llr_heatmap
 from modules.modulation import QPSK
-from modules.plotting import plot_llr_heatmap
 
 qpsk = QPSK()
 

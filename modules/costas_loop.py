@@ -9,15 +9,11 @@ The implementation is specifically designed for QPSK modulation but can be
 extended to other M-PSK schemes.
 """
 
-import logging
-import time
 from dataclasses import dataclass
 
 import numpy as np
 
 from modules.modulation import BPSK, QPSK, EightPSK, Modulator
-
-logger = logging.getLogger(__name__)
 
 
 def _calculate_loop_parameters(
@@ -159,58 +155,3 @@ def apply_costas_loop(
             phase_estimates[i] = phase_estimate
 
     return corrected_symbols, phase_estimates
-
-
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    # Test parameters
-    num_symbols = 100
-    initial_phase_offset_rad = np.pi / 8  # 45 degrees
-
-    costas_config = CostasConfig(loop_noise_bandwidth_normalized=0.05)
-    modulator = EightPSK()
-
-    # Generate test symbols
-    rng = np.random.default_rng()
-    bits = rng.integers(0, 2, size=num_symbols * modulator.bits_per_symbol)
-    base_symbols = modulator.bits2symbols(bits)
-    phase_noise = np.linspace(0, 3, len(base_symbols))
-
-    # Apply a constant phase offset
-    # The actual phase that the loop should converge to is initial_phase_offset_rad
-
-    input_symbols = base_symbols * np.exp(1j * (initial_phase_offset_rad + phase_noise))
-    start = time.perf_counter()
-    # Apply Costas loop
-    corrected_symbols, phase_estimates = apply_costas_loop(
-        symbols=input_symbols,
-        config=costas_config,
-        modulator=modulator,
-    )
-    logger.info("%.3f ms", (time.perf_counter() - start) * 1e3)
-    # Plotting
-    plt.figure(figsize=(10, 6))
-    plt.plot(np.degrees(phase_estimates), label="Estimated Phase (degrees)")
-    plt.plot(np.degrees(initial_phase_offset_rad + phase_noise), label="Actual phase")
-    plt.axhline(
-        np.degrees(initial_phase_offset_rad),
-        color="r",
-        linestyle="--",
-        label="Actual Phase Offset (degrees)",
-    )
-    plt.title("Costas Loop Phase Tracking Test")
-    plt.xlabel("Symbol Index")
-    plt.ylabel("Phase (degrees)")
-    plt.grid(visible=True)
-    plt.legend()
-    plt.savefig("examples/data/phase.png")
-
-    # Verify if it converged
-    CONVERGENCE_TOLERANCE_DEG = 5
-    final_phase_error = np.degrees(initial_phase_offset_rad - phase_estimates[-1])
-    if abs(final_phase_error) < CONVERGENCE_TOLERANCE_DEG:
-        pass
-    else:
-        pass
