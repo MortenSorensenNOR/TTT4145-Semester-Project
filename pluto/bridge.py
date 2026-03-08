@@ -27,8 +27,8 @@ from dataclasses import dataclass
 import adi
 import numpy as np
 
-from modules.channel_coding import LDPCConfig, ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths
 from modules.frame_constructor import FrameConstructor
+from modules.ldpc import LDPCConfig, ldpc_decode, ldpc_encode, ldpc_get_supported_payload_lengths
 from modules.util import bytes_to_bits
 from pluto import create_pluto
 from pluto.config import (

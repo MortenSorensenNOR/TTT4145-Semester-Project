@@ -11,8 +11,8 @@ from numpy.typing import NDArray
 from scipy import signal
 
 from modules.channel import ChannelConfig, ChannelModel
-from modules.channel_coding import CodeRates, LDPCConfig, ldpc_decode, ldpc_encode
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
+from modules.ldpc import CodeRates, LDPCConfig, ldpc_decode, ldpc_encode
 from modules.modulation import BPSK, QPSK
 from modules.pilots import PilotConfig, insert_pilots
 from modules.pulse_shaping import rrc_filter, upsample_and_filter

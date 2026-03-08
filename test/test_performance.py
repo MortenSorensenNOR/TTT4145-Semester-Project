@@ -22,9 +22,11 @@ import pytest
 from scipy import signal
 
 from modules.channel import ChannelConfig, ChannelModel
-from modules.channel_coding import (
+from modules.costas_loop import CostasConfig, apply_costas_loop
+from modules.equalization import equalize_payload
+from modules.golay import Golay
+from modules.ldpc import (
     CodeRates,
-    Golay,
     LDPCConfig,
     _decode_cache,
     _encoding_cache,
@@ -33,8 +35,6 @@ from modules.channel_coding import (
     ldpc_decode,
     ldpc_encode,
 )
-from modules.costas_loop import CostasConfig, apply_costas_loop
-from modules.equalization import equalize_payload
 from modules.modulation import BPSK, QAM, QPSK
 from modules.pilots import PilotConfig, insert_pilots, pilot_aided_phase_track
 from modules.pulse_shaping import rrc_filter, upsample_and_filter

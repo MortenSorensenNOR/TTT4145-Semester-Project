@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from modules.channel_coding import CodeRates
 from modules.costas_loop import CostasConfig
 from modules.frame_constructor import ModulationSchemes
+from modules.ldpc import CodeRates
 from modules.modulation import BPSK, QAM, QPSK, EightPSK, Modulator
 from modules.pilots import PilotConfig
 from modules.synchronization import SynchronizerConfig

@@ -16,8 +16,8 @@ import numpy as np
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
-from modules.channel_coding import CodeRates
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
+from modules.ldpc import CodeRates
 from modules.modulation import BPSK
 from modules.pilots import PilotConfig, data_indices, insert_pilots
 from modules.pulse_shaping import rrc_filter, upsample_and_filter

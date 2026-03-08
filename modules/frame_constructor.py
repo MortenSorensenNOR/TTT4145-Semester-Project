@@ -5,9 +5,9 @@ from enum import Enum
 
 import numpy as np
 
-from modules.channel_coding import (
+from modules.golay import Golay
+from modules.ldpc import (
     CodeRates,
-    Golay,
     LDPCConfig,
     deinterleave,
     interleave,

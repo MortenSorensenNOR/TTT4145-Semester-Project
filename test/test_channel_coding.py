@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from modules.channel_coding import (
+from modules.ldpc import (
     CodeRates,
     LDPCConfig,
     get_ldpc_base_matrix,

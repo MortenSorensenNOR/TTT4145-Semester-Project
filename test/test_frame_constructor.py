@@ -6,12 +6,13 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from modules.channel import ChannelConfig, ChannelModel
-from modules.channel_coding import CodeRates, Golay
 from modules.frame_constructor import (
     FrameConstructor,
     FrameHeader,
     ModulationSchemes,
 )
+from modules.golay import Golay
+from modules.ldpc import CodeRates
 from modules.modulation import QPSK
 
 # --- Constants ---

@@ -16,7 +16,7 @@ from scipy.special import erfc, erfcinv
 from tqdm import tqdm
 
 from modules.channel import ChannelConfig, ChannelModel
-from modules.channel_coding import CodeRates, LDPCConfig, ldpc_decode, ldpc_encode
+from modules.ldpc import CodeRates, LDPCConfig, ldpc_decode, ldpc_encode
 from modules.modulation import QPSK
 from modules.util import ebn0_to_snr
 

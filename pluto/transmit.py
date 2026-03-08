@@ -8,8 +8,8 @@ import time
 
 import numpy as np
 
-from modules.channel_coding import CodeRates, ldpc_get_supported_payload_lengths
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
+from modules.ldpc import CodeRates, ldpc_get_supported_payload_lengths
 from modules.pilots import insert_pilots
 from modules.pulse_shaping import rrc_filter, upsample_and_filter
 from modules.synchronization import build_preamble

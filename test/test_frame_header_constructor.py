@@ -8,13 +8,13 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from modules.channel import ChannelConfig, ChannelModel
-from modules.channel_coding import CodeRates
 from modules.frame_constructor import (
     FrameHeader,
     FrameHeaderConfig,
     FrameHeaderConstructor,
     ModulationSchemes,
 )
+from modules.ldpc import CodeRates
 
 LENGTH_BITS = 10
 SRC_BITS = 2

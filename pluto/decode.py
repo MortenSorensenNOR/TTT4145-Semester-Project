@@ -15,10 +15,10 @@ if TYPE_CHECKING:
 
 import numpy as np
 
-from modules.channel_coding import CodeRates, LDPCConfig, ldpc_get_supported_payload_lengths
 from modules.costas_loop import apply_costas_loop
 from modules.equalization import equalize_payload
 from modules.frame_constructor import FrameConstructor, FrameHeader
+from modules.ldpc import CodeRates, LDPCConfig, ldpc_get_supported_payload_lengths
 from modules.modulation import BPSK
 from modules.pilots import (
     PilotConfig,
