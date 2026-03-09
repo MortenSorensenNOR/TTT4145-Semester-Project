@@ -158,7 +158,7 @@ class CostasConfig:
 def apply_costas_loop(
     symbols: np.ndarray,
     config: CostasConfig,
-    modulator = BPSK(),
+    modulator,
     current_phase_estimate: float = 0.0,
     current_frequency_offset: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
