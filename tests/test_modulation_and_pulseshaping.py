@@ -1,9 +1,9 @@
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
-from utils.plotting import plot_iq, plot_constellation
-from modules.modulation import BPSK, QPSK
-from modules.pulse_shaping import RRCConfig, rrc_filter, upsample, downsample
+from modules.modulation_schemes import BPSK, QPSK
+from modules.pulse_shaping import RRCConfig, rrc_filter
+from utils.plotting import plot_constellation
 
 if __name__ == "__main__":
     # setup

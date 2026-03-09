@@ -21,3 +21,7 @@ pyrightconfig.json
 .hypothesis/
 
 CLAUDE.md
+
+# Large binaries and external repos
+vendor/
+references/

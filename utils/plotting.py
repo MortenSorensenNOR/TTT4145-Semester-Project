@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from modules.modulation import Modulator
+    from modules.modulation_schemes import Modulator
 
 
 def plot_iq(
