@@ -5,7 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
-
+*.so
 # Local machine overrides (e.g. piwheels on Pi)
 uv.toml
 
