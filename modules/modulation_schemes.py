@@ -34,3 +34,24 @@ class QPSK():
             return np.array([], dtype=int)
         indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
         return np.column_stack([indices // 2, indices % 2])
+
+class PSK8():
+    def __init__(self) -> None:
+        self.bits_per_symbol = 3
+        self.qam_order = 8
+        self.symbol_mapping = np.array([-1 - 1j, -np.sqrt(2) + 0j, 0 + np.sqrt(2)*1j, -1 + 1j,
+                                         0 - np.sqrt(2)*1j, 1 - 1j, 1 + 1j, np.sqrt(2)+ 0j]) / np.sqrt(2)
+
+    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
+        if len(bitstream) == 0:
+            return np.array([], dtype=complex)
+        bitstream = bitstream.reshape(-1, 3)
+        indices = bitstream[:, 0] * 4 + bitstream[:, 1] * 2 + bitstream[:, 2]
+        return self.symbol_mapping[indices]
+
+    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+        if len(symbols) == 0:
+            return np.array([], dtype=int)
+        indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
+        return np.column_stack([indices // 4, (indices % 4) // 2, indices % 2])
+
