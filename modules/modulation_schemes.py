@@ -25,7 +25,7 @@ class BPSK(Modulator):
     def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
         if len(bitstream) == 0:
             return np.array([], dtype=complex)
-        return self.symbol_mapping[bitstream]
+        return self.symbol_mapping[bitstream.ravel()]
 
     def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
         if len(symbols) == 0:

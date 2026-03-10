@@ -46,10 +46,13 @@ def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
         return np.ndarray([], dtype=complex)
     upsampled = np.zeros(len(symbols) * sps, dtype=complex)
     upsampled[::sps] = symbols
-    return np.convolve(upsampled, rrc_taps, mode="same")
+    return np.convolve(upsampled, rrc_taps, mode="full")
 
-def downsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
-    if len(symbols) == 0:
+def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
+    if len(signal) == 0:
         return np.ndarray([], dtype=complex)
-    filtered = np.convolve(symbols, rrc_taps, mode="same")
-    return filtered[::sps]
+    delay = len(rrc_taps) - 1  # combined TX+RX group delay
+    n_out = max(0, (len(signal) - len(rrc_taps) + 1) // sps)
+    filtered = np.convolve(signal, rrc_taps, mode="full")
+    return filtered[delay : delay + n_out * sps : sps]
+
