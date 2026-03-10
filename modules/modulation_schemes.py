@@ -1,6 +1,22 @@
+from dataclasses import dataclass
+from typing import runtime_checkable, Protocol
 import numpy as np
 
-class BPSK():
+@runtime_checkable
+class Modulator(Protocol):
+    bits_per_symbol: int
+    qam_order: int
+    symbol_mapping: np.ndarray
+
+    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
+        """Convert bit stream to modulation symbols."""
+        ...
+
+    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+        """Convert symbols to hard-decision bits."""
+        ...
+
+class BPSK(Modulator):
     def __init__(self) -> None:
         self.bits_per_symbol = 1
         self.qam_order = 2
@@ -16,7 +32,7 @@ class BPSK():
             return np.ndarray([], dtype=int)
         return np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1).reshape(-1, 1)
 
-class QPSK():
+class QPSK(Modulator):
     def __init__(self) -> None:
         self.bits_per_symbol = 2
         self.qam_order = 4
@@ -35,7 +51,7 @@ class QPSK():
         indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
         return np.column_stack([indices // 2, indices % 2])
 
-class PSK8():
+class PSK8(Modulator):
     def __init__(self) -> None:
         self.bits_per_symbol = 3
         self.qam_order = 8
