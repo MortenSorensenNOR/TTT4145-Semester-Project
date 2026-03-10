@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from modules.modulation_schemes import Modulator
+    from modules.modulation_schemes import Modulator, BPSK, QPSK, PSK8
 
 
 def plot_iq(
@@ -78,6 +78,40 @@ def plot_constellation(
 
     plt.tight_layout()
     return fig, ax
+
+
+def _plot_ideal_constellation_points(mod, ax, title):
+    """Helper function to plot a constellation."""
+    symbols = mod.symbol_mapping
+    ax.scatter(np.real(symbols), np.imag(symbols))
+    ax.set_title(title)
+    ax.set_xlabel("In-Phase")
+    ax.set_ylabel("Quadrature")
+    ax.set_xlim(-1.2, 1.2)
+    ax.set_ylim(-1.2, 1.2)
+    ax.grid(True)
+    ax.set_aspect('equal', adjustable='box')
+    for i, symbol in enumerate(symbols):
+        ax.annotate(f'{format(i, f"0{mod.bits_per_symbol}b")}', (np.real(symbol), np.imag(symbol)))
+
+
+def plot_modulation_schemes_ideal_constallations(bpsk: BPSK, qpsk: QPSK, psk8: PSK8):
+    """Create and save constellation plots."""
+    fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+
+    # BPSK
+    _plot_ideal_constellation_points(bpsk, axs[0], "BPSK Constellation")
+
+    # QPSK
+    _plot_ideal_constellation_points(qpsk, axs[1], "QPSK Constellation")
+
+    # 8-PSK
+    _plot_ideal_constellation_points(psk8, axs[2], "8-PSK Constellation")
+
+    fig.tight_layout()
+    plt.savefig("tests/plots/constellations.png")
+    print("Saved constellation plot to examples/data/constellations.png")
+
 
 
 def plot_constellation_confidence(
