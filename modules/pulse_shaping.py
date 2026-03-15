@@ -1,16 +1,7 @@
 import numpy as np
 from dataclasses import dataclass
 
-@dataclass
-class RRCConfig:
-    """"""
-    sps: int        # samples per symbol
-    alpha: float    # rrc falloff coefficient
-    num_taps: int   # number of taps for filter
-
-def rrc_filter(config: RRCConfig) -> np.ndarray:
-    sps, alpha, num_taps = config.sps, config.alpha, config.num_taps
-
+def rrc_filter(sps: int, alpha: float, num_taps: int) -> np.ndarray:
     t = (np.arange(num_taps) - (num_taps - 1) / 2) / sps
     zero_mask = t == 0
     if alpha > 0:
