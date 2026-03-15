@@ -8,10 +8,10 @@ wheels/
 *.so
 # Local machine overrides (e.g. piwheels on Pi)
 uv.toml
+.python-version
 
 # Virtual environments
 .venv
-.venv/
 .claude
 .pytest_cache
 .ruff_cache
