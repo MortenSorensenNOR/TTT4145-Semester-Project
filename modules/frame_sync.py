@@ -29,7 +29,11 @@ from sympy import isprime
 
 @dataclass
 class SynchronizerConfig:
-    """Configuration for the synchronizer."""
+    """Configuration for the synchronizer.
+
+    TODO: Move to pipeline.py once it exists — the pipeline owns config
+    construction, cross-field validation, and consistency with generate_zadoff_chu.
+    """
 
     zc_root: int = 7
 
@@ -49,9 +53,10 @@ class CoarseResult:
 
     d_hat: np.intp
     cfo_hat_hz: np.floating
+    m_peak: np.floating
 
 
-def generate_zadoff_chu(u: int = 7, n_zc: int = 61) -> np.ndarray:
+def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
     r"""Generate a Zadoff-Chu sequence of length n_zc with root u [3].
 
     Formula from [3]: $x_u(n) = \exp(-j\pi \cdot u \cdot n \cdot (n+1) / N_{ZC})$ (for $q=1$ and prime $N_{ZC}$)
@@ -97,9 +102,17 @@ def coarse_sync(
 
     Acquisition range: $\pm f_s / (2L)$.
     """
+    if not np.iscomplexobj(rx):
+        msg = "rx must be complex (conj is a no-op on reals)"
+        raise TypeError(msg)
+
+    if samples_per_symbol < 1 or fs < 1:
+        msg = "samples_per_symbol and fs must be >= 1"
+        raise ValueError(msg)
+
     sample_cnt = cfg.short_preamble_nsym * samples_per_symbol
     if len(rx) < 2 * sample_cnt:
-        msg = f"rx too short ({len(rx)} samples) for L={sample_cnt}"
+        msg = f"rx too short ({len(rx)} samples): need >= 2L={2 * sample_cnt} for two adjacent windows"
         raise ValueError(msg)
 
     cs_p = np.concatenate(([0j], np.cumsum(np.conj(rx[:-sample_cnt]) * rx[sample_cnt:])))
@@ -117,7 +130,7 @@ def coarse_sync(
     phi_hat = np.angle(p_d[peak_idx])
     cfo_hat_hz = phi_hat * fs / (2 * np.pi * sample_cnt)
 
-    return CoarseResult(d_hat=d_hat, cfo_hat_hz=cfo_hat_hz)
+    return CoarseResult(d_hat=d_hat, cfo_hat_hz=cfo_hat_hz, m_peak=m_d[peak_idx])
 
 
 def fine_timing(
@@ -136,6 +149,14 @@ def fine_timing(
 
     where $s$ is the known long preamble and $r$ is the CFO-corrected signal.
     """
+    if not np.iscomplexobj(rx):
+        msg = "rx must be complex (conj is a no-op on reals)"
+        raise TypeError(msg)
+
+    if samples_per_symbol < 1 or fs < 1:
+        msg = "samples_per_symbol and fs must be >= 1"
+        raise ValueError(msg)
+
     samples_per_rep = cfg.short_preamble_nsym * samples_per_symbol
     start_sample = coarse.d_hat + cfg.short_preamble_nreps * samples_per_rep
 
