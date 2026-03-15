@@ -143,22 +143,10 @@ class RXPipeline:
                 err_reason=e.__str__()
             )
 
-        # header starts right after the long preamble
-        payload_start = fine_start + len(self.long_ref)
-
-        # confidence from the coarse metric plateau height
-        sample_cnt = cfg.short_preamble_nsym * sps
-        cs_p = np.concatenate(([0j], np.cumsum(np.conj(buffer[:-sample_cnt]) * buffer[sample_cnt:])))
-        p_d = cs_p[sample_cnt:] - cs_p[:-sample_cnt]
-        cs_r = np.concatenate(([0.0], np.cumsum(np.abs(buffer[sample_cnt:]) ** 2)))
-        r_d = cs_r[sample_cnt:] - cs_r[:-sample_cnt]
-        m_d = np.abs(p_d) ** 2 / np.maximum(r_d**2, cfg.energy_floor)
-        confidence = float(m_d[coarse.d_hat])
-
         return DetectionResult(
-            payload_start=int(payload_start),
+            payload_start=int(fine_start) + len(self.long_ref),
             cfo_estimate=float(coarse.cfo_hat_hz),
-            confidence=confidence,
+            confidence=float(coarse.m_peak),
         )
 
     def decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> Packet:
@@ -176,12 +164,11 @@ class RXPipeline:
 
     def header_decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> tuple[FrameHeader, int]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
-        rx_syms = buffer[detection_res.payload_start:]
+        header_syms = buffer[detection_res.payload_start:self.frame_constructor.header_config.header_total_size]
 
         # TODO: Do costas correction et al.
     
         # demodulate header
-        header_syms = rx_syms[:self.frame_constructor.header_config.header_total_size]
         header_bits = self.bpsk.symbols2bits(header_syms)
         header = self.frame_constructor.decode_header(header_bits)
         return header, detection_res.payload_start + self.frame_constructor.header_config.header_total_size
