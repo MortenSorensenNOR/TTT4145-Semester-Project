@@ -1,5 +1,8 @@
 r"""Frame-level synchronization: preamble timing and carrier frequency offset (CFO).
 
+Coarse timing + CFO via Schmidl-Cox autocorrelation [1][2], then fine
+timing via matched-filter cross-correlation with the long preamble [4][5].
+
 References:
 [1] GNU Radio - Schmidl & Cox OFDM synch. (ofdm_sync_sc_cfb block):
     https://wiki.gnuradio.org/index.php/Schmidl_&_Cox_OFDM_synch. (trailing dot is part of URL)
@@ -14,26 +17,22 @@ References:
 [6] MATLAB - HDL OFDM Receiver (full coarse→fine pipeline):
     https://www.mathworks.com/help/wireless-hdl/ug/hdlofdmreceiver.html
 
-Steps (see [6] for overall pipeline):
-1. Coarse timing  - Schmidl-Cox autocorrelation metric $M(d)$  [1] [2]
-2. Coarse CFO     - phase $\angle P(\hat{d})$ accumulated between reps     [1] [2]
-3. Fine timing    - matched-filter with long preamble        [4] [5]
-
 """
 
 from dataclasses import dataclass
+from math import isqrt
 
 import numpy as np
-from sympy import isprime
+
+
+def _is_prime(n: int) -> bool:
+    """Trial division for small n."""
+    return n > 1 and all(n % i for i in range(2, isqrt(n) + 1))
 
 
 @dataclass
 class SynchronizerConfig:
-    """Configuration for the synchronizer.
-
-    TODO: Move to pipeline.py once it exists — the pipeline owns config
-    construction, cross-field validation, and consistency with generate_zadoff_chu.
-    """
+    """Configuration for the synchronizer."""
 
     zc_root: int = 7
 
@@ -52,7 +51,7 @@ class CoarseResult:
     """Output of coarse timing + CFO estimation."""
 
     d_hat: np.intp
-    cfo_hat_hz: np.floating
+    cfo_hat: np.floating
     m_peak: np.floating
 
 
@@ -62,7 +61,7 @@ def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
     Formula from [3]: $x_u(n) = \exp(-j\pi \cdot u \cdot n \cdot (n+1) / N_{ZC})$ (for $q=1$ and prime $N_{ZC}$)
     Also, $\gcd(u, N_{ZC}) = 1$ for any $0 < u < N_{ZC}$.
     """
-    if not isprime(n_zc):
+    if not _is_prime(n_zc):
         msg = f"n_zc ({n_zc}) must be prime to achieve DFT property"
         raise ValueError(msg)
 
@@ -74,11 +73,20 @@ def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
     return np.exp(-1j * np.pi * u * n * (n + 1) / n_zc)
 
 
-def generate_preamble(config: SynchronizerConfig):
-    zc_short = generate_zadoff_chu(config.zc_root, config.short_preamble_nsym) 
+def generate_preamble(config: SynchronizerConfig) -> np.ndarray:
+    """Build the full preamble: repeated short ZC followed by long ZC."""
+    zc_short = generate_zadoff_chu(config.zc_root, config.short_preamble_nsym)
     zc_long = generate_zadoff_chu(config.zc_root, config.long_preamble_nsym)
     short_rep = np.tile(zc_short, config.short_preamble_nreps)
     return np.concatenate([short_rep, zc_long])
+
+
+def build_long_ref(cfg: SynchronizerConfig, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
+    """Build the upsampled + filtered long preamble reference for matched filtering."""
+    zc = generate_zadoff_chu(cfg.zc_root, cfg.long_preamble_nsym)
+    up = np.zeros(len(zc) * sps, dtype=complex)
+    up[::sps] = zc
+    return np.convolve(up, rrc_taps, mode="same")
 
 
 def coarse_sync(
@@ -137,7 +145,11 @@ def coarse_sync(
     phi_hat = np.angle(p_d[peak_idx])
     cfo_hat_hz = phi_hat * fs / (2 * np.pi * sample_cnt)
 
-    return CoarseResult(d_hat=d_hat, cfo_hat_hz=cfo_hat_hz, m_peak=m_d[peak_idx])
+    return CoarseResult(
+        d_hat=d_hat,
+        cfo_hat=cfo_hat_hz,
+        m_peak=m_d[peak_idx],
+    )
 
 
 def fine_timing(
@@ -148,21 +160,10 @@ def fine_timing(
     samples_per_symbol: int,
     cfg: SynchronizerConfig,
 ) -> np.intp:
-    r"""Fine timing by cross-correlation with the long preamble [4] [5].
-
-        $z[d] = \sum_{n=0}^{N-1} r[d+n] \cdot s^*[n]$    → z
-
-        $d_\text{fine} = \arg\max_d |z[d]|$        → np.argmax(np.abs(z))
-
-    where $s$ is the known long preamble and $r$ is the CFO-corrected signal.
-    """
+    """Fine timing by cross-correlation with the long preamble [4] [5]."""
     if not np.iscomplexobj(rx):
         msg = "rx must be complex (conj is a no-op on reals)"
         raise TypeError(msg)
-
-    if samples_per_symbol < 1 or fs < 1:
-        msg = "samples_per_symbol and fs must be >= 1"
-        raise ValueError(msg)
 
     samples_per_rep = cfg.short_preamble_nsym * samples_per_symbol
     start_sample = coarse.d_hat + cfg.short_preamble_nreps * samples_per_rep
@@ -177,7 +178,7 @@ def fine_timing(
         raise ValueError(msg)
 
     n = np.arange(search_start, search_end)
-    cfo_phase = -2j * np.pi * (coarse.cfo_hat_hz / fs) * n
+    cfo_phase = -2j * np.pi * (coarse.cfo_hat / fs) * n
     r = rx[search_start:search_end] * np.exp(cfo_phase)
 
     z = np.correlate(r, s, mode="valid")

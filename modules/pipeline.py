@@ -113,10 +113,7 @@ class RXPipeline:
         self.psk8 = PSK8()
 
         # generate the known long preamble for matched filtering
-        self.long_zc = generate_zadoff_chu(self.config.SYNC_CONFIG.zc_root, self.config.SYNC_CONFIG.long_preamble_nsym)
-        self.long_up = np.zeros(len(self.long_zc) * self.config.SPS, dtype=complex)
-        self.long_up[::self.config.SPS] = self.long_zc
-        self.long_ref = np.convolve(self.long_up, self.rrc_taps, mode="same")
+        self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
 
     def receive(self):
         # TODO: Create a loop that runs receive or some shit
@@ -146,7 +143,7 @@ class RXPipeline:
 
         return DetectionResult(
             payload_start=int(fine_start) + len(self.long_ref),
-            cfo_estimate=float(coarse.cfo_hat_hz),
+            cfo_estimate=float(coarse.cfo_hat),
             confidence=float(coarse.m_peak),
         )
 
