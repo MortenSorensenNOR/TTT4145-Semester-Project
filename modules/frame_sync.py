@@ -74,6 +74,13 @@ def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
     return np.exp(-1j * np.pi * u * n * (n + 1) / n_zc)
 
 
+def generate_preamble(config: SynchronizerConfig):
+    zc_short = generate_zadoff_chu(config.zc_root, config.short_preamble_nsym) 
+    zc_long = generate_zadoff_chu(config.zc_root, config.long_preamble_nsym)
+    short_rep = np.tile(zc_short, config.short_preamble_nreps)
+    return np.concatenate([short_rep, zc_long])
+
+
 def coarse_sync(
     rx: np.ndarray,
     fs: int,
