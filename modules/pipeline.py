@@ -11,11 +11,15 @@ from ldpc.ldpc import *
 
 @dataclass
 class PipelineConfig:
+    SAMPLE_RATE: int = 5_336_000
+    CENTER_FREQ: int = 2_400_000_000
     SPS: int = 8
     SPAN: int = 8
     RRC_ALPHA: float = 0.35
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
     CODING_RATE: CodeRates = CodeRates.NONE
+
+    SYNC_CONFIG = SynchronizerConfig()
 
     pulse_shaping: bool = True
     pilots: bool = False
@@ -27,12 +31,12 @@ class PipelineConfig:
 @dataclass
 class Packet:
     """Packet of data to/from TAP/TUN"""
-    src_mac: int
-    dst_mac: int
-    type: int
-    seq_num: int
-    length: int
-    payload: np.ndarray
+    src_mac: int = -1
+    dst_mac: int = -1
+    type: int = -1
+    seq_num: int = -1
+    length: int = -1
+    payload: np.ndarray = np.ndarray([])
 
     valid: bool = False
     err_reason: str = ""
@@ -71,7 +75,7 @@ class TXPipeline:
         payload_syms = self.payload_modulator.bits2symbols(payload_bits)
 
         # sync
-        sync_syms = np.zeros(10) # TODO: Get the actual sequence
+        sync_syms = generate_preamble(self.config.SYNC_CONFIG)
 
         # construct signal
         tx_syms = np.concat([sync_syms, header_syms, payload_syms])
@@ -92,18 +96,74 @@ class DetectionResult:
     cfo_estimate: float = 0.0
     confidence: float   = 0.0
 
+    valid: bool = False
+    err_reason: str = ""
+
 class RXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
         self.frame_constructor = FrameConstructor()
 
-    def detect(self, buffer: np.ndarray) -> DetectionResult:
-        return DetectionResult()
+        self.num_taps = 2 * config.SPS * config.SPAN + 1
+        self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
 
-    def decode(self, buffer: np.ndarray, detect_res: DetectionResult) -> Packet:
-        # TODO: Actually do the signal processing
-        header = self.frame_constructor.decode_header(...)
-        payload = self.frame_constructor.decode_payload(header, ..., soft=False, channel_coding=self.config.channnel_coding, interleaving=self.config.interleaving)
+        self.bpsk = BPSK()
+        self.qpsk = QPSK()
+        self.psk8 = PSK8()
+
+        # generate the known long preamble for matched filtering
+        self.long_zc = generate_zadoff_chu(self.config.SYNC_CONFIG.zc_root, self.config.SYNC_CONFIG.long_preamble_nsym)
+        self.long_up = np.zeros(len(self.long_zc) * self.config.SPS, dtype=complex)
+        self.long_up[::self.config.SPS] = self.long_zc
+        self.long_ref = np.convolve(self.long_up, self.rrc_taps, mode="same")
+
+    def receive(self):
+        # TODO: Create a loop that runs receive or some shit
+        pass
+
+    def detect(self, buffer: np.ndarray) -> DetectionResult:
+        cfg = self.config.SYNC_CONFIG
+        sps = self.config.SPS
+
+        # coarse timing + CFO
+        try:
+            coarse = coarse_sync(buffer, self.config.SAMPLE_RATE, sps, cfg)
+        except ValueError as e:
+            return DetectionResult(
+                valid=False,
+                err_reason=e.__str__()
+            )
+
+        # fine timing via long preamble correlation
+        try:
+            fine_start = fine_timing(buffer, self.long_ref, coarse, self.config.SAMPLE_RATE, sps, cfg)
+        except ValueError as e:
+            return DetectionResult(
+                valid=False,
+                err_reason=e.__str__()
+            )
+
+        # header starts right after the long preamble
+        payload_start = fine_start + len(self.long_ref)
+
+        # confidence from the coarse metric plateau height
+        sample_cnt = cfg.short_preamble_nsym * sps
+        cs_p = np.concatenate(([0j], np.cumsum(np.conj(buffer[:-sample_cnt]) * buffer[sample_cnt:])))
+        p_d = cs_p[sample_cnt:] - cs_p[:-sample_cnt]
+        cs_r = np.concatenate(([0.0], np.cumsum(np.abs(buffer[sample_cnt:]) ** 2)))
+        r_d = cs_r[sample_cnt:] - cs_r[:-sample_cnt]
+        m_d = np.abs(p_d) ** 2 / np.maximum(r_d**2, cfg.energy_floor)
+        confidence = float(m_d[coarse.d_hat])
+
+        return DetectionResult(
+            payload_start=int(payload_start),
+            cfo_estimate=float(coarse.cfo_hat_hz),
+            confidence=confidence,
+        )
+
+    def decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> Packet:
+        header, payload_start = self.header_decode(buffer, detection_res)
+        payload = self.payload_decode(buffer, header, payload_start)
         return Packet(
             src_mac=header.src, 
             dst_mac=header.dst,
@@ -113,6 +173,34 @@ class RXPipeline:
             payload=payload,
             valid=header.crc_passed
         )
+
+    def header_decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> tuple[FrameHeader, int]:
+        """Decode the header part of the packet. Assumes buffer input is already decimated."""
+        rx_syms = buffer[detection_res.payload_start:]
+
+        # TODO: Do costas correction et al.
+    
+        # demodulate header
+        header_syms = rx_syms[:self.frame_constructor.header_config.header_total_size]
+        header_bits = self.bpsk.symbols2bits(header_syms)
+        header = self.frame_constructor.decode_header(header_bits)
+        return header, detection_res.payload_start + self.frame_constructor.header_config.header_total_size
+
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start) -> np.ndarray:
+        rx_syms = buffer[payload_start:]
+
+        # TODO: Do costas correction et al.
+
+        # demodulate
+        match (header.mod_scheme):
+            case ModulationSchemes.BPSK:
+                payload_bits = self.bpsk.symbols2bits(rx_syms)
+            case ModulationSchemes.QPSK:
+                payload_bits = self.qpsk.symbols2bits(rx_syms)
+            case ModulationSchemes.PSK8:
+                payload_bits = self.psk8.symbols2bits(rx_syms)
+
+        return payload_bits
 
 if __name__ == "__main__":
     config = PipelineConfig()
