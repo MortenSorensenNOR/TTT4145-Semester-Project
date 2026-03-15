@@ -42,7 +42,7 @@ class SynchronizerConfig:
     long_preamble_nsym: int = 139
     long_margin_nsym: int = 5
 
-    plateau_edge_fraction: float = 0.9
+    plateau_edge_fraction: float = 0.5
     energy_floor: float = np.finfo(np.float64).tiny
 
 
@@ -140,9 +140,9 @@ def coarse_sync(
 
     peak_idx = np.argmax(m_d)
 
-    d_hat = np.argmax(m_d >= cfg.plateau_edge_fraction * m_d[peak_idx])
-
-    phi_hat = np.angle(p_d[peak_idx])
+    plateau_mask = m_d >= cfg.plateau_edge_fraction * m_d[peak_idx]
+    d_hat = np.argmax(plateau_mask)
+    phi_hat = np.angle(np.mean(p_d[plateau_mask]))
     cfo_hat = phi_hat * fs / (2 * np.pi * sample_cnt)
 
     return CoarseResult(
