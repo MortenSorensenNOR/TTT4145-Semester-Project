@@ -1,13 +1,13 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 
-from pulse_shaping import *
-from modulators import *
-from frame_constructor import *
-from golay import *
-from frame_sync import *
-from costas_loop.costas import *
-from ldpc.ldpc import *
+from modules.pulse_shaping import *
+from modules.modulators import *
+from modules.frame_constructor import *
+from modules.golay import *
+from modules.frame_sync import *
+from modules.costas_loop.costas import *
+from modules.ldpc.ldpc import *
 
 @dataclass
 class PipelineConfig:
@@ -37,7 +37,7 @@ class Packet:
     type: int = -1
     seq_num: int = -1
     length: int = -1
-    payload: np.ndarray = np.ndarray([])
+    payload: np.ndarray = field(default_factory=lambda: np.ndarray([]))
 
     valid: bool = False
     err_reason: str = ""
