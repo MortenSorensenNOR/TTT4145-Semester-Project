@@ -151,8 +151,8 @@ class RXPipeline:
         )
 
     def decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> Packet:
-        header, payload_start = self.header_decode(buffer, detection_res)
-        payload = self.payload_decode(buffer, header, payload_start)
+        header, payload_start, current_phase_estimate = self.header_decode(buffer, detection_res)
+        payload = self.payload_decode(buffer, header, payload_start, current_phase_estimate)
         return Packet(
             src_mac=header.src, 
             dst_mac=header.dst,
