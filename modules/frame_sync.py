@@ -143,11 +143,11 @@ def coarse_sync(
     d_hat = np.argmax(m_d >= cfg.plateau_edge_fraction * m_d[peak_idx])
 
     phi_hat = np.angle(p_d[peak_idx])
-    cfo_hat_hz = phi_hat * fs / (2 * np.pi * sample_cnt)
+    cfo_hat = phi_hat * fs / (2 * np.pi * sample_cnt)
 
     return CoarseResult(
         d_hat=d_hat,
-        cfo_hat=cfo_hat_hz,
+        cfo_hat=cfo_hat,
         m_peak=m_d[peak_idx],
     )
 
