@@ -2,8 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from utils.plotting import plot_iq, plot_constellation, plot_modulation_schemes_ideal_constallations
-from modules.modulation_schemes import BPSK, PSK8, QPSK
-from modules.pulse_shaping import RRCConfig, rrc_filter, upsample, downsample
+from modules.modulators import BPSK, PSK8, QPSK
+from modules.pulse_shaping import rrc_filter, upsample, downsample
 
 if __name__ == "__main__":
     # setup

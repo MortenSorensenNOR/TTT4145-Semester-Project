@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from pulse_shaping import *
-from modulation_schemes import *
+from modulators import *
 from frame_constructor import *
 from golay import *
 from frame_sync import *
@@ -20,6 +20,7 @@ class PipelineConfig:
     CODING_RATE: CodeRates = CodeRates.NONE
 
     SYNC_CONFIG = SynchronizerConfig()
+    COSTAS_CONFIG = CostasConfig()
 
     pulse_shaping: bool = True
     pilots: bool = False
@@ -162,21 +163,23 @@ class RXPipeline:
             valid=header.crc_passed
         )
 
-    def header_decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> tuple[FrameHeader, int]:
+    def header_decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> tuple[FrameHeader, int, float]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
         header_syms = buffer[detection_res.payload_start:self.frame_constructor.header_config.header_total_size]
 
         # TODO: Do costas correction et al.
+        header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
     
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms)
         header = self.frame_constructor.decode_header(header_bits)
-        return header, detection_res.payload_start + self.frame_constructor.header_config.header_total_size
+        return header, detection_res.payload_start + self.frame_constructor.header_config.header_total_size, phase_est[-1]
 
-    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start) -> np.ndarray:
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, phase_estimate: float) -> np.ndarray:
         rx_syms = buffer[payload_start:]
 
         # TODO: Do costas correction et al.
+        rx_syms, _ = apply_costas_loop(rx_syms, self.config.COSTAS_CONFIG, header.mod_scheme, phase_estimate)
 
         # demodulate
         match (header.mod_scheme):

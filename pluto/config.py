@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from modules.costas_loop.costas import CostasConfig
 from modules.frame_constructor import ModulationSchemes
 from modules.ldpc.ldpc import CodeRates
-from modules.modulation_schemes import BPSK, QPSK, PSK8, Modulator
+from modules.modulators import BPSK, QPSK, PSK8, Modulator
 #from modules.pilots import PilotConfig
 #from modules.synchronization import SynchronizerConfig
 

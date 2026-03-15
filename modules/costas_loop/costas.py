@@ -16,7 +16,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from modules.modulation_schemes import BPSK, PSK8, QPSK, Modulator
+from modules.modulators import BPSK, PSK8, QPSK, Modulator
+from modules.frame_constructor import ModulationSchemes
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +92,9 @@ def _8psk_py(symbols, alpha, beta, phase, integrator):
 # ---------------------------------------------------------------------------
 
 _func_map = {
-    BPSK: _ext.costas_loop_bpsk if _ext else _bpsk_py,
-    QPSK: _ext.costas_loop_qpsk if _ext else _qpsk_py,
-    PSK8: _ext.costas_loop_8psk if _ext else _8psk_py,
+    ModulationSchemes.BPSK: _ext.costas_loop_bpsk if _ext else _bpsk_py,
+    ModulationSchemes.QPSK: _ext.costas_loop_qpsk if _ext else _qpsk_py,
+    ModulationSchemes.PSK8: _ext.costas_loop_8psk if _ext else _8psk_py,
 }
 
 # ---------------------------------------------------------------------------
@@ -145,7 +146,7 @@ class CostasConfig:
 def apply_costas_loop(
     symbols: np.ndarray,
     config: CostasConfig,
-    modulator: Modulator,
+    modulator: ModulationSchemes,
     current_phase_estimate: float = 0.0,
     current_frequency_offset: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -169,10 +170,10 @@ def apply_costas_loop(
     corrected_symbols : np.ndarray[complex64]
     phase_estimates   : np.ndarray[float32]
     """
-    func = _func_map.get(type(modulator))
+    func = _func_map.get(modulator)
     if func is None:
         raise NotImplementedError(
-            f"No Costas loop implemented for {type(modulator).__name__}"
+            f"No Costas loop implemented for {modulator.__name__}"
         )
 
     return func(
