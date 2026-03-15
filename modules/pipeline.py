@@ -5,7 +5,7 @@ from pulse_shaping import *
 from modulation_schemes import *
 from frame_constructor import *
 from golay import *
-from cfo_timing_and_detection import *
+from frame_sync import *
 from costas_loop.costas import *
 from ldpc.ldpc import *
 
