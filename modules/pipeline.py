@@ -167,7 +167,7 @@ class RXPipeline:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
         header_syms = buffer[detection_res.payload_start:self.frame_constructor.header_config.header_total_size]
 
-        # TODO: Do costas correction et al.
+        # costas correction
         header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
     
         # demodulate header
@@ -178,7 +178,7 @@ class RXPipeline:
     def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, phase_estimate: float) -> np.ndarray:
         rx_syms = buffer[payload_start:]
 
-        # TODO: Do costas correction et al.
+        # costas correction
         rx_syms, _ = apply_costas_loop(rx_syms, self.config.COSTAS_CONFIG, header.mod_scheme, phase_estimate)
 
         # demodulate
