@@ -7,9 +7,11 @@ requires-python = ">=3.13"
 dependencies = [
     "matplotlib>=3.10.8",
     "numpy>=2.4.2",
-    "pybind11>=3.0.2",
+]
+
+[dependency-groups]
+dev = [
     "pytest>=9.0.2",
-    "setuptools>=82.0.1",
 ]
 [build-system]
 requires = ["setuptools", "pybind11", "wheel"]
@@ -20,3 +22,17 @@ where = ["."]
 include = ["modules*"]
 [tool.setuptools.package-dir]
 "" = "."
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["vendor"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+
+[tool.ruff.lint.pylint]
+max-args = 8
+max-returns = 8
+
+[tool.ty.rules]
+all = "error"
