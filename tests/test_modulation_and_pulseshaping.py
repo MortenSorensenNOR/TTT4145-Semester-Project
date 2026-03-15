@@ -11,8 +11,8 @@ if __name__ == "__main__":
     qpsk = QPSK()
     psk8 = PSK8()
 
-    rrc_config = RRCConfig(8, 0.25, 101)
-    rrc_taps = rrc_filter(rrc_config)
+    sps, alpha, ntaps = 8, 0.25, 101
+    rrc_taps = rrc_filter(sps, alpha, ntaps)
 
     # generate some random bits
     num_symbols = 128
@@ -26,16 +26,16 @@ if __name__ == "__main__":
     psk8_syms = psk8.bits2symbols(psk8_bits)
 
     # upsample and filter
-    bpsk_sig = upsample(bpsk_syms, rrc_config.sps, rrc_taps)
-    qpsk_sig = upsample(qpsk_syms, rrc_config.sps, rrc_taps)
-    psk8_sig = upsample(psk8_syms, rrc_config.sps, rrc_taps)
+    bpsk_sig = upsample(bpsk_syms, sps, rrc_taps)
+    qpsk_sig = upsample(qpsk_syms, sps, rrc_taps)
+    psk8_sig = upsample(psk8_syms, sps, rrc_taps)
 
     plot_iq(qpsk_sig)
 
     # filter and downsample
-    bpsk_rec = downsample(bpsk_sig, rrc_config.sps, rrc_taps)
-    qpsk_rec = downsample(qpsk_sig, rrc_config.sps, rrc_taps)
-    psk8_rec = downsample(psk8_sig, rrc_config.sps, rrc_taps)
+    bpsk_rec = downsample(bpsk_sig, sps, rrc_taps)
+    qpsk_rec = downsample(qpsk_sig, sps, rrc_taps)
+    psk8_rec = downsample(psk8_sig, sps, rrc_taps)
 
     # demodulate
     bpsk_bits_rec = bpsk.symbols2bits(bpsk_rec)
