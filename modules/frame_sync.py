@@ -152,12 +152,10 @@ def coarse_sync(
     local_start = max(0, peak_idx - preamble_span)
     local_end = min(len(m_d), peak_idx + preamble_span)
 
-    local_mask = np.zeros_like(m_d, dtype=bool)
-    local_mask[local_start:local_end] = (
-        m_d[local_start:local_end] >= cfg.plateau_edge_fraction * m_d[peak_idx]
-    )
-    d_hat = np.argmax(local_mask)
-    phi_hat = np.angle(np.mean(p_d[local_mask]))
+    local_m = m_d[local_start:local_end]
+    local_above = local_m >= cfg.plateau_edge_fraction * m_d[peak_idx]
+    d_hat = local_start + np.argmax(local_above)
+    phi_hat = np.angle(np.mean(p_d[local_start:local_end][local_above]))
     cfo_hat = phi_hat * fs / (2 * np.pi * sample_cnt)
 
     return CoarseResult(
