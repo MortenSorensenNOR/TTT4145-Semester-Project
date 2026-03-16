@@ -59,6 +59,9 @@ class TXPipeline:
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
 
+        # sync
+        self.sync_syms = generate_preamble(self.config.SYNC_CONFIG)
+
     def transmit(self, packet: Packet) -> np.ndarray:
         # construct bits
         header = FrameHeader(
@@ -75,11 +78,8 @@ class TXPipeline:
         header_syms = self.bpsk.bits2symbols(header_bits)
         payload_syms = self.payload_modulator.bits2symbols(payload_bits)
 
-        # sync
-        sync_syms = generate_preamble(self.config.SYNC_CONFIG)
-
         # construct signal
-        tx_syms = np.concat([sync_syms, header_syms, payload_syms])
+        tx_syms = np.concat([self.sync_syms, header_syms, payload_syms])
 
         # upsample and filter
         tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
@@ -115,11 +115,27 @@ class RXPipeline:
         # generate the known long preamble for matched filtering
         self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
 
-    def receive(self):
+    def receive(self, buffer: np.ndarray) -> np.ndarray:
         # TODO: Create a loop that runs receive or some shit
-        pass
+        detection_results = self.detect(buffer)
 
-    def detect(self, buffer: np.ndarray) -> DetectionResult:
+        num_of_detections = len(detection_results)
+
+        packets = np.ndarray(num_of_detections, dtype=Packet)
+
+        if num_of_detections < 1:
+            return packets
+
+        rx_syms = downsample(buffer, self.config.SPS, self.rrc_taps)
+
+        for i in range(num_of_detections):
+            #print(rx_syms.shape, detection_results[i])
+            #detection_results[i].payload_start = 251
+            packets[i] = self.decode(rx_syms, detection_results[i])
+        
+        return packets
+
+    def detect(self, buffer: np.ndarray) -> np.ndarray:
         cfg = self.config.SYNC_CONFIG
         sps = self.config.SPS
 
@@ -127,25 +143,20 @@ class RXPipeline:
         try:
             coarse = coarse_sync(buffer, self.config.SAMPLE_RATE, sps, cfg)
         except ValueError as e:
-            return DetectionResult(
-                valid=False,
-                err_reason=e.__str__()
-            )
+            return np.array([])
 
         # fine timing via long preamble correlation
         try:
             fine_start = fine_timing(buffer, self.long_ref, coarse, self.config.SAMPLE_RATE, sps, cfg)
         except ValueError as e:
-            return DetectionResult(
-                valid=False,
-                err_reason=e.__str__()
-            )
+            return np.array([])
 
-        return DetectionResult(
-            payload_start=int(fine_start) + len(self.long_ref),
+        return np.array([DetectionResult(
+            payload_start=int((int(fine_start) + len(self.long_ref))/self.config.SPS),
             cfo_estimate=float(coarse.cfo_hat),
             confidence=float(coarse.m_peak),
-        )
+            valid=True
+        )])
 
     def decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> Packet:
         header, payload_start, current_phase_estimate = self.header_decode(buffer, detection_res)
@@ -162,11 +173,12 @@ class RXPipeline:
 
     def header_decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> tuple[FrameHeader, int, float]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
-        header_syms = buffer[detection_res.payload_start:self.frame_constructor.header_config.header_total_size]
+        header_syms = buffer[detection_res.payload_start:detection_res.payload_start + 2 * self.frame_constructor.header_config.header_total_size]
 
         # costas correction
         header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
-    
+        #phase_est = [0]
+
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms)
         header = self.frame_constructor.decode_header(header_bits)
