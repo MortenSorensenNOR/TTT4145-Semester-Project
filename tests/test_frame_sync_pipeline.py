@@ -168,3 +168,46 @@ def test_sync_pipeline(cfo_hz: int, snr_db: int) -> None:
         assert fp.m_peak < MIN_DETECTION_CONFIDENCE, (
             f"false positive m_peak={fp.m_peak:.3f} (seed {10_000 + fp_seed})"
         )
+
+
+def test_multi_frame_plateau_isolation() -> None:
+    """CFO estimate must come from the first frame only, not a mix of both.
+
+    Places two identical frames (with different CFOs) in a single buffer.
+    The old global plateau_mask would average both CFOs.
+    The localized version must return only the first frame's CFO.
+    """
+    num_taps = 2 * SPS * SPAN + 1
+    rrc_taps = rrc_filter(SPS, RRC_ALPHA, num_taps)
+
+    cfo_frame1 = 5_000   # 5 kHz
+    cfo_frame2 = 15_000  # 15 kHz — deliberately different
+
+    rng = np.random.default_rng(42)
+    preamble = generate_preamble(SYNC_CFG)
+    payload = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
+    frame_syms = np.concatenate([preamble, payload])
+
+    # Build two frames with different CFOs
+    tx1 = upsample(frame_syms, SPS, rrc_taps)
+    tx2 = upsample(frame_syms, SPS, rrc_taps)
+
+    tx1 *= np.exp(2j * np.pi * cfo_frame1 / SAMPLE_RATE * np.arange(len(tx1)))
+
+    gap = np.zeros(500, dtype=complex)  # guard interval
+    offset2 = SAMPLE_OFFSET + len(tx1) + len(gap)
+    tx2 *= np.exp(2j * np.pi * cfo_frame2 / SAMPLE_RATE * (offset2 + np.arange(len(tx2))))
+
+    buffer = np.concatenate([
+        np.zeros(SAMPLE_OFFSET, dtype=complex),
+        tx1,
+        gap,
+        tx2,
+    ])
+
+    coarse = coarse_sync(buffer, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse.m_peak >= MIN_DETECTION_CONFIDENCE
+    cfo_err = abs(float(coarse.cfo_hat) - cfo_frame1)
+    assert cfo_err < MAX_CFO_ERROR_HZ, (
+        f"CFO error {cfo_err:.0f} Hz — plateau likely mixed both frames"
+    )
