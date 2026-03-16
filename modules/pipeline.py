@@ -59,6 +59,9 @@ class TXPipeline:
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
 
+        # sync
+        self.sync_syms = generate_preamble(self.config.SYNC_CONFIG)
+
     def transmit(self, packet: Packet) -> np.ndarray:
         # construct bits
         header = FrameHeader(
@@ -75,11 +78,8 @@ class TXPipeline:
         header_syms = self.bpsk.bits2symbols(header_bits)
         payload_syms = self.payload_modulator.bits2symbols(payload_bits)
 
-        # sync
-        sync_syms = generate_preamble(self.config.SYNC_CONFIG)
-
         # construct signal
-        tx_syms = np.concat([sync_syms, header_syms, payload_syms])
+        tx_syms = np.concat([self.sync_syms, header_syms, payload_syms])
 
         # upsample and filter
         tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
@@ -162,13 +162,15 @@ class RXPipeline:
 
     def header_decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> tuple[FrameHeader, int, float]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
-        header_syms = buffer[detection_res.payload_start:self.frame_constructor.header_config.header_total_size]
+        header_syms = buffer[detection_res.payload_start:detection_res.payload_start + 2 * self.frame_constructor.header_config.header_total_size]
 
         # costas correction
-        header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
+        # header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
+        phase_est = [0]
     
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms)
+        print(detection_res.payload_start, header_syms.shape, header_bits.shape)
         header = self.frame_constructor.decode_header(header_bits)
         return header, detection_res.payload_start + self.frame_constructor.header_config.header_total_size, phase_est[-1]
 
