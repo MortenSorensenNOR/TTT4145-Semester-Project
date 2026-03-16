@@ -30,7 +30,7 @@ class BPSK(Modulator):
     def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
         if len(symbols) == 0:
             return np.ndarray([], dtype=int)
-        return np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1).flatten()
+        return np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1).reshape(-1, 1)
 
 class QPSK(Modulator):
     def __init__(self) -> None:
