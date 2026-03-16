@@ -21,13 +21,13 @@ class ModulationSchemes(Enum):
 @dataclass
 class FrameHeader:
     """Frame header with metadata."""
-    length: int
+    length: int # payload length in bytes
     src: int
     dst: int
     frame_type: int
     mod_scheme: ModulationSchemes
     sequence_number: int
-    crc: int = 0
+    crc: int = field(default=0, compare=False) # just used for comparing in tests.
     crc_passed: bool = True
 
 
@@ -130,7 +130,7 @@ class FrameHeaderConstructor:
             fields.append(bits.tolist() if isinstance(bits, np.ndarray) else bits)
             offset += width
 
-        (length_bits, src_bits, dst_bits, frame_type_bits, mod_scheme_bits, coding_rate_bits, sequence_number_bits) = (
+        (length_bits, src_bits, dst_bits, frame_type_bits, mod_scheme_bits, sequence_number_bits) = (
             fields
         )
 
@@ -197,7 +197,7 @@ class FrameConstructor:
 
     def payload_coded_n_bits(self, header: FrameHeader) -> int:
         """Return the number of coded payload bits for a given header."""
-        raw = header.length + self.PAYLOAD_CRC_BITS
+        raw = header.length*8 + self.PAYLOAD_CRC_BITS
         return raw + (-raw % self.PAYLOAD_PAD_MULTIPLE)
 
     @staticmethod
@@ -254,8 +254,8 @@ class FrameConstructor:
         interleaving: bool = True,
     ) -> np.ndarray:
         payload_bits = (payload_encoded < 0).astype(int) if soft else payload_encoded.astype(int)
-        data_bits = payload_bits[: header.length]
-        crc_bits = payload_bits[header.length : header.length + self.PAYLOAD_CRC_BITS]
+        data_bits = payload_bits[: header.length*8]
+        crc_bits = payload_bits[header.length*8 : header.length*8 + self.PAYLOAD_CRC_BITS]
         received_crc = _bits_to_int(crc_bits.astype(int).tolist())
         expected_crc = self._crc16(data_bits)
         if received_crc != expected_crc:
