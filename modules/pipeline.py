@@ -147,7 +147,8 @@ class RXPipeline:
 
         # fine timing via long preamble correlation
         try:
-            fine_start = fine_timing(buffer, self.long_ref, coarse, self.config.SAMPLE_RATE, sps, cfg)
+            fine = fine_timing(buffer, self.long_ref, coarse, self.config.SAMPLE_RATE, sps, cfg)
+            fine_start = fine.sample_idx
         except ValueError as e:
             return np.array([])
 

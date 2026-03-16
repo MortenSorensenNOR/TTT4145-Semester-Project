@@ -55,6 +55,14 @@ class CoarseResult:
     m_peak: np.floating
 
 
+@dataclass
+class FineResult:
+    """Output of fine timing via cross-correlation."""
+
+    sample_idx: np.intp
+    peak_ratio: np.floating
+
+
 def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
     r"""Generate a Zadoff-Chu sequence of length n_zc with root u [3].
 
@@ -140,7 +148,7 @@ def coarse_sync(
 
     peak_idx = np.argmax(m_d)
 
-    preamble_span = cfg.short_preamble_nsym * cfg.short_preamble_nreps * samples_per_symbol
+    preamble_span = cfg.short_preamble_nsym * samples_per_symbol * cfg.short_preamble_nreps
     local_start = max(0, peak_idx - preamble_span)
     local_end = min(len(m_d), peak_idx + preamble_span)
 
@@ -166,7 +174,7 @@ def fine_timing(
     fs: int,
     samples_per_symbol: int,
     cfg: SynchronizerConfig,
-) -> np.intp:
+) -> FineResult:
     """Fine timing by cross-correlation with the long preamble [4] [5]."""
     if not np.iscomplexobj(samples):
         msg = "samples must be complex (conj is a no-op on reals)"
@@ -188,5 +196,8 @@ def fine_timing(
     cfo_phase = -2j * np.pi * (coarse.cfo_hat / fs) * n
     r = samples[search_start:search_end] * np.exp(cfo_phase)
 
-    z = np.correlate(r, s, mode="valid")
-    return search_start + np.argmax(np.abs(z))
+    z = np.abs(np.correlate(r, s, mode="valid"))
+    return FineResult(
+        sample_idx=search_start + np.argmax(z),
+        peak_ratio=np.max(z) / np.mean(z),
+    )
