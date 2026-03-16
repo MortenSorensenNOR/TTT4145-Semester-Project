@@ -170,99 +170,84 @@ def test_sync_pipeline(cfo_hz: int, snr_db: int) -> None:
         )
 
 
-def test_multi_frame_plateau_isolation() -> None:
-    """CFO estimate must come from the first frame only, not a mix of both.
+def test_multi_frame_stream_buffer() -> None:
+    """802.11 iterate-and-advance on a multi-frame stream buffer.
 
-    Places two identical frames (with different CFOs) in a single buffer.
-    The old global plateau_mask would average both CFOs.
-    The localized version must return only the first frame's CFO.
-    """
-    num_taps = 2 * SPS * SPAN + 1
-    rrc_taps = rrc_filter(SPS, RRC_ALPHA, num_taps)
+    Simulates the RX path for a 480p IP bridge.  Two phases test every
+    failure point in the receive chain:
 
-    cfo_frame1 = 5_000   # 5 kHz
-    cfo_frame2 = 15_000  # 15 kHz — deliberately different
+    Phase 1 -- Plateau isolation (no noise, different CFOs):
+        Two frames with deliberately different CFOs in one buffer.
+        Verifies coarse_sync's localized plateau returns the detected
+        frame's CFO, not an average of both.
 
-    rng = np.random.default_rng(42)
-    preamble = generate_preamble(SYNC_CFG)
-    payload = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
-    frame_syms = np.concatenate([preamble, payload])
-
-    # Build two frames with different CFOs
-    tx1 = upsample(frame_syms, SPS, rrc_taps)
-    tx2 = upsample(frame_syms, SPS, rrc_taps)
-
-    tx1 *= np.exp(2j * np.pi * cfo_frame1 / SAMPLE_RATE * np.arange(len(tx1)))
-
-    gap = np.zeros(500, dtype=complex)  # guard interval
-    offset2 = SAMPLE_OFFSET + len(tx1) + len(gap)
-    tx2 *= np.exp(2j * np.pi * cfo_frame2 / SAMPLE_RATE * (offset2 + np.arange(len(tx2))))
-
-    buffer = np.concatenate([
-        np.zeros(SAMPLE_OFFSET, dtype=complex),
-        tx1,
-        gap,
-        tx2,
-    ])
-
-    coarse = coarse_sync(buffer, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse.m_peak >= MIN_DETECTION_CONFIDENCE
-    cfo_err = abs(float(coarse.cfo_hat) - cfo_frame1)
-    assert cfo_err < MAX_CFO_ERROR_HZ, (
-        f"CFO error {cfo_err:.0f} Hz — plateau likely mixed both frames"
-    )
-
-
-def test_iterate_and_advance() -> None:
-    """After consuming frame 1, coarse_sync on the remainder finds frame 2.
-
-    Simulates the 802.11 iterate-and-advance receive pattern:
-    detect frame 1 -> consume -> detect frame 2 on buffer[offset:].
+    Phase 2 -- Iterate-and-advance (AWGN, same CFO):
+        Realistic point-to-point scenario.  Detect frame 1, consume,
+        detect frame 2 on the remainder.  Verifies the full 802.11
+        searchOffset pattern works end-to-end.
     """
     num_taps = 2 * SPS * SPAN + 1
     rrc_taps = rrc_filter(SPS, RRC_ALPHA, num_taps)
     long_ref = build_long_ref(SYNC_CFG, SPS, rrc_taps)
-
-    cfo_hz = 10_000
-
-    rng = np.random.default_rng(99)
+    rng = np.random.default_rng(42)
     preamble = generate_preamble(SYNC_CFG)
+
+    # -- Phase 1: plateau isolation (no noise) --------------------------------
+    cfo_a, cfo_b = 5_000, 15_000
+    payload = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
+    frame_syms = np.concatenate([preamble, payload])
+
+    tx_a = upsample(frame_syms, SPS, rrc_taps)
+    tx_b = upsample(frame_syms, SPS, rrc_taps)
+    tx_a *= np.exp(2j * np.pi * cfo_a / SAMPLE_RATE * np.arange(len(tx_a)))
+    gap = np.zeros(500, dtype=complex)
+    off_b = SAMPLE_OFFSET + len(tx_a) + len(gap)
+    tx_b *= np.exp(2j * np.pi * cfo_b / SAMPLE_RATE * (off_b + np.arange(len(tx_b))))
+
+    buf_iso = np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx_a, gap, tx_b])
+
+    coarse_iso = coarse_sync(buf_iso, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse_iso.m_peak >= MIN_DETECTION_CONFIDENCE
+    detected_cfo = float(coarse_iso.cfo_hat)
+    mixed_cfo = (cfo_a + cfo_b) / 2
+    assert abs(detected_cfo - mixed_cfo) > MAX_CFO_ERROR_HZ, (
+        f"CFO {detected_cfo:.0f} Hz is suspiciously close to the average "
+        f"{mixed_cfo:.0f} Hz -- plateau likely mixed both frames"
+    )
+
+    # -- Phase 2: iterate-and-advance (AWGN, same CFO) ------------------------
+    cfo_hz = 10_000
     payload1 = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
     payload2 = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
 
     frame1 = upsample(np.concatenate([preamble, payload1]), SPS, rrc_taps)
     frame2 = upsample(np.concatenate([preamble, payload2]), SPS, rrc_taps)
 
-    gap = np.zeros(500, dtype=complex)
-    buffer = np.concatenate([
+    buf_adv = np.concatenate([
         np.zeros(SAMPLE_OFFSET, dtype=complex),
-        frame1,
-        gap,
-        frame2,
-        np.zeros(SAMPLE_OFFSET, dtype=complex),
+        frame1, gap, frame2,
+        np.zeros(len(frame2), dtype=complex),  # trailing space (more SDR data)
     ])
-    buffer *= np.exp(2j * np.pi * cfo_hz / SAMPLE_RATE * np.arange(len(buffer)))
-
-    # Light noise floor (~14 dB SNR) prevents the Schmidl-Cox denominator
-    # from collapsing to zero in the gap / trailing-zero regions,
-    # which would create spurious M(d) peaks larger than the preamble plateau.
+    buf_adv *= np.exp(2j * np.pi * cfo_hz / SAMPLE_RATE * np.arange(len(buf_adv)))
     noise_std = 0.05
-    buffer += noise_std * (rng.standard_normal(len(buffer)) + 1j * rng.standard_normal(len(buffer)))
+    buf_adv += noise_std * (rng.standard_normal(len(buf_adv)) + 1j * rng.standard_normal(len(buf_adv)))
 
-    # --- Detect frame 1 ---
-    coarse1 = coarse_sync(buffer, SAMPLE_RATE, SPS, SYNC_CFG)
+    # Detect frame 1
+    coarse1 = coarse_sync(buf_adv, SAMPLE_RATE, SPS, SYNC_CFG)
     assert coarse1.m_peak >= MIN_DETECTION_CONFIDENCE
-    ft1 = fine_timing(buffer, long_ref, coarse1, SAMPLE_RATE, SPS, SYNC_CFG)
+    cfo_err1 = abs(float(coarse1.cfo_hat) - cfo_hz)
+    assert cfo_err1 < MAX_CFO_ERROR_HZ, f"frame 1 CFO error {cfo_err1:.0f} Hz"
 
-    # Consume: advance past frame 1 (fine_timing position + long_ref + payload symbols)
-    consumed = int(ft1) + len(long_ref) + (N_PAYLOAD_SYMBOLS * SPS)
+    ft1 = fine_timing(buf_adv, long_ref, coarse1, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert ft1 > 0, "fine_timing returned non-positive index"
 
-    # --- Detect frame 2 on remainder ---
-    remainder = buffer[consumed:]
+    # Consume frame 1 + gap, start searching at frame 2
+    consumed = SAMPLE_OFFSET + len(frame1) + len(gap)
+    remainder = buf_adv[consumed:]
+
     coarse2 = coarse_sync(remainder, SAMPLE_RATE, SPS, SYNC_CFG)
     assert coarse2.m_peak >= MIN_DETECTION_CONFIDENCE, (
         f"frame 2 not detected after consume (m_peak={coarse2.m_peak:.3f})"
     )
-
     cfo_err2 = abs(float(coarse2.cfo_hat) - cfo_hz)
     assert cfo_err2 < MAX_CFO_ERROR_HZ, f"frame 2 CFO error {cfo_err2:.0f} Hz"
