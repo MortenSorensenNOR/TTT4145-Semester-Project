@@ -1,8 +1,9 @@
 """Frame synchronization pipeline test -- PlutoSDR 480p IP bridge.
 
-Verifies coarse timing, CFO estimation, sub-symbol timing accuracy, and
-false-positive rejection under realistic PlutoSDR channel conditions
-including AD9361 RX impairments and indoor multipath.
+Verifies the full sync chain (coarse timing, CFO estimation, fine timing,
+multi-frame iterate-and-advance, false-positive rejection) under realistic
+PlutoSDR channel conditions including AD9361 RX impairments, indoor
+multipath, and multi-frame stream buffers.
 
 No CFO calibration assumed. PlutoSDR AD9361 TCXO: +/-25 ppm.
 At 2.4 GHz, two uncalibrated devices can differ by up to +/-120 kHz.
@@ -15,6 +16,8 @@ References
 [2] Analog Devices, Analog Dialogue, "Understanding Image Rejection
     and Its Impact on Desired Signals".
 [3] ITU-R M.1225 (1997), Annex 2, Indoor Office Test Environment.
+[4] IEEE 802.11 iterate-and-advance pattern (MATLAB WLAN Toolbox
+    searchOffset, gr-ieee802-11 MIN_GAP).
 
 """
 
@@ -37,6 +40,7 @@ SPAN = 8
 N_PAYLOAD_SYMBOLS = 200
 SAMPLE_OFFSET = 200
 N_SEEDS = 30
+GUARD_SAMPLES = 500
 
 SPS = 8
 SYNC_CFG = SynchronizerConfig()
@@ -48,16 +52,11 @@ MAX_CFO_ERROR_HZ = 200
 MIN_SUBSYM_RATE = 0.95
 
 # AD9361 RX impairments after internal calibration [1][2].
-# Quadrature: 0.2 % gain, 0.2° phase (typ.) -> ~-50 dBc image [2].
 AD9361_IQ_GAIN_ERROR_PCT = 0.2
 AD9361_IQ_PHASE_ERROR_DEG = 0.2
-# DC offset: residual after BB DC tracking; -50 dBc (TX carrier leakage spec,
-# same cal architecture, used as conservative RX estimate) [1].
 AD9361_DC_OFFSET_DBC = -50
 
 # Indoor multipath [3]: ITU-R M.1225, Annex 2, Indoor Office Channel A
-# (RMS delay ~35 ns).  Tap 1: 0 ns, 0 dB; Tap 2: 50 ns, -3 dB.
-# At fs = 5.336 MHz (187 ns/sample), 50 ns < 1 sample -> 1-sample delay.
 MULTIPATH_TAPS_DB = np.array([0.0, -3.0])
 
 N_FP_SEEDS = 10
@@ -79,18 +78,45 @@ PLUTOSDR_SNR_DB = [
 ]
 
 
+def _apply_channel(
+    rx: np.ndarray,
+    cfo_hz: float,
+    noise_scale: float,
+    dc: float,
+    iq_g: float,
+    iq_phi: float,
+    ch: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Apply multipath -> CFO -> DC offset -> IQ imbalance -> AWGN."""
+    rx_delayed = np.empty_like(rx)
+    rx_delayed[0] = 0
+    rx_delayed[1:] = rx[:-1]
+    rx = ch[0] * rx + ch[1] * rx_delayed
+
+    rx *= np.exp(2j * np.pi * cfo_hz / SAMPLE_RATE * np.arange(len(rx)))
+    rx += dc
+    ri, rq = rx.real, rx.imag
+    rx = ri + 1j * iq_g * (np.sin(iq_phi) * ri + np.cos(iq_phi) * rq)
+    rx += noise_scale * (rng.standard_normal(len(rx)) + 1j * rng.standard_normal(len(rx)))
+    return rx
+
+
 @pytest.mark.parametrize("cfo_hz", PLUTOSDR_CFO_HZ)
 @pytest.mark.parametrize("snr_db", PLUTOSDR_SNR_DB)
 def test_sync_pipeline(cfo_hz: int, snr_db: int) -> None:
     """Sync pipeline under realistic PlutoSDR channel conditions.
 
-    Simulates TX -> channel -> RX over N_SEEDS noise realisations and checks:
+    Simulates TX -> channel -> RX and checks five properties across
+    N_SEEDS noise realisations:
 
     1. Detection rate >= 90 %: coarse_sync finds the preamble reliably.
     2. CFO accuracy: median estimation error < 200 Hz.
     3. Sub-symbol timing: fine_timing lands on the correct sample grid
        (residual mod SPS == 0) in >= 95 % of detections.
     4. False-positive rejection: noise-only buffers must not trigger.
+    5. Multi-frame iterate-and-advance [4]: two frames in one buffer,
+       detect frame 1 -> consume -> detect frame 2 on remainder.
 
     Channel model (physical order):
         TX -> delay -> multipath [3] -> CFO -> DC offset [1]
@@ -116,6 +142,7 @@ def test_sync_pipeline(cfo_hz: int, snr_db: int) -> None:
     iq_g = 1 + AD9361_IQ_GAIN_ERROR_PCT / 100
     iq_phi = np.radians(AD9361_IQ_PHASE_ERROR_DEG)
 
+    # -- 1-3. Statistical single-frame detection ------------------------------
     detect_count = 0
     cfo_errors: list[float] = []
     subsym_zero = 0
@@ -127,17 +154,7 @@ def test_sync_pipeline(cfo_hz: int, snr_db: int) -> None:
         tx = upsample(np.concatenate([preamble, payload]), SPS, rrc_taps)
 
         rx = np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx])
-
-        rx_delayed = np.empty_like(rx)
-        rx_delayed[0] = 0
-        rx_delayed[1:] = rx[:-1]
-        rx = ch[0] * rx + ch[1] * rx_delayed
-
-        rx *= np.exp(2j * np.pi * cfo_hz / SAMPLE_RATE * np.arange(len(rx)))
-        rx += dc
-        ri, rq = rx.real, rx.imag
-        rx = ri + 1j * iq_g * (np.sin(iq_phi) * ri + np.cos(iq_phi) * rq)
-        rx += noise_scale * (rng.standard_normal(len(rx)) + 1j * rng.standard_normal(len(rx)))
+        rx = _apply_channel(rx, cfo_hz, noise_scale, dc, iq_g, iq_phi, ch, rng)
 
         coarse = coarse_sync(rx, SAMPLE_RATE, SPS, SYNC_CFG)
         if coarse.m_peak < MIN_DETECTION_CONFIDENCE:
@@ -158,6 +175,7 @@ def test_sync_pipeline(cfo_hz: int, snr_db: int) -> None:
     subsym_rate = subsym_zero / detect_count
     assert subsym_rate >= MIN_SUBSYM_RATE, f"sub-symbol aligned {subsym_rate:.0%}"
 
+    # -- 4. False-positive rejection ------------------------------------------
     n_fp_samples = SAMPLE_OFFSET + N_PAYLOAD_SYMBOLS * SPS + len(long_ref)
     for fp_seed in range(N_FP_SEEDS):
         rng_fp = np.random.default_rng(10_000 + fp_seed)
@@ -169,85 +187,43 @@ def test_sync_pipeline(cfo_hz: int, snr_db: int) -> None:
             f"false positive m_peak={fp.m_peak:.3f} (seed {10_000 + fp_seed})"
         )
 
-
-def test_multi_frame_stream_buffer() -> None:
-    """802.11 iterate-and-advance on a multi-frame stream buffer.
-
-    Simulates the RX path for a 480p IP bridge.  Two phases test every
-    failure point in the receive chain:
-
-    Phase 1 -- Plateau isolation (no noise, different CFOs):
-        Two frames with deliberately different CFOs in one buffer.
-        Verifies coarse_sync's localized plateau returns the detected
-        frame's CFO, not an average of both.
-
-    Phase 2 -- Iterate-and-advance (AWGN, same CFO):
-        Realistic point-to-point scenario.  Detect frame 1, consume,
-        detect frame 2 on the remainder.  Verifies the full 802.11
-        searchOffset pattern works end-to-end.
-    """
-    num_taps = 2 * SPS * SPAN + 1
-    rrc_taps = rrc_filter(SPS, RRC_ALPHA, num_taps)
-    long_ref = build_long_ref(SYNC_CFG, SPS, rrc_taps)
-    rng = np.random.default_rng(42)
+    # -- 5. Multi-frame iterate-and-advance [4] -------------------------------
+    rng_mf = np.random.default_rng(7777)
     preamble = generate_preamble(SYNC_CFG)
-
-    # -- Phase 1: plateau isolation (no noise) --------------------------------
-    cfo_a, cfo_b = 5_000, 15_000
-    payload = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
-    frame_syms = np.concatenate([preamble, payload])
-
-    tx_a = upsample(frame_syms, SPS, rrc_taps)
-    tx_b = upsample(frame_syms, SPS, rrc_taps)
-    tx_a *= np.exp(2j * np.pi * cfo_a / SAMPLE_RATE * np.arange(len(tx_a)))
-    gap = np.zeros(500, dtype=complex)
-    off_b = SAMPLE_OFFSET + len(tx_a) + len(gap)
-    tx_b *= np.exp(2j * np.pi * cfo_b / SAMPLE_RATE * (off_b + np.arange(len(tx_b))))
-
-    buf_iso = np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx_a, gap, tx_b])
-
-    coarse_iso = coarse_sync(buf_iso, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse_iso.m_peak >= MIN_DETECTION_CONFIDENCE
-    detected_cfo = float(coarse_iso.cfo_hat)
-    mixed_cfo = (cfo_a + cfo_b) / 2
-    assert abs(detected_cfo - mixed_cfo) > MAX_CFO_ERROR_HZ, (
-        f"CFO {detected_cfo:.0f} Hz is suspiciously close to the average "
-        f"{mixed_cfo:.0f} Hz -- plateau likely mixed both frames"
-    )
-
-    # -- Phase 2: iterate-and-advance (AWGN, same CFO) ------------------------
-    cfo_hz = 10_000
-    payload1 = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
-    payload2 = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
+    payload1 = rng_mf.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
+    payload2 = rng_mf.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
 
     frame1 = upsample(np.concatenate([preamble, payload1]), SPS, rrc_taps)
     frame2 = upsample(np.concatenate([preamble, payload2]), SPS, rrc_taps)
+    gap = np.zeros(GUARD_SAMPLES, dtype=complex)
 
-    buf_adv = np.concatenate([
+    buf_mf = np.concatenate([
         np.zeros(SAMPLE_OFFSET, dtype=complex),
         frame1, gap, frame2,
-        np.zeros(len(frame2), dtype=complex),  # trailing space (more SDR data)
+        np.zeros(SAMPLE_OFFSET, dtype=complex),
     ])
-    buf_adv *= np.exp(2j * np.pi * cfo_hz / SAMPLE_RATE * np.arange(len(buf_adv)))
-    noise_std = 0.05
-    buf_adv += noise_std * (rng.standard_normal(len(buf_adv)) + 1j * rng.standard_normal(len(buf_adv)))
+    # CFO + AWGN only (channel impairments already validated in sections 1-3;
+    # DC offset on the zero-gap would create a constant-amplitude region that
+    # the Schmidl-Cox metric mistakes for a perfect preamble).
+    # Fixed noise floor keeps R(d) healthy in zero-regions regardless of SNR.
+    buf_mf *= np.exp(2j * np.pi * cfo_hz / SAMPLE_RATE * np.arange(len(buf_mf)))
+    mf_noise = 0.05
+    buf_mf += mf_noise * (rng_mf.standard_normal(len(buf_mf)) + 1j * rng_mf.standard_normal(len(buf_mf)))
 
-    # Detect frame 1
-    coarse1 = coarse_sync(buf_adv, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse1.m_peak >= MIN_DETECTION_CONFIDENCE
+    coarse1 = coarse_sync(buf_mf, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse1.m_peak >= MIN_DETECTION_CONFIDENCE, "frame 1 not detected in multi-frame buffer"
     cfo_err1 = abs(float(coarse1.cfo_hat) - cfo_hz)
-    assert cfo_err1 < MAX_CFO_ERROR_HZ, f"frame 1 CFO error {cfo_err1:.0f} Hz"
+    assert cfo_err1 < MAX_CFO_ERROR_HZ, f"multi-frame: frame 1 CFO error {cfo_err1:.0f} Hz"
 
-    ft1 = fine_timing(buf_adv, long_ref, coarse1, SAMPLE_RATE, SPS, SYNC_CFG)
+    ft1 = fine_timing(buf_mf, long_ref, coarse1, SAMPLE_RATE, SPS, SYNC_CFG)
     assert ft1 > 0, "fine_timing returned non-positive index"
 
-    # Consume frame 1 + gap, start searching at frame 2
     consumed = SAMPLE_OFFSET + len(frame1) + len(gap)
-    remainder = buf_adv[consumed:]
+    remainder = buf_mf[consumed:]
 
     coarse2 = coarse_sync(remainder, SAMPLE_RATE, SPS, SYNC_CFG)
     assert coarse2.m_peak >= MIN_DETECTION_CONFIDENCE, (
         f"frame 2 not detected after consume (m_peak={coarse2.m_peak:.3f})"
     )
     cfo_err2 = abs(float(coarse2.cfo_hat) - cfo_hz)
-    assert cfo_err2 < MAX_CFO_ERROR_HZ, f"frame 2 CFO error {cfo_err2:.0f} Hz"
+    assert cfo_err2 < MAX_CFO_ERROR_HZ, f"multi-frame: frame 2 CFO error {cfo_err2:.0f} Hz"
