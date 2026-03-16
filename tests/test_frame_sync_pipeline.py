@@ -211,3 +211,58 @@ def test_multi_frame_plateau_isolation() -> None:
     assert cfo_err < MAX_CFO_ERROR_HZ, (
         f"CFO error {cfo_err:.0f} Hz — plateau likely mixed both frames"
     )
+
+
+def test_iterate_and_advance() -> None:
+    """After consuming frame 1, coarse_sync on the remainder finds frame 2.
+
+    Simulates the 802.11 iterate-and-advance receive pattern:
+    detect frame 1 -> consume -> detect frame 2 on buffer[offset:].
+    """
+    num_taps = 2 * SPS * SPAN + 1
+    rrc_taps = rrc_filter(SPS, RRC_ALPHA, num_taps)
+    long_ref = build_long_ref(SYNC_CFG, SPS, rrc_taps)
+
+    cfo_hz = 10_000
+
+    rng = np.random.default_rng(99)
+    preamble = generate_preamble(SYNC_CFG)
+    payload1 = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
+    payload2 = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
+
+    frame1 = upsample(np.concatenate([preamble, payload1]), SPS, rrc_taps)
+    frame2 = upsample(np.concatenate([preamble, payload2]), SPS, rrc_taps)
+
+    gap = np.zeros(500, dtype=complex)
+    buffer = np.concatenate([
+        np.zeros(SAMPLE_OFFSET, dtype=complex),
+        frame1,
+        gap,
+        frame2,
+        np.zeros(SAMPLE_OFFSET, dtype=complex),
+    ])
+    buffer *= np.exp(2j * np.pi * cfo_hz / SAMPLE_RATE * np.arange(len(buffer)))
+
+    # Light noise floor (~14 dB SNR) prevents the Schmidl-Cox denominator
+    # from collapsing to zero in the gap / trailing-zero regions,
+    # which would create spurious M(d) peaks larger than the preamble plateau.
+    noise_std = 0.05
+    buffer += noise_std * (rng.standard_normal(len(buffer)) + 1j * rng.standard_normal(len(buffer)))
+
+    # --- Detect frame 1 ---
+    coarse1 = coarse_sync(buffer, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse1.m_peak >= MIN_DETECTION_CONFIDENCE
+    ft1 = fine_timing(buffer, long_ref, coarse1, SAMPLE_RATE, SPS, SYNC_CFG)
+
+    # Consume: advance past frame 1 (fine_timing position + long_ref + payload symbols)
+    consumed = int(ft1) + len(long_ref) + (N_PAYLOAD_SYMBOLS * SPS)
+
+    # --- Detect frame 2 on remainder ---
+    remainder = buffer[consumed:]
+    coarse2 = coarse_sync(remainder, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse2.m_peak >= MIN_DETECTION_CONFIDENCE, (
+        f"frame 2 not detected after consume (m_peak={coarse2.m_peak:.3f})"
+    )
+
+    cfo_err2 = abs(float(coarse2.cfo_hat) - cfo_hz)
+    assert cfo_err2 < MAX_CFO_ERROR_HZ, f"frame 2 CFO error {cfo_err2:.0f} Hz"
