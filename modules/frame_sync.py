@@ -90,7 +90,7 @@ def build_long_ref(cfg: SynchronizerConfig, sps: int, rrc_taps: np.ndarray) -> n
 
 
 def coarse_sync(
-    rx: np.ndarray,
+    samples: np.ndarray,
     fs: int,
     samples_per_symbol: int,
     cfg: SynchronizerConfig,
@@ -117,8 +117,8 @@ def coarse_sync(
 
     Acquisition range: $\pm f_s / (2L)$.
     """
-    if not np.iscomplexobj(rx):
-        msg = "rx must be complex (conj is a no-op on reals)"
+    if not np.iscomplexobj(samples):
+        msg = "samples must be complex (conj is a no-op on reals)"
         raise TypeError(msg)
 
     if samples_per_symbol < 1 or fs < 1:
@@ -126,14 +126,14 @@ def coarse_sync(
         raise ValueError(msg)
 
     sample_cnt = cfg.short_preamble_nsym * samples_per_symbol
-    if len(rx) < 2 * sample_cnt:
-        msg = f"rx too short ({len(rx)} samples): need >= 2L={2 * sample_cnt} for two adjacent windows"
+    if len(samples) < 2 * sample_cnt:
+        msg = f"samples too short ({len(samples)} samples): need >= 2L={2 * sample_cnt} for two adjacent windows"
         raise ValueError(msg)
 
-    cs_p = np.concatenate(([0j], np.cumsum(np.conj(rx[:-sample_cnt]) * rx[sample_cnt:])))
+    cs_p = np.concatenate(([0j], np.cumsum(np.conj(samples[:-sample_cnt]) * samples[sample_cnt:])))
     p_d = cs_p[sample_cnt:] - cs_p[:-sample_cnt]
 
-    cs_r = np.concatenate(([0.0], np.cumsum(np.abs(rx[sample_cnt:]) ** 2)))
+    cs_r = np.concatenate(([0.0], np.cumsum(np.abs(samples[sample_cnt:]) ** 2)))
     r_d = cs_r[sample_cnt:] - cs_r[:-sample_cnt]
 
     m_d = np.abs(p_d) ** 2 / np.maximum(r_d**2, cfg.energy_floor)
@@ -153,7 +153,7 @@ def coarse_sync(
 
 
 def fine_timing(
-    rx: np.ndarray,
+    samples: np.ndarray,
     s: np.ndarray,
     coarse: CoarseResult,
     fs: int,
@@ -161,8 +161,8 @@ def fine_timing(
     cfg: SynchronizerConfig,
 ) -> np.intp:
     """Fine timing by cross-correlation with the long preamble [4] [5]."""
-    if not np.iscomplexobj(rx):
-        msg = "rx must be complex (conj is a no-op on reals)"
+    if not np.iscomplexobj(samples):
+        msg = "samples must be complex (conj is a no-op on reals)"
         raise TypeError(msg)
 
     samples_per_rep = cfg.short_preamble_nsym * samples_per_symbol
@@ -170,7 +170,7 @@ def fine_timing(
 
     sample_margin = cfg.long_margin_nsym * samples_per_symbol
     search_start = max(start_sample - sample_margin, 0)
-    search_end = min(len(rx), start_sample + 2 * sample_margin + len(s))
+    search_end = min(len(samples), start_sample + 2 * sample_margin + len(s))
 
     if search_end - search_start < len(s):
         got = search_end - search_start
@@ -179,7 +179,7 @@ def fine_timing(
 
     n = np.arange(search_start, search_end)
     cfo_phase = -2j * np.pi * (coarse.cfo_hat / fs) * n
-    r = rx[search_start:search_end] * np.exp(cfo_phase)
+    r = samples[search_start:search_end] * np.exp(cfo_phase)
 
     z = np.correlate(r, s, mode="valid")
     return search_start + np.argmax(np.abs(z))
