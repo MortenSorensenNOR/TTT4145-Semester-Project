@@ -19,6 +19,10 @@ dev = [
 requires = ["setuptools", "pybind11"]
 build-backend = "setuptools.build_meta"
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendor", "pluto"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["modules*"]
