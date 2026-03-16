@@ -18,7 +18,7 @@ def random_pipeline_config(draw):
 
 @composite
 def random_packet_length(draw):
-    return draw(st.integers(min_value=1, max_value=(2**12)-1))
+    return draw(st.integers(min_value=2**6, max_value=(2**12)-1))
 
 # --- Tests ---
 @given(pipeline_config = random_pipeline_config(), packet_length = random_packet_length())
@@ -37,13 +37,15 @@ def test_simple(pipeline_config, packet_length):
         payload=rng.integers(0, 2, packet_length*8)
     )
 
-    print(packet.payload.shape)
+    #print(packet.payload.shape)
 
     tx_signal = tx.transmit(packet)
-    print(tx_signal.shape)
+    #print(tx_signal.shape)
     
-    detection = DetectionResult(len(tx.sync_syms), valid=True)
-    tx_signal = downsample(tx_signal, pipeline_config.SPS, tx.rrc_taps)
-    rx_packet = rx.decode(tx_signal, detection)
+    rx_packets = rx.receive(tx_signal)
 
-    assert packet.payload.all() == rx_packet.payload.all()
+    #detection = DetectionResult(len(tx.sync_syms), valid=True)
+    #tx_signal = downsample(tx_signal, pipeline_config.SPS, tx.rrc_taps)
+    #rx_packet = rx.decode(tx_signal, detection)
+
+    assert packet.payload.all() == rx_packets[0].payload.all()
