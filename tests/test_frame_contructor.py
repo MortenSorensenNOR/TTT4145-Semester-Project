@@ -11,7 +11,7 @@ def random_frame_header(draw):
     return FrameHeader(
         length=draw(st.integers(min_value=1, max_value=(2**12)-1)),
         src=0,
-        dst=0,
+        dst=1,
         frame_type=0,
         mod_scheme=draw(st.sampled_from(MOD_SCHEMES)),
         sequence_number=0,
