@@ -59,7 +59,7 @@ def test_simple(pipeline_config, packet_length):
     )
 
     tx_signal = tx.transmit(packet)
-    tx_signal = np.concat([np.zeros(100, dtype=complex), tx_signal])
+    tx_signal = np.concat([np.zeros(73, dtype=complex), tx_signal, np.zeros(500, dtype=complex), tx_signal, np.zeros(300, dtype=complex)])
 
     # apply channel
     rx_signal = channel.apply(tx_signal)
