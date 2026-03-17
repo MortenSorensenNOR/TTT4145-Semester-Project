@@ -18,7 +18,8 @@ MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes
 @composite
 def random_pipeline_config(draw):
     return PipelineConfig(
-        MOD_SCHEME = draw(st.sampled_from(MOD_SCHEMES))
+        MOD_SCHEME = draw(st.sampled_from(MOD_SCHEMES)),
+        SPS = 4
     )
 
 @composite

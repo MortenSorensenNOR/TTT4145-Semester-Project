@@ -1,6 +1,7 @@
 """Root-raised-cosine pulse shaping: filter design, upsampling and downsampling."""
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 def rrc_filter(sps: int, alpha: float, num_taps: int) -> np.ndarray:
@@ -33,7 +34,7 @@ def rrc_filter(sps: int, alpha: float, num_taps: int) -> np.ndarray:
         ],
     )
 
-    return h / np.sqrt(np.sum(h**2))
+    return h / np.max(h)
 
 
 def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
@@ -48,8 +49,13 @@ def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray
     """Match-filter with RRC taps, strip group delay, and decimate."""
     if len(signal) == 0:
         return np.ndarray([], dtype=complex)
-    delay = len(rrc_taps) - 1
+    delay = (len(rrc_taps) - 1)//2
     n_out = max(0, (len(signal) - len(rrc_taps) + 1) // sps)
     filtered = np.convolve(signal, rrc_taps, mode="full")
     return filtered[delay : delay + n_out * sps : sps]
 
+
+if __name__ == "__main__":
+    taps = rrc_filter(8, 0.25, 2 * 8 * 8 + 1)
+    plt.plot(taps)
+    plt.savefig("rrc.png")

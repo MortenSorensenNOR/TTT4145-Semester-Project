@@ -126,11 +126,11 @@ class RXPipeline:
         if num_of_detections < 1:
             return np.array([Packet(payload=np.array([0]))]) # have to return an empty packet
         
-        rx_syms = downsample(buffer, self.config.SPS, self.rrc_taps)
-
         for i in range(num_of_detections):
-            print(rx_syms.shape, detection_results[i])
             #detection_results[i].payload_start = 243
+            rx_syms = downsample(buffer[detection_results[i].payload_start:], self.config.SPS, self.rrc_taps)
+            
+            print(rx_syms.shape, detection_results[i])
             packets[i] = self.decode(rx_syms, detection_results[i])
         
         return packets
@@ -153,7 +153,7 @@ class RXPipeline:
             return np.array([])
 
         return np.array([DetectionResult(
-            payload_start=int((int(fine_start) + len(self.long_ref))/self.config.SPS)-self.config.SPS,
+            payload_start=(int(fine_start) + len(self.long_ref)),
             cfo_estimate=float(coarse.cfo_hat),
             confidence=float(coarse.m_peak),
             valid=True
@@ -174,7 +174,7 @@ class RXPipeline:
 
     def header_decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> tuple[FrameHeader, int, float]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
-        header_syms = buffer[detection_res.payload_start:detection_res.payload_start + 2 * self.frame_constructor.header_config.header_total_size]
+        header_syms = buffer[:2 * self.frame_constructor.header_config.header_total_size]
 
         # costas correction
         #header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
@@ -183,7 +183,7 @@ class RXPipeline:
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms)
         header = self.frame_constructor.decode_header(header_bits)
-        return header, detection_res.payload_start + self.frame_constructor.header_config.header_total_size, phase_est[-1]
+        return header, self.frame_constructor.header_config.header_total_size, phase_est[-1]
 
     def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, phase_estimate: float) -> np.ndarray:
         rx_syms = buffer[payload_start:]
