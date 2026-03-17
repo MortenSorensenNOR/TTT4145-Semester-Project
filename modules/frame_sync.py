@@ -45,7 +45,7 @@ class SynchronizerConfig:
     plateau_edge_fraction: float = 0.5
     energy_floor: float = np.finfo(np.float64).tiny
 
-    detection_threshold: float = 0.5
+    detection_threshold: float = 0.3
 
 
 @dataclass

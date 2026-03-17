@@ -32,30 +32,31 @@ from pluto.config import RRC_ALPHA, SAMPLE_RATE, SPAN, SPS
 
 SYNC_CFG = SynchronizerConfig()
 NUM_TAPS = 2 * SPS * SPAN + 1
-ACQ_RANGE_HZ = SAMPLE_RATE / (2 * SYNC_CFG.short_preamble_nsym * SPS)
+COARSE_CFO_RANGE_HZ = SAMPLE_RATE / (2 * SYNC_CFG.short_preamble_nsym * SPS)
 
 N_PAYLOAD_SYMBOLS = 200
 SAMPLE_OFFSET = 200
 GUARD_SAMPLES = 500
-N_SEEDS = 30
-N_FP_SEEDS = 10
+N_TRIALS = 30
+N_FP_TRIALS = 10
 
 MIN_DETECTION_CONFIDENCE = 0.3
-MIN_DETECT_RATE = 0.9
+MIN_DETECTION_RATE = 0.9
 MAX_CFO_ERROR_HZ = 200
-MIN_SUBSYM_RATE = 0.95
+MIN_ALIGNED_RATE = 0.95
+MIN_MULTI_FRAMES = 2
 
-MULTIPATH_TAPS_DB = np.array([0.0, -3.0])
-AD9361_IQ_GAIN_ERROR_PCT = 0.2
-AD9361_IQ_PHASE_ERROR_DEG = 0.2
-AD9361_DC_OFFSET_DBC = -50
-TCXO_PHASE_NOISE_STD = 0.003
-TCXO_SRO_PPM = 50
-AD9361_AGC_STEP_DB = 6
-AD9361_AGC_SETTLE_SAMPLES = int(0.1e-3 * SAMPLE_RATE)
-AD9361_ADC_CLIP_FRACTION = 0.7
+CHANNEL_TAPS_DB = np.array([0.0, -3.0])
+IQ_GAIN_ERROR_PCT = 0.2
+IQ_PHASE_ERROR_DEG = 0.2
+DC_OFFSET_DBC = -50
+PHASE_NOISE_STD = 0.003
+SAMPLE_RATE_OFFSET_PPM = 50
+AGC_STEP_DB = 6
+AGC_SETTLE_SAMPLES = int(0.1e-3 * SAMPLE_RATE)
+ADC_CLIP_FRACTION = 0.7
 
-PLUTOSDR_CFO_HZ = [
+CFO_VALUES_HZ = [
     pytest.param(0, id="0kHz"),
     pytest.param(10_000, id="10kHz"),
     pytest.param(25_000, id="25kHz"),
@@ -64,7 +65,7 @@ PLUTOSDR_CFO_HZ = [
     pytest.param(80_000, id="80kHz"),
     pytest.param(120_000, id="120kHz"),
 ]
-PLUTOSDR_SNR_DB = [
+SNR_VALUES_DB = [
     pytest.param(20, id="20dB"),
     pytest.param(15, id="15dB"),
     pytest.param(10, id="10dB"),
@@ -79,30 +80,30 @@ class SyncFixture:
     rrc_taps: np.ndarray
     long_ref: np.ndarray
     group_delay: int
-    ch: np.ndarray
+    taps: np.ndarray
     noise_scale: float
-    dc: float
-    iq_g: float
-    iq_phi: float
+    dc_offset: float
+    iq_gain: float
+    iq_phase: float
 
 
-@pytest.fixture(params=PLUTOSDR_SNR_DB, scope="module")
-def sf(request: pytest.FixtureRequest) -> SyncFixture:
+@pytest.fixture(params=SNR_VALUES_DB, scope="module")
+def channel(request: pytest.FixtureRequest) -> SyncFixture:
     """Build channel fixture for the parametrized SNR."""
     snr_db = request.param
     rrc_taps = rrc_filter(SPS, RRC_ALPHA, NUM_TAPS)
-    ch = 10 ** (MULTIPATH_TAPS_DB / 20)
-    ch /= np.linalg.norm(ch)
+    taps = 10 ** (CHANNEL_TAPS_DB / 20)
+    taps /= np.linalg.norm(taps)
     sig_power = np.mean(np.abs(upsample(generate_preamble(SYNC_CFG), SPS, rrc_taps)) ** 2)
     return SyncFixture(
         rrc_taps=rrc_taps,
         long_ref=build_long_ref(SYNC_CFG, SPS, rrc_taps),
         group_delay=(NUM_TAPS - 1) // 2,
-        ch=ch,
+        taps=taps,
         noise_scale=np.sqrt(sig_power / (2 * 10 ** (snr_db / 10))),
-        dc=np.sqrt(sig_power) * 10 ** (AD9361_DC_OFFSET_DBC / 20),
-        iq_g=1 + AD9361_IQ_GAIN_ERROR_PCT / 100,
-        iq_phi=np.radians(AD9361_IQ_PHASE_ERROR_DEG),
+        dc_offset=np.sqrt(sig_power) * 10 ** (DC_OFFSET_DBC / 20),
+        iq_gain=1 + IQ_GAIN_ERROR_PCT / 100,
+        iq_phase=np.radians(IQ_PHASE_ERROR_DEG),
     )
 
 
@@ -113,27 +114,27 @@ def _make_frame(rng: np.random.Generator, rrc_taps: np.ndarray) -> np.ndarray:
     return upsample(np.concatenate([preamble, payload]), SPS, rrc_taps)
 
 
-def _apply_channel(rx: np.ndarray, cfo_hz: float, f: SyncFixture, rng: np.random.Generator) -> np.ndarray:
+def _apply_channel(rx: np.ndarray, cfo_hz: float, channel: SyncFixture, rng: np.random.Generator) -> np.ndarray:
     """Multipath [3] -> CFO -> DC [1] -> IQ imbalance [1][2] -> AWGN."""
     delayed = np.empty_like(rx)
     delayed[0] = 0
     delayed[1:] = rx[:-1]
-    rx = f.ch[0] * rx + f.ch[1] * delayed
+    rx = channel.taps[0] * rx + channel.taps[1] * delayed
     rx *= np.exp(2j * np.pi * cfo_hz / SAMPLE_RATE * np.arange(len(rx)))
-    rx += f.dc
-    ri, rq = np.real(rx), np.imag(rx)
-    rx = ri + 1j * f.iq_g * (np.sin(f.iq_phi) * ri + np.cos(f.iq_phi) * rq)
-    rx += f.noise_scale * (rng.standard_normal(len(rx)) + 1j * rng.standard_normal(len(rx)))
+    rx += channel.dc_offset
+    sig_i, sig_q = np.real(rx), np.imag(rx)
+    rx = sig_i + 1j * channel.iq_gain * (np.sin(channel.iq_phase) * sig_i + np.cos(channel.iq_phase) * sig_q)
+    rx += channel.noise_scale * (rng.standard_normal(len(rx)) + 1j * rng.standard_normal(len(rx)))
     return rx
 
 
 
 
-@pytest.mark.parametrize("cfo_hz", PLUTOSDR_CFO_HZ)
-def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
+@pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
+def test_sync_pipeline(cfo_hz: int, channel: SyncFixture) -> None:
     """Sync pipeline under realistic PlutoSDR channel conditions.
 
-    1. Detection rate >= 90 % over N_SEEDS realisations.
+    1. Detection rate >= 90 % over N_TRIALS realisations.
     2. CFO accuracy: median error < 200 Hz.
     3. Sub-symbol timing: fine_timing on correct sample grid >= 95 %.
     4. False-positive rejection: noise-only buffers must not trigger.
@@ -141,85 +142,114 @@ def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
     6. Partial preamble: buffer starting mid-preamble still detects.
     7. Combined OTA: real frame (Golay BPSK header) with all RX impairments.
     """
-    if cfo_hz > ACQ_RANGE_HZ * 0.95:
-        pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds +/-{ACQ_RANGE_HZ / 1e3:.1f} kHz")
+    if cfo_hz > COARSE_CFO_RANGE_HZ * 0.95:
+        pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds +/-{COARSE_CFO_RANGE_HZ / 1e3:.1f} kHz")
 
-    expected_ft = SAMPLE_OFFSET + sf.group_delay + SYNC_CFG.short_preamble_nsym * SYNC_CFG.short_preamble_nreps * SPS
+    expected_fine_idx = (
+        SAMPLE_OFFSET + channel.group_delay
+        + SYNC_CFG.short_preamble_nsym * SYNC_CFG.short_preamble_nreps * SPS
+    )
 
-    detect_count, subsym_zero = 0, 0
+    detect_count, n_aligned = 0, 0
     cfo_errors: list[float] = []
 
-    for seed in range(N_SEEDS):
+    for seed in range(N_TRIALS):
         rng = np.random.default_rng(seed)
-        tx = _make_frame(rng, sf.rrc_taps)
-        rx = _apply_channel(np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx]), cfo_hz, sf, rng)
+        tx = _make_frame(rng, channel.rrc_taps)
+        rx = _apply_channel(np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx]), cfo_hz, channel, rng)
 
         coarse = coarse_sync(rx, SAMPLE_RATE, SPS, SYNC_CFG)
         if coarse.m_peaks.size == 0 or coarse.m_peaks[0] < MIN_DETECTION_CONFIDENCE:
             continue
         detect_count += 1
         cfo_errors.append(abs(float(coarse.cfo_hats[0]) - cfo_hz))
-        fine = fine_timing(rx, sf.long_ref, int(coarse.d_hats[0]), float(coarse.cfo_hats[0]), SAMPLE_RATE, SPS, SYNC_CFG)
-        subsym_zero += int((int(fine.sample_idxs[0]) - expected_ft) % SPS == 0)
+        fine = fine_timing(
+            rx, channel.long_ref, coarse.d_hats[:1], coarse.cfo_hats[:1],
+            SAMPLE_RATE, SPS, SYNC_CFG,
+        )
+        n_aligned += int((int(fine.sample_idxs[0]) - expected_fine_idx) % SPS == 0)
 
-    assert detect_count / N_SEEDS >= MIN_DETECT_RATE, f"detect rate {detect_count / N_SEEDS:.0%}"
+    assert detect_count / N_TRIALS >= MIN_DETECTION_RATE, f"detect rate {detect_count / N_TRIALS:.0%}"
     assert float(np.median(cfo_errors)) < MAX_CFO_ERROR_HZ, f"median CFO error {np.median(cfo_errors):.0f} Hz"
-    assert subsym_zero / detect_count >= MIN_SUBSYM_RATE, f"sub-symbol aligned {subsym_zero / detect_count:.0%}"
+    assert n_aligned / detect_count >= MIN_ALIGNED_RATE, f"sub-symbol aligned {n_aligned / detect_count:.0%}"
 
-    n_fp = SAMPLE_OFFSET + N_PAYLOAD_SYMBOLS * SPS + len(sf.long_ref)
-    for fp_seed in range(N_FP_SEEDS):
+    noise_len = SAMPLE_OFFSET + N_PAYLOAD_SYMBOLS * SPS + len(channel.long_ref)
+    for fp_seed in range(N_FP_TRIALS):
         rng_fp = np.random.default_rng(10_000 + fp_seed)
-        noise_only = sf.noise_scale * (rng_fp.standard_normal(n_fp) + 1j * rng_fp.standard_normal(n_fp))
-        fp = coarse_sync(noise_only, SAMPLE_RATE, SPS, SYNC_CFG)
-        assert fp.m_peaks.size == 0 or fp.m_peaks[0] < MIN_DETECTION_CONFIDENCE, f"false positive m_peak={fp.m_peaks[0]:.3f}"
+        noise_only = channel.noise_scale * (
+            rng_fp.standard_normal(noise_len) + 1j * rng_fp.standard_normal(noise_len)
+        )
+        fp_result = coarse_sync(noise_only, SAMPLE_RATE, SPS, SYNC_CFG)
+        assert fp_result.m_peaks.size == 0 or fp_result.m_peaks[0] < MIN_DETECTION_CONFIDENCE, (
+            f"false positive m_peak={fp_result.m_peaks[0]:.3f}"
+        )
 
-    rng_mf = np.random.default_rng(7777)
-    frame1 = _make_frame(rng_mf, sf.rrc_taps)
-    frame2 = _make_frame(rng_mf, sf.rrc_taps)
+    rng_multi = np.random.default_rng(7777)
+    frame1 = _make_frame(rng_multi, channel.rrc_taps)
+    frame2 = _make_frame(rng_multi, channel.rrc_taps)
     guard_amp = np.sqrt(np.mean(np.abs(frame1) ** 2) / 2)
-    guard = guard_amp * (rng_mf.standard_normal(GUARD_SAMPLES) + 1j * rng_mf.standard_normal(GUARD_SAMPLES))
+    guard = guard_amp * (rng_multi.standard_normal(GUARD_SAMPLES) + 1j * rng_multi.standard_normal(GUARD_SAMPLES))
 
     buf = np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), frame1, guard, frame2, guard])
-    buf = _apply_channel(buf, cfo_hz, sf, rng_mf)
+    buf = _apply_channel(buf, cfo_hz, channel, rng_multi)
 
-    coarse_mf = coarse_sync(buf, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse_mf.m_peaks.size >= 2, f"expected >=2 frames, got {coarse_mf.m_peaks.size}"
-    assert coarse_mf.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "frame 1 not detected"
-    assert abs(float(coarse_mf.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 1 CFO error"
-    fine1 = fine_timing(buf, sf.long_ref, int(coarse_mf.d_hats[0]), float(coarse_mf.cfo_hats[0]), SAMPLE_RATE, SPS, SYNC_CFG)
+    coarse_multi = coarse_sync(buf, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse_multi.m_peaks.size >= MIN_MULTI_FRAMES, f"expected >=2 frames, got {coarse_multi.m_peaks.size}"
+    assert coarse_multi.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "frame 1 not detected"
+    assert abs(float(coarse_multi.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 1 CFO error"
+    fine1 = fine_timing(
+        buf, channel.long_ref, coarse_multi.d_hats[:1], coarse_multi.cfo_hats[:1],
+        SAMPLE_RATE, SPS, SYNC_CFG,
+    )
     assert fine1.sample_idxs[0] > 0
-    assert coarse_mf.m_peaks[1] >= MIN_DETECTION_CONFIDENCE, f"frame 2 not detected (m_peak={coarse_mf.m_peaks[1]:.3f})"
-    assert abs(float(coarse_mf.cfo_hats[1]) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 2 CFO error"
+    assert coarse_multi.m_peaks[1] >= MIN_DETECTION_CONFIDENCE, (
+        f"frame 2 not detected (m_peak={coarse_multi.m_peaks[1]:.3f})"
+    )
+    assert abs(float(coarse_multi.cfo_hats[1]) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 2 CFO error"
 
-    rng_pp = np.random.default_rng(6666)
-    tx_pp = _make_frame(rng_pp, sf.rrc_taps)
-    rx_pp = _apply_channel(np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx_pp]), cfo_hz, sf, rng_pp)
-    half_short = SYNC_CFG.short_preamble_nsym * (SYNC_CFG.short_preamble_nreps // 2) * SPS
-    partial = rx_pp[SAMPLE_OFFSET + half_short :]
-    coarse_pp = coarse_sync(partial, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse_pp.m_peaks.size > 0 and coarse_pp.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "partial preamble: not detected"
-    assert abs(float(coarse_pp.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "partial preamble: CFO error"
+    rng_partial = np.random.default_rng(6666)
+    tx_partial = _make_frame(rng_partial, channel.rrc_taps)
+    rx_partial = _apply_channel(
+        np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx_partial]),
+        cfo_hz, channel, rng_partial,
+    )
+    half_preamble_len = SYNC_CFG.short_preamble_nsym * (SYNC_CFG.short_preamble_nreps // 2) * SPS
+    partial = rx_partial[SAMPLE_OFFSET + half_preamble_len :]
+    coarse_partial = coarse_sync(partial, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse_partial.m_peaks.size > 0, "partial preamble: not detected"
+    assert coarse_partial.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "partial preamble: not detected"
+    assert abs(float(coarse_partial.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "partial preamble: CFO error"
 
-    rng_ota = np.random.default_rng(9999)
-    fc = FrameConstructor()
-    hdr = FrameHeader(length=100, src=0, dst=1, frame_type=0, mod_scheme=ModulationSchemes.QPSK, sequence_number=0)
-    hdr_enc, _ = fc.encode(hdr, rng_ota.integers(0, 2, 100 * 8))
-    hdr_syms = BPSK().bits2symbols(hdr_enc)
-    payload = rng_ota.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
-    tx_ota = upsample(np.concatenate([generate_preamble(SYNC_CFG), hdr_syms, payload]), SPS, sf.rrc_taps)
+    rng_full = np.random.default_rng(9999)
+    frame_ctor = FrameConstructor()
+    header = FrameHeader(length=100, src=0, dst=1, frame_type=0, mod_scheme=ModulationSchemes.QPSK, sequence_number=0)
+    header_bits, _ = frame_ctor.encode(header, rng_full.integers(0, 2, 100 * 8))
+    header_syms = BPSK().bits2symbols(header_bits)
+    payload = rng_full.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
+    tx_full = upsample(np.concatenate([generate_preamble(SYNC_CFG), header_syms, payload]), SPS, channel.rrc_taps)
 
-    rx_ota = _apply_channel(np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx_ota]), cfo_hz, sf, rng_ota)
-    rx_ota = rx_ota * np.exp(1j * np.cumsum(rng_ota.standard_normal(len(rx_ota)) * TCXO_PHASE_NOISE_STD))
-    agc_gain = np.ones(len(rx_ota))
-    agc_gain[:AD9361_AGC_SETTLE_SAMPLES] = 10 ** (-AD9361_AGC_STEP_DB / 20)
-    rx_ota = rx_ota * agc_gain
-    t_sro = np.arange(len(rx_ota)) * (1 + TCXO_SRO_PPM * 1e-6)
-    t_orig = np.arange(len(rx_ota), dtype=float)
-    rx_ota = np.interp(t_sro, t_orig, np.real(rx_ota)) + 1j * np.interp(t_sro, t_orig, np.imag(rx_ota))
-    clip = AD9361_ADC_CLIP_FRACTION * max(np.max(np.abs(np.real(rx_ota))), np.max(np.abs(np.imag(rx_ota))))
-    rx_ota = np.clip(np.real(rx_ota), -clip, clip) + 1j * np.clip(np.imag(rx_ota), -clip, clip)
-    coarse_ota = coarse_sync(rx_ota, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse_ota.m_peaks.size > 0 and coarse_ota.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "OTA combined: not detected"
-    assert abs(float(coarse_ota.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "OTA combined: CFO error"
-    fine_ota = fine_timing(rx_ota, sf.long_ref, int(coarse_ota.d_hats[0]), float(coarse_ota.cfo_hats[0]), SAMPLE_RATE, SPS, SYNC_CFG)
-    assert (int(fine_ota.sample_idxs[0]) - expected_ft) % SPS == 0, "OTA combined: fine timing off grid"
+    rx_full = _apply_channel(
+        np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx_full]),
+        cfo_hz, channel, rng_full,
+    )
+    rx_full = rx_full * np.exp(1j * np.cumsum(rng_full.standard_normal(len(rx_full)) * PHASE_NOISE_STD))
+    agc_gain = np.ones(len(rx_full))
+    agc_gain[:AGC_SETTLE_SAMPLES] = 10 ** (-AGC_STEP_DB / 20)
+    rx_full = rx_full * agc_gain
+    t_shifted = np.arange(len(rx_full)) * (1 + SAMPLE_RATE_OFFSET_PPM * 1e-6)
+    t_nominal = np.arange(len(rx_full), dtype=float)
+    rx_full = (
+        np.interp(t_shifted, t_nominal, np.real(rx_full))
+        + 1j * np.interp(t_shifted, t_nominal, np.imag(rx_full))
+    )
+    clip = ADC_CLIP_FRACTION * max(np.max(np.abs(np.real(rx_full))), np.max(np.abs(np.imag(rx_full))))
+    rx_full = np.clip(np.real(rx_full), -clip, clip) + 1j * np.clip(np.imag(rx_full), -clip, clip)
+    coarse_full = coarse_sync(rx_full, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse_full.m_peaks.size > 0, "OTA combined: not detected"
+    assert coarse_full.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "OTA combined: not detected"
+    assert abs(float(coarse_full.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "OTA combined: CFO error"
+    fine_full = fine_timing(
+        rx_full, channel.long_ref, coarse_full.d_hats[:1], coarse_full.cfo_hats[:1],
+        SAMPLE_RATE, SPS, SYNC_CFG,
+    )
+    assert (int(fine_full.sample_idxs[0]) - expected_fine_idx) % SPS == 0, "OTA combined: fine timing off grid"
