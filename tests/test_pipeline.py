@@ -28,7 +28,7 @@ def random_packet_length(draw):
     return draw(st.integers(min_value=2**0, max_value=(2**9)))
 
 # --- Tests ---
-#@given(pipeline_config = random_pipeline_config(), packet_length = random_packet_length())
+@given(pipeline_config = random_pipeline_config(), packet_length = random_packet_length())
 def test_simple(pipeline_config, packet_length):
 
     snr = 15
