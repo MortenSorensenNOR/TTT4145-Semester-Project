@@ -28,13 +28,13 @@ def random_packet_length(draw):
     return draw(st.integers(min_value=2**0, max_value=(2**7)))
 
 # --- Tests ---
-@given(pipeline_config = random_pipeline_config(), packet_length = random_packet_length())
+#@given(pipeline_config = random_pipeline_config(), packet_length = random_packet_length())
 def test_simple(pipeline_config, packet_length):
 
     snr = 15
     seed = 42
-    actual_cfo = 3200
-    actual_delay = 2321
+    actual_cfo = 235
+    actual_delay = 232
     channel_config = ChannelConfig(
         sample_rate=pipeline_config.SAMPLE_RATE,
         snr_db=snr,
@@ -59,6 +59,7 @@ def test_simple(pipeline_config, packet_length):
     )
 
     tx_signal = tx.transmit(packet)
+    tx_signal = np.concat([np.zeros(100, dtype=complex), tx_signal])
 
     # apply channel
     rx_signal = channel.apply(tx_signal)
@@ -82,6 +83,7 @@ def test_simple(pipeline_config, packet_length):
         plt.savefig(f"tests/plots/pipeline/mod{MOD_SCHEMES.index(pipeline_config.MOD_SCHEME)}_len{packet_length}_tx_signal_packet.png")
 
     rx_packets = rx.receive(rx_signal)
+    print(len(rx_packets))
 
     for rx_packet in rx_packets:
         print(packet.payload.all() == rx_packet.payload.all())
@@ -89,4 +91,4 @@ def test_simple(pipeline_config, packet_length):
 
 if __name__ == "__main__":
     pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)
-    test_simple(pipeline_config, 2**6 - 8)
+    test_simple(pipeline_config, 2**7)
