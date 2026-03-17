@@ -45,14 +45,16 @@ class SynchronizerConfig:
     plateau_edge_fraction: float = 0.5
     energy_floor: float = np.finfo(np.float64).tiny
 
+    detection_threshold: float = 0.5
+
 
 @dataclass
 class CoarseResult:
     """Output of coarse timing + CFO estimation."""
 
-    d_hat: np.intp
-    cfo_hat: np.floating
-    m_peak: np.floating
+    d_hats: np.ndarray
+    cfo_hats: np.ndarray
+    m_peaks: np.ndarray
 
 
 @dataclass
@@ -146,29 +148,32 @@ def coarse_sync(
 
     m_d = np.abs(p_d) ** 2 / np.maximum(r_d**2, cfg.energy_floor)
 
-    peak_idx = np.argmax(m_d)
-
-    preamble_span = cfg.short_preamble_nsym * samples_per_symbol * cfg.short_preamble_nreps
-    local_start = max(0, peak_idx - preamble_span)
-    local_end = min(len(m_d), peak_idx + preamble_span)
-
-    local_m = m_d[local_start:local_end]
-    local_above = local_m >= cfg.plateau_edge_fraction * m_d[peak_idx]
-    d_hat = local_start + np.argmax(local_above)
-    phi_hat = np.angle(np.mean(p_d[local_start:local_end][local_above]))
-    cfo_hat = phi_hat * fs / (2 * np.pi * sample_cnt)
-
-    return CoarseResult(
-        d_hat=d_hat,
-        cfo_hat=cfo_hat,
-        m_peak=m_d[peak_idx],
+    # Multi-frame detection — batch iterate-and-advance (cf. gr-ieee802-11 sync_short MIN_GAP)
+    min_gap = (
+        cfg.short_preamble_nsym * samples_per_symbol * cfg.short_preamble_nreps
+        + cfg.long_preamble_nsym * samples_per_symbol
     )
+
+    above = np.flatnonzero(m_d > cfg.detection_threshold)
+    if above.size == 0:
+        return CoarseResult(np.empty(0, np.intp), np.empty(0), np.empty(0))
+
+    # Cluster by gaps > min_gap — each cluster is one frame's plateau
+    splits = np.r_[0, np.flatnonzero(np.diff(above) > min_gap) + 1]
+    d_hats = above[splits]
+    m_peaks = np.maximum.reduceat(m_d[above], splits)
+    plateau_sum = np.add.reduceat(p_d[above], splits)
+    plateau_cnt = np.diff(np.r_[splits, above.size])
+    cfo_hats = np.angle(plateau_sum / plateau_cnt) * fs / (2 * np.pi * sample_cnt)
+
+    return CoarseResult(d_hats, cfo_hats, m_peaks)
 
 
 def fine_timing(
     samples: np.ndarray,
     s: np.ndarray,
-    coarse: CoarseResult,
+    d_hat: int,
+    cfo_hat: float,
     fs: int,
     samples_per_symbol: int,
     cfg: SynchronizerConfig,
@@ -179,7 +184,7 @@ def fine_timing(
         raise TypeError(msg)
 
     samples_per_rep = cfg.short_preamble_nsym * samples_per_symbol
-    start_sample = coarse.d_hat + cfg.short_preamble_nreps * samples_per_rep
+    start_sample = d_hat + cfg.short_preamble_nreps * samples_per_rep
 
     sample_margin = cfg.long_margin_nsym * samples_per_symbol
     search_start = max(start_sample - sample_margin, 0)
@@ -191,7 +196,7 @@ def fine_timing(
         raise ValueError(msg)
 
     n = np.arange(search_start, search_end)
-    cfo_phase = -2j * np.pi * (coarse.cfo_hat / fs) * n
+    cfo_phase = -2j * np.pi * (cfo_hat / fs) * n
     r = samples[search_start:search_end] * np.exp(cfo_phase)
 
     z = np.abs(np.correlate(r, s, mode="valid"))

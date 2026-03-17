@@ -155,11 +155,11 @@ def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
         rx = _apply_channel(np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx]), cfo_hz, sf, rng)
 
         coarse = coarse_sync(rx, SAMPLE_RATE, SPS, SYNC_CFG)
-        if coarse.m_peak < MIN_DETECTION_CONFIDENCE:
+        if coarse.m_peaks.size == 0 or coarse.m_peaks[0] < MIN_DETECTION_CONFIDENCE:
             continue
         detect_count += 1
-        cfo_errors.append(abs(float(coarse.cfo_hat) - cfo_hz))
-        fine = fine_timing(rx, sf.long_ref, coarse, SAMPLE_RATE, SPS, SYNC_CFG)
+        cfo_errors.append(abs(float(coarse.cfo_hats[0]) - cfo_hz))
+        fine = fine_timing(rx, sf.long_ref, int(coarse.d_hats[0]), float(coarse.cfo_hats[0]), SAMPLE_RATE, SPS, SYNC_CFG)
         subsym_zero += int((int(fine.sample_idx) - expected_ft) % SPS == 0)
 
     assert detect_count / N_SEEDS >= MIN_DETECT_RATE, f"detect rate {detect_count / N_SEEDS:.0%}"
@@ -171,7 +171,7 @@ def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
         rng_fp = np.random.default_rng(10_000 + fp_seed)
         noise_only = sf.noise_scale * (rng_fp.standard_normal(n_fp) + 1j * rng_fp.standard_normal(n_fp))
         fp = coarse_sync(noise_only, SAMPLE_RATE, SPS, SYNC_CFG)
-        assert fp.m_peak < MIN_DETECTION_CONFIDENCE, f"false positive m_peak={fp.m_peak:.3f}"
+        assert fp.m_peaks.size == 0 or fp.m_peaks[0] < MIN_DETECTION_CONFIDENCE, f"false positive m_peak={fp.m_peaks[0]:.3f}"
 
     rng_mf = np.random.default_rng(7777)
     frame1 = _make_frame(rng_mf, sf.rrc_taps)
@@ -182,16 +182,14 @@ def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
     buf = np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), frame1, guard, frame2, guard])
     buf = _apply_channel(buf, cfo_hz, sf, rng_mf)
 
-    coarse1 = coarse_sync(buf, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse1.m_peak >= MIN_DETECTION_CONFIDENCE, "frame 1 not detected"
-    assert abs(float(coarse1.cfo_hat) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 1 CFO error"
-    fine1 = fine_timing(buf, sf.long_ref, coarse1, SAMPLE_RATE, SPS, SYNC_CFG)
+    coarse_mf = coarse_sync(buf, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse_mf.m_peaks.size >= 2, f"expected >=2 frames, got {coarse_mf.m_peaks.size}"
+    assert coarse_mf.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "frame 1 not detected"
+    assert abs(float(coarse_mf.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 1 CFO error"
+    fine1 = fine_timing(buf, sf.long_ref, int(coarse_mf.d_hats[0]), float(coarse_mf.cfo_hats[0]), SAMPLE_RATE, SPS, SYNC_CFG)
     assert fine1.sample_idx > 0
-
-    remainder = buf[SAMPLE_OFFSET + len(frame1) + GUARD_SAMPLES :]
-    coarse2 = coarse_sync(remainder, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse2.m_peak >= MIN_DETECTION_CONFIDENCE, f"frame 2 not detected (m_peak={coarse2.m_peak:.3f})"
-    assert abs(float(coarse2.cfo_hat) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 2 CFO error"
+    assert coarse_mf.m_peaks[1] >= MIN_DETECTION_CONFIDENCE, f"frame 2 not detected (m_peak={coarse_mf.m_peaks[1]:.3f})"
+    assert abs(float(coarse_mf.cfo_hats[1]) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 2 CFO error"
 
     rng_pp = np.random.default_rng(6666)
     tx_pp = _make_frame(rng_pp, sf.rrc_taps)
@@ -199,8 +197,8 @@ def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
     half_short = SYNC_CFG.short_preamble_nsym * (SYNC_CFG.short_preamble_nreps // 2) * SPS
     partial = rx_pp[SAMPLE_OFFSET + half_short :]
     coarse_pp = coarse_sync(partial, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse_pp.m_peak >= MIN_DETECTION_CONFIDENCE, "partial preamble: not detected"
-    assert abs(float(coarse_pp.cfo_hat) - cfo_hz) < MAX_CFO_ERROR_HZ, "partial preamble: CFO error"
+    assert coarse_pp.m_peaks.size > 0 and coarse_pp.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "partial preamble: not detected"
+    assert abs(float(coarse_pp.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "partial preamble: CFO error"
 
     rng_ota = np.random.default_rng(9999)
     fc = FrameConstructor()
@@ -221,7 +219,7 @@ def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
     clip = AD9361_ADC_CLIP_FRACTION * max(np.max(np.abs(np.real(rx_ota))), np.max(np.abs(np.imag(rx_ota))))
     rx_ota = np.clip(np.real(rx_ota), -clip, clip) + 1j * np.clip(np.imag(rx_ota), -clip, clip)
     coarse_ota = coarse_sync(rx_ota, SAMPLE_RATE, SPS, SYNC_CFG)
-    assert coarse_ota.m_peak >= MIN_DETECTION_CONFIDENCE, "OTA combined: not detected"
-    assert abs(float(coarse_ota.cfo_hat) - cfo_hz) < MAX_CFO_ERROR_HZ, "OTA combined: CFO error"
-    fine_ota = fine_timing(rx_ota, sf.long_ref, coarse_ota, SAMPLE_RATE, SPS, SYNC_CFG)
+    assert coarse_ota.m_peaks.size > 0 and coarse_ota.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "OTA combined: not detected"
+    assert abs(float(coarse_ota.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "OTA combined: CFO error"
+    fine_ota = fine_timing(rx_ota, sf.long_ref, int(coarse_ota.d_hats[0]), float(coarse_ota.cfo_hats[0]), SAMPLE_RATE, SPS, SYNC_CFG)
     assert (int(fine_ota.sample_idx) - expected_ft) % SPS == 0, "OTA combined: fine timing off grid"
