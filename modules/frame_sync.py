@@ -61,8 +61,8 @@ class CoarseResult:
 class FineResult:
     """Output of fine timing via cross-correlation."""
 
-    sample_idx: np.intp
-    peak_ratio: np.floating
+    sample_idxs: np.ndarray
+    peak_ratios: np.ndarray
 
 
 def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
@@ -172,8 +172,8 @@ def coarse_sync(
 def fine_timing(
     samples: np.ndarray,
     s: np.ndarray,
-    d_hat: int,
-    cfo_hat: float,
+    d_hats: np.ndarray,
+    cfo_hats: np.ndarray,
     fs: int,
     samples_per_symbol: int,
     cfg: SynchronizerConfig,
@@ -183,24 +183,32 @@ def fine_timing(
         msg = "samples must be complex (conj is a no-op on reals)"
         raise TypeError(msg)
 
+    d_hats = np.atleast_1d(np.asarray(d_hats, dtype=np.intp))
+    cfo_hats = np.atleast_1d(np.asarray(cfo_hats, dtype=np.float64))
+
     samples_per_rep = cfg.short_preamble_nsym * samples_per_symbol
-    start_sample = d_hat + cfg.short_preamble_nreps * samples_per_rep
-
     sample_margin = cfg.long_margin_nsym * samples_per_symbol
-    search_start = max(start_sample - sample_margin, 0)
-    search_end = min(len(samples), start_sample + 2 * sample_margin + len(s))
+    window_len = 2 * sample_margin + len(s)
 
-    if search_end - search_start < len(s):
-        got = search_end - search_start
-        msg = f"search window too short (need {len(s)}, got {got})"
-        raise ValueError(msg)
+    starts = np.clip(
+        d_hats + cfg.short_preamble_nreps * samples_per_rep - sample_margin,
+        0,
+        len(samples) - window_len,
+    )
 
-    n = np.arange(search_start, search_end)
-    cfo_phase = -2j * np.pi * (cfo_hat / fs) * n
-    r = samples[search_start:search_end] * np.exp(cfo_phase)
+    # (n_frames, window_len) index array via broadcasting
+    indices = starts[:, None] + np.arange(window_len)
+    cfo_phase = -2j * np.pi * (cfo_hats[:, None] / fs) * indices
+    windows = samples[indices] * np.exp(cfo_phase)
 
-    z = np.abs(np.correlate(r, s, mode="valid"))
+    # batch cross-correlation via FFT
+    valid_len = window_len - len(s) + 1
+    pad_len = window_len + len(s) - 1
+    s_f = np.conj(np.fft.fft(s, n=pad_len))
+    w_f = np.fft.fft(windows, n=pad_len, axis=1)
+    z = np.abs(np.fft.ifft(w_f * s_f, axis=1))[:, :valid_len]
+
     return FineResult(
-        sample_idx=search_start + np.argmax(z),
-        peak_ratio=np.max(z) / np.mean(z),
+        sample_idxs=starts + np.argmax(z, axis=1),
+        peak_ratios=np.max(z, axis=1) / np.mean(z, axis=1),
     )

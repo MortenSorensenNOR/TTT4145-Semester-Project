@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import numpy as np
 
 from modules.pulse_shaping import *
@@ -70,11 +70,11 @@ class TXPipeline:
             dst=packet.dst_mac,
             frame_type=packet.type,
             mod_scheme=self.config.MOD_SCHEME,
-            sequence_number=packet.seq_num
+            sequence_number=packet.seq_num,
         )
         (header_bits, payload_bits) = self.frame_constructor.encode(header, packet.payload)
 
-        # modulate 
+        # modulate
         header_syms = self.bpsk.bits2symbols(header_bits)
         payload_syms = self.payload_modulator.bits2symbols(payload_bits)
 
@@ -87,18 +87,15 @@ class TXPipeline:
 
 @dataclass
 class DetectionResult:
-    """
-    Result from detection loop:
-    1. Timing offset of detection
-    2. CFO estimate 
-    3. Confidence
-    """
-    payload_start: int  = -1
-    cfo_estimate: float = 0.0
-    confidence: float   = 0.0
+    """Batch detection result — one entry per detected frame."""
 
-    valid: bool = False
-    err_reason: str = ""
+    payload_starts: np.ndarray
+    cfo_estimates: np.ndarray
+    confidences: np.ndarray
+
+    @property
+    def n_frames(self) -> int:
+        return self.payload_starts.size
 
 class RXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
@@ -115,63 +112,57 @@ class RXPipeline:
         # generate the known long preamble for matched filtering
         self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
 
-    def receive(self, buffer: np.ndarray) -> np.ndarray:
-        """Recieve shit"""
-        detection_results = self.detect(buffer)
-        num_of_detections = len(detection_results)
+    def receive(self, buffer: np.ndarray) -> list[Packet]:
+        """Detect and decode all frames in buffer."""
+        det = self.detect(buffer)
+        if det is None:
+            return []
 
         packets = []
-
-        if num_of_detections < 1:
-            return np.array([])
-        
-        for i in range(num_of_detections):
-            rx_syms = downsample(buffer[detection_results[i].payload_start:], self.config.SPS, self.rrc_taps)
-            
-            print(rx_syms.shape, detection_results[i])
+        for i in range(det.n_frames):
+            rx_syms = downsample(buffer[det.payload_starts[i]:], self.config.SPS, self.rrc_taps)
             try:
-                packets.append(self.decode(rx_syms, detection_results[i]))
-            except ValueError as e:
-                print(e)
+                packets.append(self.decode(rx_syms, det))
+            except ValueError:
                 pass
-        
-        return np.array(packets)
 
-    def detect(self, buffer: np.ndarray) -> np.ndarray:
+        return packets
+
+    def detect(self, buffer: np.ndarray) -> DetectionResult | None:
         cfg = self.config.SYNC_CONFIG
         sps = self.config.SPS
 
-        # coarse timing + CFO
         try:
             coarse = coarse_sync(buffer, self.config.SAMPLE_RATE, sps, cfg)
-        except ValueError as e:
-            return np.array([])
+        except ValueError:
+            return None
 
-        # fine timing via long preamble correlation
+        if coarse.m_peaks.size == 0:
+            return None
+
         try:
-            fine = fine_timing(buffer, self.long_ref, coarse, self.config.SAMPLE_RATE, sps, cfg)
-            fine_start = fine.sample_idx
-        except ValueError as e:
-            return np.array([])
+            fine = fine_timing(buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
+                               self.config.SAMPLE_RATE, sps, cfg)
+        except ValueError:
+            return None
 
-        return np.array([DetectionResult(
-            payload_start=(int(fine_start) + len(self.long_ref)),
-            cfo_estimate=float(coarse.cfo_hat),
-            confidence=float(coarse.m_peak),
-            valid=True
-        )])
+        return DetectionResult(
+            payload_starts=fine.sample_idxs + len(self.long_ref),
+            cfo_estimates=coarse.cfo_hats,
+            confidences=coarse.m_peaks,
+        )
 
     def decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> Packet:
         header, payload_start, current_phase_estimate = self.header_decode(buffer, detection_res)
         payload = self.payload_decode(buffer, header, payload_start, current_phase_estimate)
         return Packet(
-            src_mac=header.src, 
+            src_mac=header.src,
             dst_mac=header.dst,
             type=header.frame_type,
             seq_num=header.sequence_number,
             length=header.length,
             payload=payload,
-            valid=header.crc_passed
+            valid=header.crc_passed,
         )
 
     def header_decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> tuple[FrameHeader, int, float]:
@@ -179,11 +170,8 @@ class RXPipeline:
         header_syms = buffer[:2 * self.frame_constructor.header_config.header_total_size]
 
         # costas correction
-        print(header_syms.shape)
         header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
-        print(header_syms.shape)
-        
-        print(header_syms.shape, detection_res.payload_start, detection_res.payload_start+2*self.frame_constructor.header_config.header_total_size)
+
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms)
         header = self.frame_constructor.decode_header(header_bits)

@@ -160,7 +160,7 @@ def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
         detect_count += 1
         cfo_errors.append(abs(float(coarse.cfo_hats[0]) - cfo_hz))
         fine = fine_timing(rx, sf.long_ref, int(coarse.d_hats[0]), float(coarse.cfo_hats[0]), SAMPLE_RATE, SPS, SYNC_CFG)
-        subsym_zero += int((int(fine.sample_idx) - expected_ft) % SPS == 0)
+        subsym_zero += int((int(fine.sample_idxs[0]) - expected_ft) % SPS == 0)
 
     assert detect_count / N_SEEDS >= MIN_DETECT_RATE, f"detect rate {detect_count / N_SEEDS:.0%}"
     assert float(np.median(cfo_errors)) < MAX_CFO_ERROR_HZ, f"median CFO error {np.median(cfo_errors):.0f} Hz"
@@ -187,7 +187,7 @@ def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
     assert coarse_mf.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "frame 1 not detected"
     assert abs(float(coarse_mf.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 1 CFO error"
     fine1 = fine_timing(buf, sf.long_ref, int(coarse_mf.d_hats[0]), float(coarse_mf.cfo_hats[0]), SAMPLE_RATE, SPS, SYNC_CFG)
-    assert fine1.sample_idx > 0
+    assert fine1.sample_idxs[0] > 0
     assert coarse_mf.m_peaks[1] >= MIN_DETECTION_CONFIDENCE, f"frame 2 not detected (m_peak={coarse_mf.m_peaks[1]:.3f})"
     assert abs(float(coarse_mf.cfo_hats[1]) - cfo_hz) < MAX_CFO_ERROR_HZ, "frame 2 CFO error"
 
@@ -222,4 +222,4 @@ def test_sync_pipeline(cfo_hz: int, sf: SyncFixture) -> None:
     assert coarse_ota.m_peaks.size > 0 and coarse_ota.m_peaks[0] >= MIN_DETECTION_CONFIDENCE, "OTA combined: not detected"
     assert abs(float(coarse_ota.cfo_hats[0]) - cfo_hz) < MAX_CFO_ERROR_HZ, "OTA combined: CFO error"
     fine_ota = fine_timing(rx_ota, sf.long_ref, int(coarse_ota.d_hats[0]), float(coarse_ota.cfo_hats[0]), SAMPLE_RATE, SPS, SYNC_CFG)
-    assert (int(fine_ota.sample_idx) - expected_ft) % SPS == 0, "OTA combined: fine timing off grid"
+    assert (int(fine_ota.sample_idxs[0]) - expected_ft) % SPS == 0, "OTA combined: fine timing off grid"
