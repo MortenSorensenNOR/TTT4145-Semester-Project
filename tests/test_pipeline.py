@@ -64,13 +64,9 @@ def test_simple(pipeline_config, packet_length):
         plt.savefig(f"tests/plots/pipeline/mod{MOD_SCHEMES.index(pipeline_config.MOD_SCHEME)}_len{packet_length}_tx_signal_packet.png")
 
     rx_packets = rx.receive(tx_signal)
-    
-    # --- Working manual detection with perfect channel ---
-    #rx_downsampled = downsample(tx_signal, tx.config.SPS, tx.rrc_taps)
-    #print(rx_downsampled.shape)
-    #rx_packets = [rx.decode(rx_downsampled, DetectionResult(payload_start=sync_len//tx.config.SPS, valid=True))]
-    
-    assert packet.payload.all() == rx_packets[0].payload.all()
+
+    for rx_packet in rx_packets:
+        assert packet.payload.all() == rx_packet.payload.all()
 
 if __name__ == "__main__":
     pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)

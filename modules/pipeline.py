@@ -116,24 +116,25 @@ class RXPipeline:
         self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
 
     def receive(self, buffer: np.ndarray) -> np.ndarray:
-        # TODO: Create a loop that runs receive or some shit
+        """Recieve shit"""
         detection_results = self.detect(buffer)
-
         num_of_detections = len(detection_results)
 
-        packets = np.ndarray(num_of_detections, dtype=Packet)
+        packets = []
 
         if num_of_detections < 1:
-            return np.array([Packet(payload=np.array([0]))]) # have to return an empty packet
+            return np.array([])
         
         for i in range(num_of_detections):
-            #detection_results[i].payload_start = 243
             rx_syms = downsample(buffer[detection_results[i].payload_start:], self.config.SPS, self.rrc_taps)
             
             print(rx_syms.shape, detection_results[i])
-            packets[i] = self.decode(rx_syms, detection_results[i])
+            try:
+                packets.append(self.decode(rx_syms, detection_results[i]))
+            except ValueError as e:
+                pass
         
-        return packets
+        return np.array(packets)
 
     def detect(self, buffer: np.ndarray) -> np.ndarray:
         cfg = self.config.SYNC_CONFIG
