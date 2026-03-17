@@ -20,7 +20,7 @@ class PipelineConfig:
     CODING_RATE: CodeRates = CodeRates.NONE
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig()
+    COSTAS_CONFIG = CostasConfig(0.03)
 
     pulse_shaping: bool = True
     pilots: bool = False
@@ -173,10 +173,10 @@ class RXPipeline:
         header_syms = buffer[:2 * self.frame_constructor.header_config.header_total_size]
 
         # costas correction
-        header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=2*np.pi*cfo)
-        
+        header_syms_corr, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
+        print("costas",header_syms_corr == header_syms, phase_est[-1])
         # demodulate header
-        header_bits = self.bpsk.symbols2bits(header_syms)
+        header_bits = self.bpsk.symbols2bits(header_syms_corr)
         header = self.frame_constructor.decode_header(header_bits)
         return header, self.frame_constructor.header_config.header_total_size, phase_est[-1]
 

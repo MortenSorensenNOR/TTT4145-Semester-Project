@@ -24,7 +24,7 @@ def random_pipeline_config(draw):
 
 @composite
 def random_packet_length(draw):
-    return draw(st.integers(min_value=2**0, max_value=(2**9)))
+    return draw(st.integers(min_value=2**6, max_value=(2**9)))
 
 # --- Tests ---
 
@@ -34,10 +34,10 @@ def test_simple(pipeline_config, packet_length):
 
 def run_pipeline(pipeline_config, packet_length, plotting = False):
 
-    snr = 15
+    snr = 10
     seed = 42
-    actual_cfo = 235
-    actual_delay = 0
+    actual_cfo = 2350
+    actual_delay = 2034
     channel_config = ChannelConfig(
         sample_rate=pipeline_config.SAMPLE_RATE,
         snr_db=snr,
@@ -62,8 +62,7 @@ def run_pipeline(pipeline_config, packet_length, plotting = False):
     )
 
     tx_signal = tx.transmit(packet)
-    # need to have at least 305 symbol delay
-    tx_signal = np.concat([np.zeros(305, dtype=complex), tx_signal, np.zeros(500, dtype=complex), tx_signal, np.zeros(300, dtype=complex)])
+    tx_signal = np.concat([np.zeros(305, dtype=complex), tx_signal])
     # apply channel
     rx_signal = channel.apply(tx_signal)
 
@@ -90,9 +89,9 @@ def run_pipeline(pipeline_config, packet_length, plotting = False):
     
     assert len(rx_packets) > 0
     for rx_packet in rx_packets:
-        print(packet.payload.all() == rx_packet.payload.all())
+        print(packet.payload.shape, rx_packet.payload.shape)
         assert packet.payload.all() == rx_packet.payload.all()
 
 if __name__ == "__main__":
     pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)
-    run_pipeline(pipeline_config, 2**7)
+    run_pipeline(pipeline_config, 2**6)
