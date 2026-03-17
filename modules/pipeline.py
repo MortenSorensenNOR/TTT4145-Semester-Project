@@ -132,6 +132,7 @@ class RXPipeline:
             try:
                 packets.append(self.decode(rx_syms, detection_results[i]))
             except ValueError as e:
+                print(e)
                 pass
         
         return np.array(packets)
@@ -178,8 +179,8 @@ class RXPipeline:
         header_syms = buffer[:2 * self.frame_constructor.header_config.header_total_size]
 
         # costas correction
-        #header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
-        phase_est = [0]
+        header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
+        
         print(header_syms.shape, detection_res.payload_start, detection_res.payload_start+2*self.frame_constructor.header_config.header_total_size)
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms)
