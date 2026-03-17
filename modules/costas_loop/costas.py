@@ -124,7 +124,7 @@ class CostasConfig:
         Loop-filter gains — computed automatically, do not set manually.
     """
 
-    loop_noise_bandwidth_normalized: float = 0.05
+    loop_noise_bandwidth_normalized: float = 0.01
     damping_factor: float = 0.707
     initial_freq_offset_rad_per_symbol: float = 0.0
     alpha: float = 0.0

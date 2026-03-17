@@ -122,9 +122,9 @@ class RXPipeline:
         for i in range(det.n_frames):
             rx_syms = downsample(buffer[det.payload_starts[i]:], self.config.SPS, self.rrc_taps)
             try:
-                packets.append(self.decode(rx_syms, det))
-            except ValueError:
-                pass
+                packets.append(self.decode(rx_syms, det.cfo_estimates[i]))
+            except Exception as e:
+                print("wtf?", e)
 
         return packets
 
@@ -134,16 +134,19 @@ class RXPipeline:
 
         try:
             coarse = coarse_sync(buffer, self.config.SAMPLE_RATE, sps, cfg)
-        except ValueError:
+        except Exception as e:
+            print(e)
             return None
 
         if coarse.m_peaks.size == 0:
+            print("no")
             return None
 
         try:
             fine = fine_timing(buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
                                self.config.SAMPLE_RATE, sps, cfg)
-        except ValueError:
+        except Exception as e:
+            print(e)
             return None
 
         return DetectionResult(
@@ -152,8 +155,8 @@ class RXPipeline:
             confidences=coarse.m_peaks,
         )
 
-    def decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> Packet:
-        header, payload_start, current_phase_estimate = self.header_decode(buffer, detection_res)
+    def decode(self, buffer: np.ndarray, cfo: float) -> Packet:
+        header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo)
         payload = self.payload_decode(buffer, header, payload_start, current_phase_estimate)
         return Packet(
             src_mac=header.src,
@@ -165,13 +168,13 @@ class RXPipeline:
             valid=header.crc_passed,
         )
 
-    def header_decode(self, buffer: np.ndarray, detection_res: DetectionResult) -> tuple[FrameHeader, int, float]:
+    def header_decode(self, buffer: np.ndarray, cfo: float) -> tuple[FrameHeader, int, float]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
         header_syms = buffer[:2 * self.frame_constructor.header_config.header_total_size]
 
         # costas correction
-        header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
-
+        header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=2*np.pi*cfo)
+        
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms)
         header = self.frame_constructor.decode_header(header_bits)
