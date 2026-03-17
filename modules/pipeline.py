@@ -179,7 +179,9 @@ class RXPipeline:
         header_syms = buffer[:2 * self.frame_constructor.header_config.header_total_size]
 
         # costas correction
+        print(header_syms.shape)
         header_syms, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
+        print(header_syms.shape)
         
         print(header_syms.shape, detection_res.payload_start, detection_res.payload_start+2*self.frame_constructor.header_config.header_total_size)
         # demodulate header

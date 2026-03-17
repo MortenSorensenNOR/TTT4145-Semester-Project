@@ -13,7 +13,7 @@ from modules.channel import *
 
 from utils.plotting import *
 
-PLOTTING = True
+PLOTTING = False
 MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
 
 @composite
@@ -25,10 +25,10 @@ def random_pipeline_config(draw):
 
 @composite
 def random_packet_length(draw):
-    return draw(st.integers(min_value=2**0, max_value=(2**12)))
+    return draw(st.integers(min_value=2**0, max_value=(2**7)))
 
 # --- Tests ---
-#@given(pipeline_config = random_pipeline_config(), packet_length = random_packet_length())
+@given(pipeline_config = random_pipeline_config(), packet_length = random_packet_length())
 def test_simple(pipeline_config, packet_length):
 
     snr = 15

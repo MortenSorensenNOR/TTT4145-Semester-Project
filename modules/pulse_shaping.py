@@ -48,7 +48,7 @@ def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
 def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
     """Match-filter with RRC taps, strip group delay, and decimate."""
     if len(signal) == 0:
-        return np.ndarray([], dtype=complex)
+        return np.zeros(0, dtype=complex)
     delay = (len(rrc_taps) - 1)//2
     n_out = max(0, (len(signal) - len(rrc_taps) + 1) // sps)
     filtered = np.convolve(signal, rrc_taps, mode="full")

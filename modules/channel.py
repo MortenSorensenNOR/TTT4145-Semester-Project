@@ -485,8 +485,15 @@ class ChannelModel:
         return self._state
 
     def apply(self, x: NDArray[np.complex128]) -> NDArray[np.complex128]:
-        """Apply channel model to entire signal (batch mode)."""
+        """Apply channel model to entire signal (batch mode).
+
+        Unlike process_block, pads the input so the propagation delay does not
+        truncate the signal — output length is len(x) + ceil(delay_samples).
+        """
         self.reset()
+        if self.config.delay_samples > 0:
+            pad = int(np.ceil(self.config.delay_samples))
+            x = np.concatenate([x, np.zeros(pad, dtype=x.dtype)])
         return self.process_block(x)
 
     def process_block(self, x: NDArray[np.complex128]) -> NDArray[np.complex128]:
