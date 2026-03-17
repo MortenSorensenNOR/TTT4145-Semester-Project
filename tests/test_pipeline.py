@@ -13,7 +13,6 @@ from modules.channel import *
 
 from utils.plotting import *
 
-PLOTTING = False
 MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
 
 @composite
@@ -28,8 +27,12 @@ def random_packet_length(draw):
     return draw(st.integers(min_value=2**0, max_value=(2**9)))
 
 # --- Tests ---
+
 @given(pipeline_config = random_pipeline_config(), packet_length = random_packet_length())
 def test_simple(pipeline_config, packet_length):
+    run_pipeline(pipeline_config, packet_length)
+
+def run_pipeline(pipeline_config, packet_length, plotting = False):
 
     snr = 15
     seed = 42
@@ -65,7 +68,7 @@ def test_simple(pipeline_config, packet_length):
     rx_signal = channel.apply(tx_signal)
 
     # --- Plotting code that should not be run with pytest ---
-    if PLOTTING:
+    if plotting:
         sync_len = len(tx.sync_syms)*tx.config.SPS+actual_delay
         header_len_samples = rx.frame_constructor.header_config.header_total_size*tx.config.SPS
 
@@ -84,11 +87,12 @@ def test_simple(pipeline_config, packet_length):
 
     rx_packets = rx.receive(rx_signal)
     print(len(rx_packets))
-
+    
+    assert len(rx_packets) > 0
     for rx_packet in rx_packets:
         print(packet.payload.all() == rx_packet.payload.all())
         assert packet.payload.all() == rx_packet.payload.all()
 
 if __name__ == "__main__":
     pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)
-    test_simple(pipeline_config, 2**7)
+    run_pipeline(pipeline_config, 2**7)
