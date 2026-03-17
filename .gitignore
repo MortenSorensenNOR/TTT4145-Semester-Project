@@ -25,3 +25,7 @@ CLAUDE.md
 # Large binaries and external repos
 vendor/
 references/
+
+# images
+*.png
+*.jpg
