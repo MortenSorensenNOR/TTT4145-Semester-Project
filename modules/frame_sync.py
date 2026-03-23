@@ -63,6 +63,7 @@ class FineResult:
 
     sample_idxs: np.ndarray
     peak_ratios: np.ndarray
+    phase_estimates: np.ndarray
 
 
 def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
@@ -206,9 +207,16 @@ def fine_timing(
     pad_len = window_len + len(s) - 1
     s_f = np.conj(np.fft.fft(s, n=pad_len))
     w_f = np.fft.fft(windows, n=pad_len, axis=1)
-    z = np.abs(np.fft.ifft(w_f * s_f, axis=1))[:, :valid_len]
+
+    z_complex = np.fft.ifft(w_f * s_f, axis=1)[:, :valid_len]
+    z = np.abs(z_complex)
+
+    peak_idxs = np.argmax(z, axis=1)
+    peak_complex = z_complex[np.arange(len(peak_idxs)), peak_idxs]
 
     return FineResult(
-        sample_idxs=starts + np.argmax(z, axis=1),
+        sample_idxs=starts + peak_idxs,
         peak_ratios=np.max(z, axis=1) / np.mean(z, axis=1),
+        phase_estimates=np.angle(peak_complex),
     )
+

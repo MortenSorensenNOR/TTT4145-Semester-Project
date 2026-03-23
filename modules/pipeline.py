@@ -9,6 +9,8 @@ from modules.frame_sync import *
 from modules.costas_loop.costas import *
 from modules.ldpc.ldpc import *
 
+from utils.plotting import *
+
 @dataclass
 class PipelineConfig:
     SAMPLE_RATE: int = 5_336_000
@@ -91,6 +93,7 @@ class DetectionResult:
 
     payload_starts: np.ndarray
     cfo_estimates: np.ndarray
+    phase_estimates: np.ndarray
     confidences: np.ndarray
 
     @property
@@ -121,8 +124,10 @@ class RXPipeline:
         packets = []
         for i in range(det.n_frames):
             rx_syms = downsample(buffer[det.payload_starts[i]:], self.config.SPS, self.rrc_taps)
+            print("\ndetection at index:",det.payload_starts[i])
             try:
-                packets.append(self.decode(rx_syms, det.cfo_estimates[i]))
+                decoded_packet = self.decode(rx_syms, det.cfo_estimates[i], det.phase_estimates[i])
+                packets.append(decoded_packet)
             except Exception as e:
                 print("wtf?", e)
 
@@ -152,12 +157,15 @@ class RXPipeline:
         return DetectionResult(
             payload_starts=fine.sample_idxs + len(self.long_ref),
             cfo_estimates=coarse.cfo_hats,
+            phase_estimates=fine.phase_estimates,
             confidences=coarse.m_peaks,
         )
 
-    def decode(self, buffer: np.ndarray, cfo: float) -> Packet:
-        header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo)
-        payload = self.payload_decode(buffer, header, payload_start, current_phase_estimate)
+    def decode(self, buffer: np.ndarray, cfo: float, phase_estimate: float) -> Packet:
+        cfo_rad_per_symbol = 2 * np.pi * cfo / self.config.SAMPLE_RATE * self.config.SPS
+
+        header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
+        payload = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
         return Packet(
             src_mac=header.src,
             dst_mac=header.dst,
@@ -168,24 +176,28 @@ class RXPipeline:
             valid=header.crc_passed,
         )
 
-    def header_decode(self, buffer: np.ndarray, cfo: float) -> tuple[FrameHeader, int, float]:
+    def header_decode(self, buffer: np.ndarray, cfo:float, current_phase_estimate: float) -> tuple[FrameHeader, int, float]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
         header_syms = buffer[:2 * self.frame_constructor.header_config.header_total_size]
-
+        
+        print("current_pahse_estimate:",current_phase_estimate, "current_cfo_rad_per_sample:",cfo)
         # costas correction
-        header_syms_corr, phase_est = apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK)
-        print("costas",header_syms_corr == header_syms, phase_est[-1])
+        header_syms_corr, phase_est =  apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
+        
+        print("costas phase start:", phase_est[0], "stop:", phase_est[-1])
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms_corr)
         header = self.frame_constructor.decode_header(header_bits)
-        return header, self.frame_constructor.header_config.header_total_size, phase_est[-1]
+        return header, 2*self.frame_constructor.header_config.header_total_size, phase_est[-1]
 
-    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, phase_estimate: float) -> np.ndarray:
-        rx_syms = buffer[payload_start:]
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:float, phase_estimate: float) -> np.ndarray:
+        payload_stop = payload_start + (header.length*8)//(header.mod_scheme.value+1) # header.mod_scheme.value+1 is same as bits per symbol of modulator
+        rx_syms = buffer[payload_start:payload_stop] 
 
         # costas correction
-        rx_syms, _ = apply_costas_loop(rx_syms, self.config.COSTAS_CONFIG, header.mod_scheme, phase_estimate)
+        rx_syms, _ = apply_costas_loop(rx_syms, self.config.COSTAS_CONFIG, header.mod_scheme, phase_estimate, cfo)
 
+        print("modulation:", header.mod_scheme)
         # demodulate
         match (header.mod_scheme):
             case ModulationSchemes.BPSK:

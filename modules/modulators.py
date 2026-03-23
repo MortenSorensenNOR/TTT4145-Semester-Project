@@ -49,7 +49,7 @@ class QPSK(Modulator):
         if len(symbols) == 0:
             return np.array([], dtype=int)
         indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
-        return np.column_stack([indices // 2, indices % 2])
+        return np.column_stack([indices // 2, indices % 2]).reshape(-1, 1)
 
 class PSK8(Modulator):
     def __init__(self) -> None:
@@ -69,5 +69,5 @@ class PSK8(Modulator):
         if len(symbols) == 0:
             return np.array([], dtype=int)
         indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
-        return np.column_stack([indices // 4, (indices % 4) // 2, indices % 2])
+        return np.column_stack([indices // 4, (indices % 4) // 2, indices % 2]).reshape(-1, 1)
 
