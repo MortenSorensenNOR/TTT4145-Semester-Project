@@ -55,7 +55,7 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
         delay_samples=actual_delay,
     )
     channel = ChannelModel(channel_config)
-
+    
     tx = TXPipeline(pipeline_config)
     rx = RXPipeline(pipeline_config)
     
@@ -68,33 +68,36 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
         length=packet_length,
         payload=rng.integers(0, 2, packet_length*8)
     )
-
     tx_signal_packet = tx.transmit(packet)
-    print(buffer_length/(len(tx_signal_packet)))
-    num_of_packets = rng.integers(0, (2*buffer_length//3)//(len(tx_signal_packet)))+1
-    
+
+    max_packets = (2 * buffer_length // 3) // len(tx_signal_packet)
+    num_of_packets = int(rng.integers(1, max_packets + 1)) if max_packets >= 1 else 1
+
     tx_signal_list = []
     detections_list = []
-    prev_detection_end = actual_delay+tx.config.SPS*tx.config.SPAN
-    sync_len = len(tx.sync_syms)*tx.config.SPS
+    prev_detection_end = actual_delay + tx.config.SPS * tx.config.SPAN
+    sync_len = len(tx.sync_syms) * tx.config.SPS
+    packet_len = len(tx_signal_packet)
 
     for i in range(num_of_packets):
-        zeros_before = np.zeros(rng.integers(0, 2*len(tx_signal_packet)//3), dtype=complex)
-        zeros_after = np.zeros(len(tx_signal_packet)-len(zeros_before), dtype=complex)
+        max_zeros_before = 2 * len(tx_signal_packet) // 3
+        zeros_before_len = int(rng.integers(0, max_zeros_before + 1))
+        zeros_after_len = packet_len - zeros_before_len
 
-        tx_signal_list.append(np.concat([zeros_before, tx_signal_packet, zeros_after]))
-
-        current_detection = prev_detection_end+len(zeros_before)+sync_len
+        tx_signal_list.append(np.concat([np.zeros(zeros_before_len, dtype=complex), tx_signal_packet, np.zeros(zeros_after_len, dtype=complex)]))
+        current_detection = prev_detection_end + zeros_before_len + sync_len
+        
         detections_list.append(current_detection)
-        prev_detection_end = current_detection+len(tx_signal_packet)+len(zeros_after)
-            
-    tx_signal = np.concat(tx_signal_list)
-    if len(tx_signal) < buffer_length:
-        tx_signal = np.concat([tx_signal, np.zeros(buffer_length-len(tx_signal)-actual_delay, dtype=complex)])
-    else:
-        tx_signal = tx_signal[:buffer_length-actual_delay]
+        prev_detection_end = current_detection + packet_len + zeros_after_len
 
-    # apply channel
+    tx_signal = np.concat(tx_signal_list)
+
+    # Trim or pad to exactly buffer_length
+    if len(tx_signal) >= buffer_length:
+        tx_signal = tx_signal[:buffer_length]
+    else:
+        tx_signal = np.concat([tx_signal, np.zeros(buffer_length - len(tx_signal), dtype=complex)])
+        # apply channel
     rx_signal = channel.apply(tx_signal)
     #rx_signal = np.concat([np.zeros(actual_delay, dtype=complex),tx_signal])
 
@@ -122,7 +125,7 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
     rx_packets = rx.receive(rx_signal)
     print(len(rx_packets))
     
-    assert len(rx_packets) == num_of_packets
+    assert len(rx_packets) == num_of_packets-(detections_list[-1]+packet_len>buffer_length)
     for rx_packet in rx_packets:
         print(packet.payload.shape, rx_packet.payload.shape)
 
@@ -132,4 +135,4 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
 
 if __name__ == "__main__":
     pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)
-    run_pipeline(pipeline_config, 2**8, 2**14, 42, plotting=True)
+    run_pipeline(pipeline_config, 2**6, 2**14, 40, plotting=True)

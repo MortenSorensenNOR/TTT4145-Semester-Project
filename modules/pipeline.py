@@ -129,7 +129,7 @@ class RXPipeline:
                 decoded_packet = self.decode(rx_syms, det.cfo_estimates[i], det.phase_estimates[i])
                 packets.append(decoded_packet)
             except Exception as e:
-                print("wtf?", e)
+                print("DECODE ERROR:", e)
 
         return packets
 
@@ -191,8 +191,13 @@ class RXPipeline:
         return header, 2*self.frame_constructor.header_config.header_total_size, phase_est[-1]
 
     def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:float, phase_estimate: float) -> np.ndarray:
-        payload_stop = payload_start + (header.length*8)//(header.mod_scheme.value+1) # header.mod_scheme.value+1 is same as bits per symbol of modulator
-        rx_syms = buffer[payload_start:payload_stop] 
+        payload_end = payload_start + (header.length*8)//(header.mod_scheme.value+1) # header.mod_scheme.value+1 is same as bits per symbol of modulator
+        
+        if payload_end > len(buffer):
+            msg = "payload end is outside of buffer"
+            raise IndexError(msg)
+
+        rx_syms = buffer[payload_start:payload_end] 
 
         # costas correction
         rx_syms, _ = apply_costas_loop(rx_syms, self.config.COSTAS_CONFIG, header.mod_scheme, phase_estimate, cfo)
