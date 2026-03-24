@@ -46,8 +46,12 @@ if __name__ == "__main__":
     bpsk_ber = np.mean(bpsk_bits_rec != bpsk_bits)
     qpsk_ber = np.mean(qpsk_bits_rec != qpsk_bits)
     psk8_ber = np.mean(psk8_bits_rec != psk8_bits)
+    
 
-   # assert bpsk_ber == 0.0
+    print(bpsk_bits.shape, bpsk_bits_rec.shape)
+    print(qpsk_bits.shape, qpsk_bits_rec.shape)
+    print(psk8_bits.shape, psk8_bits_rec.shape)
+    # assert bpsk_ber == 0.0
     #assert qpsk_ber == 0.0
     #assert psk8_ber == 0.0
 

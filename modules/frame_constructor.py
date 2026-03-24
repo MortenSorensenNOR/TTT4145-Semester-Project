@@ -210,7 +210,7 @@ class FrameConstructor:
         mask = (1 << n) - 1
         msb = 1 << (n - 1)
         reg = mask
-        for bit in data_bits:
+        for bit in data_bits.flatten():
             reg ^= int(bit) << (n - 1)
             reg = (((reg << 1) ^ 0x1021) & mask) if (reg & msb) else ((reg << 1) & mask)
         return reg
@@ -227,11 +227,11 @@ class FrameConstructor:
         header_encoded = self.golay.encode(header_bits)
 
         crc = self._crc16(payload)
-        crc_bits = np.array(int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
+        crc_bits = np.array(int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int).reshape(-1,header.mod_scheme.value+1)
         payload_with_crc = np.concatenate([payload, crc_bits])
 
         n = self.payload_coded_n_bits(header)
-        payload_encoded = np.concatenate([payload_with_crc, np.zeros(n - len(payload_with_crc), dtype=int)])
+        payload_encoded = np.concatenate([payload_with_crc, np.zeros(n - len(payload_with_crc), dtype=int).reshape(-1, header.mod_scheme.value+1)])
         return (header_encoded, payload_encoded)
 
     def decode_header(self, header_encoded: np.ndarray) -> FrameHeader:

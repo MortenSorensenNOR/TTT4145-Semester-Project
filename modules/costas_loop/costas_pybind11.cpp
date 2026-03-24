@@ -87,8 +87,8 @@ LoopResult costas_loop_bpsk(
 
     for (int i = 0; i < n; ++i) {
         int idx = phase_to_idx(phase_estimate);
-        f32 cr  =  re[i] * cos_lut[idx] + im[i] * sin_lut[idx];
-        f32 ci  = -re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
+        f32 cr  =  re[i] * cos_lut[idx] - im[i] * sin_lut[idx];
+        f32 ci  =  re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
 
         f32 error       = ci * fsign(cr);
         integrator     += beta  * error;
@@ -126,8 +126,8 @@ LoopResult costas_loop_qpsk(
 
     for (int i = 0; i < n; ++i) {
         int idx = phase_to_idx(phase_estimate);
-        f32 cr  =  re[i] * cos_lut[idx] + im[i] * sin_lut[idx];
-        f32 ci  = -re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
+        f32 cr  =  re[i] * cos_lut[idx] - im[i] * sin_lut[idx];
+        f32 ci  =  re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
 
         f32 error       = ci * fsign(cr) - cr * fsign(ci);
         integrator     += beta  * error;
@@ -169,8 +169,8 @@ LoopResult costas_loop_8psk(
 
     for (int i = 0; i < n; ++i) {
         int idx = phase_to_idx(phase_estimate);
-        f32 cr  =  re[i] * cos_lut[idx] + im[i] * sin_lut[idx];
-        f32 ci  = -re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
+        f32 cr  =  re[i] * cos_lut[idx] - im[i] * sin_lut[idx];
+        f32 ci  =  re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
 
         c64 y(cr, ci);
         c64 y2 = y  * y;

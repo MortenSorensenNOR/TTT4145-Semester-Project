@@ -8,6 +8,7 @@ from modules.golay import *
 from modules.frame_sync import *
 from modules.costas_loop.costas import *
 from modules.ldpc.ldpc import *
+from modules.gardner_ted.gardner import *
 
 from utils.plotting import *
 
@@ -22,7 +23,7 @@ class PipelineConfig:
     CODING_RATE: CodeRates = CodeRates.NONE
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.03)
+    COSTAS_CONFIG = CostasConfig(0.002) #Need to tune more
 
     pulse_shaping: bool = True
     pilots: bool = False
@@ -61,6 +62,7 @@ class TXPipeline:
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
 
+        self.guard_syms = np.zeros(500, dtype=complex)
         # sync
         self.sync_syms = generate_preamble(self.config.SYNC_CONFIG)
 
@@ -75,13 +77,12 @@ class TXPipeline:
             sequence_number=packet.seq_num,
         )
         (header_bits, payload_bits) = self.frame_constructor.encode(header, packet.payload)
-
+        
         # modulate
         header_syms = self.bpsk.bits2symbols(header_bits)
         payload_syms = self.payload_modulator.bits2symbols(payload_bits)
-
         # construct signal
-        tx_syms = np.concat([self.sync_syms, header_syms, payload_syms])
+        tx_syms = np.concat([self.guard_syms,self.sync_syms, header_syms, payload_syms,self.guard_syms])
 
         # upsample and filter
         tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
@@ -122,8 +123,11 @@ class RXPipeline:
             return []
 
         packets = []
+
+        filtered_buffer = match_filter(buffer, self.rrc_taps)
+
         for i in range(det.n_frames):
-            rx_syms = downsample(buffer[det.payload_starts[i]:], self.config.SPS, self.rrc_taps)
+            rx_syms = filtered_buffer[det.payload_starts[i]:]
             print("\ndetection at index:",det.payload_starts[i])
             try:
                 decoded_packet = self.decode(rx_syms, det.cfo_estimates[i], det.phase_estimates[i])
@@ -155,16 +159,19 @@ class RXPipeline:
             return None
 
         return DetectionResult(
-            payload_starts=fine.sample_idxs + len(self.long_ref),
+            payload_starts=fine.sample_idxs + len(self.long_ref) - (self.config.SPS*self.config.SPAN) - self.config.SPS, #Should fix this in fine_timing
             cfo_estimates=coarse.cfo_hats,
-            phase_estimates=fine.phase_estimates,
+            phase_estimates=-fine.phase_estimates,
             confidences=coarse.m_peaks,
         )
 
     def decode(self, buffer: np.ndarray, cfo: float, phase_estimate: float) -> Packet:
         cfo_rad_per_symbol = 2 * np.pi * cfo / self.config.SAMPLE_RATE * self.config.SPS
-
+        
         header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
+        if header.length == 0:
+            msg = "Payload length = 0"
+            raise ValueError(msg)
         payload = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
         return Packet(
             src_mac=header.src,
@@ -178,29 +185,50 @@ class RXPipeline:
 
     def header_decode(self, buffer: np.ndarray, cfo:float, current_phase_estimate: float) -> tuple[FrameHeader, int, float]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
-        header_syms = buffer[:2 * self.frame_constructor.header_config.header_total_size]
+        header_end = 2 * self.frame_constructor.header_config.header_total_size
+
+        if header_end*self.config.SPS > len(buffer):
+            msg = "header end is outside of buffer"
+            raise IndexError(msg)
+
+        print("header length to be sent into gardner:",len(buffer[:header_end*self.config.SPS]))
+        guard = self.config.SPS
+        header_syms = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard], self.config.SPS)
+
+        #print("current_pahse_estimate:",current_phase_estimate, "current_cfo_rad_per_sample:",cfo)#, "\nheader_syms:", header_syms)
         
-        print("current_pahse_estimate:",current_phase_estimate, "current_cfo_rad_per_sample:",cfo)
         # costas correction
-        header_syms_corr, phase_est =  apply_costas_loop(header_syms, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
+        header_syms_corr, phase_est = apply_costas_loop(header_syms[:header_end], self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate)#, current_frequency_offset=cfo)
         
-        print("costas phase start:", phase_est[0], "stop:", phase_est[-1])
+        #print("costas phase start:", phase_est[0], "stop:", phase_est[-1])#, "\nheader_syms_corr:", header_syms_corr, "\nphase_est:", phase_est)
         # demodulate header
-        header_bits = self.bpsk.symbols2bits(header_syms_corr)
-        header = self.frame_constructor.decode_header(header_bits)
+        try: 
+            header_bits = self.bpsk.symbols2bits(header_syms_corr)
+            print("header_bits:", header_bits.flatten())
+            header = self.frame_constructor.decode_header(header_bits)
+        except ValueError as e:
+            print(e)
+            header_bits = self.bpsk.symbols2bits(-header_syms_corr)
+            print("\nheader_bits_inverted:", header_bits.flatten())
+            header = self.frame_constructor.decode_header(header_bits)
+
         return header, 2*self.frame_constructor.header_config.header_total_size, phase_est[-1]
 
     def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:float, phase_estimate: float) -> np.ndarray:
         payload_end = payload_start + (header.length*8)//(header.mod_scheme.value+1) # header.mod_scheme.value+1 is same as bits per symbol of modulator
+        #print("payload_end:", payload_end, "buffer_len:", len(buffer), "payload mod scheme:", header.mod_scheme)
         
-        if payload_end > len(buffer):
+        if payload_end*self.config.SPS > len(buffer):
             msg = "payload end is outside of buffer"
             raise IndexError(msg)
+        
+        guard = self.config.SPS
+        rx_syms = apply_gardner_ted(buffer[payload_start:payload_end*self.config.SPS+guard], self.config.SPS)
 
-        rx_syms = buffer[payload_start:payload_end] 
+        #print("rx_syms_real:", len(rx_syms), "rx_syms_ideal:", payload_end-payload_start)
 
         # costas correction
-        rx_syms, _ = apply_costas_loop(rx_syms, self.config.COSTAS_CONFIG, header.mod_scheme, phase_estimate, cfo)
+        rx_syms, _ = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, phase_estimate)
 
         print("modulation:", header.mod_scheme)
         # demodulate

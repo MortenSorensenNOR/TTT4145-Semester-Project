@@ -29,7 +29,7 @@ class BPSK(Modulator):
 
     def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
         if len(symbols) == 0:
-            return np.ndarray([], dtype=int)
+            return np.array([], dtype=int)
         return np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1).reshape(-1, 1)
 
 class QPSK(Modulator):
@@ -49,7 +49,7 @@ class QPSK(Modulator):
         if len(symbols) == 0:
             return np.array([], dtype=int)
         indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
-        return np.column_stack([indices // 2, indices % 2]).reshape(-1, 1)
+        return np.column_stack([indices // 2, indices % 2])
 
 class PSK8(Modulator):
     def __init__(self) -> None:
@@ -69,5 +69,5 @@ class PSK8(Modulator):
         if len(symbols) == 0:
             return np.array([], dtype=int)
         indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
-        return np.column_stack([indices // 4, (indices % 4) // 2, indices % 2]).reshape(-1, 1)
+        return np.column_stack([indices // 4, (indices % 4) // 2, indices % 2])
 

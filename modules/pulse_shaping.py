@@ -3,6 +3,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+from modules.gardner_ted.gardner import apply_gardner_ted
 
 def rrc_filter(sps: int, alpha: float, num_taps: int) -> np.ndarray:
     """Design a root-raised-cosine filter with unit energy."""
@@ -34,7 +35,7 @@ def rrc_filter(sps: int, alpha: float, num_taps: int) -> np.ndarray:
         ],
     )
 
-    return h / np.max(h)
+    return h / np.sqrt(np.sum(h**2))
 
 
 def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
@@ -47,12 +48,23 @@ def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
 
 def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
     """Match-filter with RRC taps, strip group delay, and decimate."""
+
     if len(signal) == 0:
         return np.zeros(0, dtype=complex)
+    filtered = np.convolve(signal, rrc_taps, mode="full")
+    delay = len(rrc_taps) - 1
+    n_symbols = (len(signal) - (len(rrc_taps) - 1)) // sps
+    return filtered[delay : delay + n_symbols * sps : sps]
+    # Old code that got the wrong symbol timing making all BER to 50%
     delay = (len(rrc_taps) - 1)//2
     n_out = max(0, (len(signal) - len(rrc_taps) + 1) // sps)
     filtered = np.convolve(signal, rrc_taps, mode="full")
     return filtered[delay : delay + n_out * sps : sps]
+
+def match_filter(signal: np.ndarray, rrc_taps: np.ndarray) -> np.ndarray:
+    filtered_full = np.convolve(signal, rrc_taps, mode="full")
+    delay = len(rrc_taps) - 1
+    return filtered_full[delay:]
 
 
 if __name__ == "__main__":
