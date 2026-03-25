@@ -46,6 +46,7 @@ def _compile_flags() -> list[str]:
 
 _EXTENSIONS = [
     ("modules.costas_loop.costas_ext", "modules/costas_loop/costas_pybind11.cpp"),
+    ("modules.gardner_ted.gardner_ext", "modules/gardner_ted/gardner_ext.cpp"),
     # add more here as needed:
     # ("modules.equalizer.equalizer_ext", "modules/equalizer/equalizer_pybind11.cpp"),
 ]
