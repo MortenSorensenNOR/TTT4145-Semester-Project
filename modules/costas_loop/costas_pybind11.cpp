@@ -91,8 +91,8 @@ LoopResult costas_loop_bpsk(
         f32 ci  =  re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
 
         f32 error       = ci * fsign(cr);
-        integrator     += beta  * error;
-        phase_estimate += alpha * error + integrator;
+        integrator     -= beta  * error;
+        phase_estimate -= alpha * error + integrator;
         phase_estimate  = wrap(phase_estimate);
 
         out_re[i] = cr; out_im[i] = ci; phase_ptr(i) = phase_estimate;
@@ -130,8 +130,8 @@ LoopResult costas_loop_qpsk(
         f32 ci  =  re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
 
         f32 error       = ci * fsign(cr) - cr * fsign(ci);
-        integrator     += beta  * error;
-        phase_estimate += alpha * error + integrator;
+        integrator     -= beta  * error;
+        phase_estimate -= alpha * error + integrator;
         phase_estimate  = wrap(phase_estimate);
 
         out_re[i] = cr; out_im[i] = ci; phase_ptr(i) = phase_estimate;
@@ -178,8 +178,8 @@ LoopResult costas_loop_8psk(
         c64 y8 = y4 * y4;
         f32 error = std::arg(y8) / 8.0f;
 
-        integrator     += beta  * error;
-        phase_estimate += alpha * error + integrator;
+        integrator     -= beta  * error;
+        phase_estimate -= alpha * error + integrator;
         phase_estimate  = wrap(phase_estimate);
 
         out_re[i] = cr; out_im[i] = ci; phase_ptr(i) = phase_estimate;

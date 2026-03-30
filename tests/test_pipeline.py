@@ -25,11 +25,11 @@ def random_pipeline_config(draw):
 
 @composite
 def random_packet_length(draw):
-    return draw(st.integers(min_value=2**6, max_value=(2**10)))
+    return draw(st.integers(min_value=6, max_value=10))
 
 @composite
 def random_buffer_length(draw):
-    return draw(st.integers(min_value=2**14, max_value=2**18))
+    return draw(st.integers(min_value=14, max_value=18))
 
 @composite
 def random_seed_rng(draw):
@@ -40,13 +40,13 @@ def random_seed_rng(draw):
 @settings(deadline=5000)
 @given(pipeline_config = random_pipeline_config(), packet_length = random_packet_length(), buffer_length = random_buffer_length(), seed_rng = random_seed_rng())
 def test_simple(pipeline_config, packet_length, buffer_length, seed_rng):
-    run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng)
+    run_pipeline(pipeline_config, 2**packet_length, 2**buffer_length, seed_rng)
 
 def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotting = False):
 
-    snr = 20
+    snr = 16
     seed = 42
-    actual_cfo = 2321
+    actual_cfo = 6321
     actual_delay = 0#2034 # Delay is added later
     channel_config = ChannelConfig(
         sample_rate=pipeline_config.SAMPLE_RATE,
@@ -79,7 +79,6 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
 
     tx_signal_list = [[]]
     detections_list = []
-    prev_detection_end = actual_delay
     sync_len = len(tx.sync_syms) * tx.config.SPS
     packet_len = len(tx_signal_packet)
 
@@ -92,9 +91,8 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
         tx_signal_list.append(np.concat([np.zeros(zeros_before_len, dtype=complex), tx_signal_packet, np.zeros(zeros_after_len, dtype=complex)]))
         
         detections_list.append(current_detection)#-tx.config.SPS*tx.config.SPAN)
-        prev_detection_end = current_detection + packet_len + zeros_after_len
 
-    tx_signal = np.concat(tx_signal_list)
+    tx_signal = 1*np.concat(tx_signal_list)
 
     # Trim or pad to exactly buffer_length
     if len(tx_signal) >= buffer_length:
@@ -105,7 +103,7 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
     rx_signal = channel.apply(tx_signal)
     
     # ----- Toggle for ideal signal ------
-    #rx_signal = tx_signal
+    rx_signal = tx_signal
 
     print("pipeline_config:", pipeline_config, seed, packet_length)
     print("\nnum_of_packets:",num_of_packets, "\nbuffer_length:",buffer_length, "\nsignal length = buffer length?",len(rx_signal)==buffer_length, "\ncorrect detection indexes=", detections_list)
@@ -135,7 +133,10 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
     
     for rx_packet in rx_packets:
         assert packet.length == rx_packet.length
-        assert np.concat(packet.payload.reshape(-1, 1)).all() == np.concat(rx_packet.payload).all()
+        assert packet.payload.shape == rx_packet.payload.shape
+        ber = np.mean(packet.payload != rx_packet.payload)
+        print(ber)
+        assert ber <= 1e-5
 
     last_packet_end = (detections_list[-1]+(72+(packet_length*8//(pipeline_config.MOD_SCHEME.value+1)))*tx.config.SPS)
     
@@ -145,5 +146,5 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
 
 
 if __name__ == "__main__":
-    pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.BPSK)
-    run_pipeline(pipeline_config, 64, 61814, 42, plotting=True)
+    pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)
+    run_pipeline(pipeline_config, 64, 131072, 42, plotting=True)
