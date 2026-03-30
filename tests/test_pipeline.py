@@ -147,4 +147,4 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
 
 if __name__ == "__main__":
     pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)
-    run_pipeline(pipeline_config, 64, 131072, 42, plotting=True)
+    run_pipeline(pipeline_config, 32, 131072, 42, plotting=True)

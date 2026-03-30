@@ -24,7 +24,7 @@ class PipelineConfig:
     PRE_HEADER_GUARD_BITS: int = 2
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.02) #Need to tune more
+    COSTAS_CONFIG = CostasConfig(0.03) #Need to tune more
 
     pulse_shaping: bool = True
     pilots: bool = False
@@ -174,7 +174,7 @@ class RXPipeline:
         if header.length == 0:
             msg = "Payload length = 0"
             raise ValueError(msg)
-        payload = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, phase_estimate, current_phase_estimate)
+        payload = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
         return Packet(
             src_mac=header.src,
             dst_mac=header.dst,
@@ -227,9 +227,9 @@ class RXPipeline:
             print("header_bits_inverted:", header_bits.flatten())
             header = self.frame_constructor.decode_header(header_bits)
 
-        return header, 2*self.frame_constructor.header_config.header_total_size, phase_est[-1]
+        return header, 2*self.frame_constructor.header_config.header_total_size, phase_est[-1]+current_phase_estimate
 
-    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:float, phase_estimate_preamble: float, phase_estimate_costas: float) -> np.ndarray:
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:float, current_phase_estimate: float) -> np.ndarray:
         payload_end = payload_start + (header.length*8)//(header.mod_scheme.value+1) # header.mod_scheme.value+1 is same as bits per symbol of modulator
         #print("payload_end:", payload_end, "buffer_len:", len(buffer), "payload mod scheme:", header.mod_scheme)
         
@@ -238,12 +238,12 @@ class RXPipeline:
             raise IndexError(msg)
         
         guard = self.config.SPS//2
-        rx_syms = apply_gardner_ted(buffer[payload_start:payload_end*self.config.SPS+guard]*np.exp(-1j*phase_estimate_preamble), self.config.SPS)
+        rx_syms = apply_gardner_ted(buffer[payload_start:payload_end*self.config.SPS+guard]*np.exp(-1j*current_phase_estimate), self.config.SPS)
 
-        #print("rx_syms_real:", len(rx_syms), "rx_syms_ideal:", payload_end-payload_start)
+        print("rx_syms_real:", len(rx_syms), "rx_syms_ideal:", payload_end-payload_start)
 
         # costas correction
-        rx_syms, _ = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, phase_estimate_costas)
+        rx_syms, _ = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=0.0)
 
         print("modulation:", header.mod_scheme)
         # demodulate
