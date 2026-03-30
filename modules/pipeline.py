@@ -21,10 +21,10 @@ class PipelineConfig:
     RRC_ALPHA: float = 0.35
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
     CODING_RATE: CodeRates = CodeRates.NONE
-    PRE_HEADER_GUARD_BITS: int = 2
+    PRE_HEADER_GUARD_BITS: int = 4
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.03) #Need to tune more
+    COSTAS_CONFIG = CostasConfig(0.04) #Need to tune more
 
     pulse_shaping: bool = True
     pilots: bool = False
@@ -81,7 +81,13 @@ class TXPipeline:
         print("header_bits:", header_bits)
         # modulate
         header_syms = self.bpsk.bits2symbols(header_bits)
-        known_sequence_syms = self.bpsk.bits2symbols(np.array([[0]*self.config.PRE_HEADER_GUARD_BITS]))
+
+        # Adding extra known bits before header to figure out phase ambiguity
+        if self.config.PRE_HEADER_GUARD_BITS > 0:
+            known_sequence_syms = self.bpsk.bits2symbols(np.array([[0]*self.config.PRE_HEADER_GUARD_BITS]))
+        else:
+            known_sequence_syms = np.array([])
+
         payload_syms = self.payload_modulator.bits2symbols(payload_bits)
         # construct signal
         tx_syms = np.concat([self.guard_syms,self.sync_syms, known_sequence_syms, header_syms, payload_syms,self.guard_syms])
@@ -197,37 +203,35 @@ class RXPipeline:
         guard = self.config.SPS//2
         
         # applying the phase estimate from preamble before gardner
+        print("current_pahse_estimate:",current_phase_estimate)
         header_syms = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard]*np.exp(-1j*current_phase_estimate), self.config.SPS)
         residual_phase_estimate = 0.0
         
         print(header_syms[:9])
-        if np.mean(np.real(header_syms[:self.config.PRE_HEADER_GUARD_BITS])) > 0:
-            header_syms = header_syms*np.exp(-1j*np.pi)
+        if self.config.PRE_HEADER_GUARD_BITS > 0 and np.mean(np.real(header_syms[:self.config.PRE_HEADER_GUARD_BITS])) > 0:
+            header_syms = -header_syms
+            #residual_phase_estimate -= np.pi/(4)
             print("inverted header syms")
             print(header_syms[:9])
 
-        #residual_phase_estimate = cfo*8*self.config.SPS
-
-        #print("current_pahse_estimate:",current_phase_estimate, "current_cfo_rad_per_sample:",cfo)#, "\nheader_syms:", header_syms)
-        
         # costas correction
-        header_syms_corr, phase_est = apply_costas_loop(header_syms[:header_end], self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=residual_phase_estimate, current_frequency_offset=cfo)
+        header_syms_corr, phase_est = apply_costas_loop(header_syms[:header_end], self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=0.0, current_frequency_offset=cfo)
         print(header_syms_corr[:9])
-        #print("costas phase start:", phase_est[0], "stop:", phase_est[-1])#, "\nheader_syms_corr:", header_syms_corr, "\nphase_est:", phase_est)
         # demodulate header
-        try: 
+        try:
             header_bits = self.bpsk.symbols2bits(-header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
             print("header_bits:", header_bits.flatten())
             header = self.frame_constructor.decode_header(header_bits)
         except Exception as e:
             # Hacky solution for when costas loop locks on wrong phase. Only happens at lower SNR
             print(e)
+            #raise ValueError(e)
             print("trying inverted header")
             header_bits = self.bpsk.symbols2bits(header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
             print("header_bits_inverted:", header_bits.flatten())
             header = self.frame_constructor.decode_header(header_bits)
 
-        return header, 2*self.frame_constructor.header_config.header_total_size, phase_est[-1]+current_phase_estimate
+        return header, header_end, phase_est[-1]+current_phase_estimate+residual_phase_estimate
 
     def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:float, current_phase_estimate: float) -> np.ndarray:
         payload_end = payload_start + (header.length*8)//(header.mod_scheme.value+1) # header.mod_scheme.value+1 is same as bits per symbol of modulator
@@ -237,23 +241,25 @@ class RXPipeline:
             msg = "payload end is outside of buffer"
             raise IndexError(msg)
         
-        guard = self.config.SPS//2
-        rx_syms = apply_gardner_ted(buffer[payload_start:payload_end*self.config.SPS+guard]*np.exp(-1j*current_phase_estimate), self.config.SPS)
+        guard = self.config.SPS
+        rx_syms = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard]*np.exp(-1j*current_phase_estimate), self.config.SPS)
 
         print("rx_syms_real:", len(rx_syms), "rx_syms_ideal:", payload_end-payload_start)
-
+        print("rx_syms:", rx_syms[:8])
         # costas correction
-        rx_syms, _ = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=0.0)
+        rx_syms, _ = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=0.0, current_frequency_offset=cfo)
+        #rx_syms = rx_syms[:payload_end-payload_start]
+        print("rx_syms costas:", rx_syms[:8])
 
         print("modulation:", header.mod_scheme)
         # demodulate
         match (header.mod_scheme):
             case ModulationSchemes.BPSK:
-                payload_bits = self.bpsk.symbols2bits(-rx_syms)
+                payload_bits = self.bpsk.symbols2bits(rx_syms)
             case ModulationSchemes.QPSK:
-                payload_bits = self.qpsk.symbols2bits(-rx_syms)
+                payload_bits = self.qpsk.symbols2bits(rx_syms)
             case ModulationSchemes.PSK8:
-                payload_bits = self.psk8.symbols2bits(-rx_syms)
+                payload_bits = self.psk8.symbols2bits(rx_syms)
 
         return payload_bits
 

@@ -61,6 +61,11 @@ def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray
     filtered = np.convolve(signal, rrc_taps, mode="full")
     return filtered[delay : delay + n_out * sps : sps]
 
+def decimate(signal: np.ndarray, rrc_taps: np.ndarray, sps: int) -> np.ndarray:
+    delay = len(rrc_taps) - 1
+    n_symbols = (len(signal) - (len(rrc_taps) - 1)) // sps
+    return signal[delay : delay + n_symbols * sps : sps]
+
 def match_filter(signal: np.ndarray, rrc_taps: np.ndarray) -> np.ndarray:
     filtered_full = np.convolve(signal, rrc_taps, mode="full")
     delay = len(rrc_taps) - 1

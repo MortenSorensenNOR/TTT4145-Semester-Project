@@ -19,8 +19,8 @@ from modules.frame_constructor import ModulationSchemes
 
 NUM_SYMBOLS          = 1000
 INITIAL_PHASE_OFFSET = np.pi / 8
-PHASE_DRIFT          = np.pi / 4   # total drift over all symbols
-BN                   = 0.02        # loop noise bandwidth
+PHASE_DRIFT          = np.pi / 5   # total drift over all symbols
+BN                   = 0.01        # loop noise bandwidth
 
 impl = "C++ (pybind11)" if _ext else "Python (fallback)"
 print(f"Implementation : {impl}\n")

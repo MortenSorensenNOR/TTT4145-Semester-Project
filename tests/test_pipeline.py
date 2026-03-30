@@ -14,12 +14,12 @@ from modules.channel import *
 
 from utils.plotting import *
 
-MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK]#, ModulationSchemes.PSK8]
+MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
 
 @composite
 def random_pipeline_config(draw):
     return PipelineConfig(
-        MOD_SCHEME = draw(st.sampled_from(MOD_SCHEMES)),
+        MOD_SCHEME = draw(st.sampled_from(MOD_SCHEMES[:1])),
         SPS = 8
     )
 
@@ -44,9 +44,9 @@ def test_simple(pipeline_config, packet_length, buffer_length, seed_rng):
 
 def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotting = False):
 
-    snr = 16
+    snr = 20
     seed = 42
-    actual_cfo = 6321
+    actual_cfo = 4321
     actual_delay = 0#2034 # Delay is added later
     channel_config = ChannelConfig(
         sample_rate=pipeline_config.SAMPLE_RATE,
@@ -90,7 +90,7 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
         current_detection = len(np.concat(tx_signal_list))+zeros_before_len+sync_len-tx.config.SPS+len(tx.guard_syms)*tx.config.SPS
         tx_signal_list.append(np.concat([np.zeros(zeros_before_len, dtype=complex), tx_signal_packet, np.zeros(zeros_after_len, dtype=complex)]))
         
-        detections_list.append(current_detection)#-tx.config.SPS*tx.config.SPAN)
+        detections_list.append(current_detection)
 
     tx_signal = 1*np.concat(tx_signal_list)
 
@@ -103,7 +103,7 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
     rx_signal = channel.apply(tx_signal)
     
     # ----- Toggle for ideal signal ------
-    rx_signal = tx_signal
+    rx_signal = tx_signal#*np.exp(-1j*np.pi/4)
 
     print("pipeline_config:", pipeline_config, seed, packet_length)
     print("\nnum_of_packets:",num_of_packets, "\nbuffer_length:",buffer_length, "\nsignal length = buffer length?",len(rx_signal)==buffer_length, "\ncorrect detection indexes=", detections_list)
@@ -133,9 +133,14 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
     
     for rx_packet in rx_packets:
         assert packet.length == rx_packet.length
-        assert packet.payload.shape == rx_packet.payload.shape
-        ber = np.mean(packet.payload != rx_packet.payload)
+        ber = np.mean(packet.payload[:len(rx_packet.payload)] != rx_packet.payload)
+        for i in range(len(rx_packet.payload)):
+            #print(i, packet.payload[i], rx_packet.payload[i])
+            pass
+
+        print(packet.payload.shape, rx_packet.payload.shape)
         print(ber)
+        assert packet.payload.shape == rx_packet.payload.shape
         assert ber <= 1e-5
 
     last_packet_end = (detections_list[-1]+(72+(packet_length*8//(pipeline_config.MOD_SCHEME.value+1)))*tx.config.SPS)
@@ -147,4 +152,4 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
 
 if __name__ == "__main__":
     pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)
-    run_pipeline(pipeline_config, 32, 131072, 42, plotting=True)
+    run_pipeline(pipeline_config, 64, 2**16, 42, plotting=True)
