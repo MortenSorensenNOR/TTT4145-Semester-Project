@@ -223,15 +223,16 @@ class FrameConstructor:
         interleaving: bool = True,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Encode data into a frame."""
+        payload = payload.ravel()
         header_bits = self.frame_header_constructor.encode(header)
         header_encoded = self.golay.encode(header_bits)
 
         crc = self._crc16(payload)
-        crc_bits = np.array(int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int).reshape(-1,header.mod_scheme.value+1)
+        crc_bits = np.array(int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
         payload_with_crc = np.concatenate([payload, crc_bits])
 
         n = self.payload_coded_n_bits(header)
-        payload_encoded = np.concatenate([payload_with_crc, np.zeros(n - len(payload_with_crc), dtype=int).reshape(-1, header.mod_scheme.value+1)])
+        payload_encoded = np.concatenate([payload_with_crc, np.zeros(n - len(payload_with_crc), dtype=int)])
         return (header_encoded, payload_encoded)
 
     def decode_header(self, header_encoded: np.ndarray) -> FrameHeader:
