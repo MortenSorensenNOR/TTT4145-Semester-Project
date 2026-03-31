@@ -176,18 +176,12 @@ class RXPipeline:
 
     def decode(self, buffer: np.ndarray, cfo: float, phase_estimate: float) -> Packet:
         cfo_rad_per_symbol = 2 * np.pi * cfo / self.config.SAMPLE_RATE * self.config.SPS
-        cfo_rad_per_sample = cfo_rad_per_symbol / self.config.SPS
-
-        # Remove CFO ramp and initial phase from the full buffer in one shot,
-        # so the Costas loop only handles residual noise rather than bulk CFO.
-        t = np.arange(len(buffer))
-        buffer = buffer * np.exp(-1j * (cfo_rad_per_sample * t + phase_estimate))
-
-        header, payload_start, current_phase_estimate = self.header_decode(buffer, 0.0, 0.0)
+        
+        header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
         if header.length == 0:
             msg = "Payload length = 0"
             raise ValueError(msg)
-        payload = self.payload_decode(buffer, header, payload_start, 0.0, current_phase_estimate)
+        payload = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
         return Packet(
             src_mac=header.src,
             dst_mac=header.dst,
