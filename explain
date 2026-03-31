@@ -1,0 +1,13 @@
+Receive:
+[buffer] -> detect -> [detections] -> for each detection -> decode
+
+
+
+[  frame1        frame2  frame3]
+
+fft([ xxx_xxxxL                xxxxxxxxxxL    xxxxxxxxxxL])
+
+cfo_estimate 
+
+avg(phase())
+

@@ -47,6 +47,7 @@ class Golay:
 
     def decode(self, received: np.ndarray) -> np.ndarray:
         """Decode a Golay-encoded signal."""
+        received = received.ravel()
         if received.shape[0] % self.block_length != 0:
             msg = "Received signal must have a length that is a multiple of 24"
             raise ValueError(msg)

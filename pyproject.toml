@@ -1,10 +1,3 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["modules"]
-
 [project]
 name = "radiokommunikasjon"
 version = "0.1.0"
@@ -12,30 +5,45 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "matplotlib>=3.0",
-    "pyadi-iio>=0.0.17",
-    "scipy>=1.9",
-    "sympy>=1.14.0",
-    "tqdm>=4.67.3",
+    "matplotlib>=3.10.8",
+    "numpy>=2.4.2",
+    "pybind11>=3.0.2",
+    "scipy>=1.17.1",
 ]
-
-[project.optional-dependencies]
-speed = ["numba>=0.63.1"]
-test = ["hypothesis>=6.151.6", "pytest>=9.0.2"]
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.151.9",
     "pytest>=9.0.2",
 ]
+[build-system]
+requires = ["setuptools", "pybind11"]
+build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 norecursedirs = [".git", ".tox", ".hypothesis", "build", "dist", ".venv", "vendor", "pluto"]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["modules*"]
+
+[tool.setuptools.package-dir]
+"" = "."
+
 [tool.ruff]
 line-length = 120
 extend-exclude = ["vendor"]
 
+[tool.ruff.lint]
+select = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR0915"]
+
 [tool.ruff.lint.pylint]
 max-args = 8
 max-returns = 8
+
+[tool.ty.rules]
+all = "error"

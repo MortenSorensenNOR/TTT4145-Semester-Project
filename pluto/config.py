@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from modules.costas_loop import CostasConfig
+from modules.costas_loop.costas import CostasConfig
 from modules.frame_constructor import ModulationSchemes
-from modules.ldpc import CodeRates
-from modules.modulation import BPSK, QAM, QPSK, EightPSK, Modulator
-from modules.pilots import PilotConfig
-from modules.synchronization import SynchronizerConfig
+from modules.ldpc.ldpc import CodeRates
+from modules.modulators import BPSK, QPSK, PSK8, Modulator
+#from modules.pilots import PilotConfig
+#from modules.synchronization import SynchronizerConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -28,7 +28,7 @@ RX_GAIN = 70.0
 MOD_SCHEME = ModulationSchemes.QPSK
 CODING_RATE = CodeRates.THREE_QUARTER_RATE  # Higher rate = more throughput (needs good SNR)
 DEFAULT_TX_GAIN = -50
-RX_BUFFER_SIZE = 2**20  # Smaller buffer = lower latency
+RX_BUFFER_SIZE = 2**14  # Smaller buffer = lower latency
 NODE_SRC = 0
 NODE_DST = 0
 
@@ -36,8 +36,8 @@ NODE_DST = 0
 FREQ_A_TO_B = 2_400_000_000
 FREQ_B_TO_A = 2_450_000_000
 
-SYNC_CONFIG = SynchronizerConfig()
-PILOT_CONFIG = PilotConfig()
+#SYNC_CONFIG = SynchronizerConfig()
+#PILOT_CONFIG = PilotConfig()
 COSTAS_CONFIG = CostasConfig()
 
 
@@ -51,7 +51,7 @@ class PipelineConfig:
     channel_coding: bool = True
     interleaving: bool = True
     cfo_correction: bool = True
-    pilot_config: PilotConfig = field(default_factory=PilotConfig)
+#    pilot_config: PilotConfig = field(default_factory=PilotConfig)
 
     def __post_init__(self) -> None:
         """Validate pipeline configuration. Making sure costas and pilots are not running at the same time."""
@@ -101,8 +101,7 @@ def get_modulator(scheme: ModulationSchemes) -> Modulator:
         factories: dict[ModulationSchemes, Callable[[], Modulator]] = {
             ModulationSchemes.BPSK: BPSK,
             ModulationSchemes.QPSK: QPSK,
-            ModulationSchemes.QAM16: lambda: QAM(16),
-            ModulationSchemes.PSK8: EightPSK,
+            ModulationSchemes.PSK8: PSK8
         }
         if scheme not in factories:
             msg = f"Unknown modulation scheme: {scheme}"

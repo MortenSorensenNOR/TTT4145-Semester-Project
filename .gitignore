@@ -5,13 +5,13 @@ build/
 dist/
 wheels/
 *.egg-info
-
+*.so
 # Local machine overrides (e.g. piwheels on Pi)
 uv.toml
+.python-version
 
 # Virtual environments
 .venv
-.venv/
 .claude
 .pytest_cache
 .ruff_cache
@@ -21,3 +21,11 @@ pyrightconfig.json
 .hypothesis/
 
 CLAUDE.md
+
+# Large binaries and external repos
+vendor/
+references/
+
+# images
+*.png
+*.jpg
