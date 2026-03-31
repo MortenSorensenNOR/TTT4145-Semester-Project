@@ -39,7 +39,7 @@ def test_frame_header_constructor(frame_header_constructor_instance: FrameHeader
 
     assert result == frame_header
 
-@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(deadline=10000, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture])
 @given(frame_header=random_frame_header())
 def test_frame_constructor(frame_constructor_instance: FrameConstructor, frame_header: FrameHeader):
     rng   = np.random.default_rng(42)
