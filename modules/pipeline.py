@@ -100,16 +100,12 @@ class TXPipeline:
 
 @dataclass
 class DetectionResult:
-    """Batch detection result — one entry per detected frame."""
+    """Single frame detection result."""
 
-    payload_starts: np.ndarray
-    cfo_estimates: np.ndarray
-    phase_estimates: np.ndarray
-    confidences: np.ndarray
-
-    @property
-    def n_frames(self) -> int:
-        return self.payload_starts.size
+    payload_start: int
+    cfo_estimate: float
+    phase_estimate: float
+    confidence: float
 
 class RXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
@@ -128,26 +124,25 @@ class RXPipeline:
 
     def receive(self, buffer: np.ndarray) -> list[Packet]:
         """Detect and decode all frames in buffer."""
-        det = self.detect(buffer)
-        if det is None:
+        detections = self.detect(buffer)
+        if not detections:
             return []
 
         packets = []
-
         filtered_buffer = match_filter(buffer, self.rrc_taps)
 
-        for i in range(det.n_frames):
-            rx_syms = filtered_buffer[det.payload_starts[i]:]
-            print("\ndetection at index:",det.payload_starts[i])
+        for det in detections:
+            rx_syms = filtered_buffer[det.payload_start:]
+            print("\ndetection at index:", det.payload_start)
             try:
-                decoded_packet = self.decode(rx_syms, det.cfo_estimates[i], det.phase_estimates[i])
+                decoded_packet = self.decode(rx_syms, det.cfo_estimate, det.phase_estimate)
                 packets.append(decoded_packet)
             except Exception as e:
                 print("DECODE ERROR:", e)
 
         return packets
 
-    def detect(self, buffer: np.ndarray) -> DetectionResult | None:
+    def detect(self, buffer: np.ndarray) -> list[DetectionResult]:
         cfg = self.config.SYNC_CONFIG
         sps = self.config.SPS
 
@@ -155,25 +150,29 @@ class RXPipeline:
             coarse = coarse_sync(buffer, self.config.SAMPLE_RATE, sps, cfg)
         except Exception as e:
             print(e)
-            return None
+            return []
 
         if coarse.m_peaks.size == 0:
             print("no")
-            return None
+            return []
 
         try:
             fine = fine_timing(buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
                                self.config.SAMPLE_RATE, sps, cfg)
         except Exception as e:
             print(e)
-            return None
+            return []
 
-        return DetectionResult(
-            payload_starts=fine.sample_idxs + len(self.long_ref) - (self.config.SPS*self.config.SPAN),# - self.config.SPS, #Should fix this in fine_timing
-            cfo_estimates=coarse.cfo_hats,
-            phase_estimates=fine.phase_estimates,
-            confidences=coarse.m_peaks,
-        )
+        payload_starts = fine.sample_idxs + len(self.long_ref) - (self.config.SPS*self.config.SPAN)# - self.config.SPS, #Should fix this in fine_timing
+        return [
+            DetectionResult(
+                payload_start=int(payload_starts[i]),
+                cfo_estimate=float(coarse.cfo_hats[i]),
+                phase_estimate=float(fine.phase_estimates[i]),
+                confidence=float(coarse.m_peaks[i]),
+            )
+            for i in range(len(payload_starts))
+        ]
 
     def decode(self, buffer: np.ndarray, cfo: float, phase_estimate: float) -> Packet:
         cfo_rad_per_symbol = 2 * np.pi * cfo / self.config.SAMPLE_RATE * self.config.SPS
