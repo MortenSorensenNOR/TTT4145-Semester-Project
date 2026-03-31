@@ -25,7 +25,7 @@ class PipelineConfig:
     PRE_HEADER_GUARD_BITS: int = 4
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.02) #Need to tune more
+    COSTAS_CONFIG = CostasConfig(0.03) #Need to tune more
 
     pulse_shaping: bool = True
     pilots: bool = False
@@ -233,11 +233,12 @@ class RXPipeline:
         except Exception as e:
             # Hacky solution for when costas loop locks on wrong phase. Only happens at lower SNR
             print(e)
-            raise ValueError(e)
+            #raise ValueError(e)
             print("trying inverted header")
             header_bits = self.bpsk.symbols2bits(-header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
             print("header_bits_inverted:", header_bits.flatten())
             header = self.frame_constructor.decode_header(header_bits)
+            current_phase_estimate -= np.pi
 
         return header, header_end, (phase_est[-1]+current_phase_estimate)
 

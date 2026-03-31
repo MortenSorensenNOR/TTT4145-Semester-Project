@@ -19,7 +19,7 @@ MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes
 @composite
 def random_pipeline_config(draw):
     return PipelineConfig(
-        MOD_SCHEME = draw(st.sampled_from(MOD_SCHEMES[:1])),
+        MOD_SCHEME = draw(st.sampled_from(MOD_SCHEMES[:2])),
         SPS = 8
     )
 
@@ -44,7 +44,7 @@ def test_simple(pipeline_config, packet_length, buffer_length, seed_rng):
 
 def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotting = False, ideal=False):
 
-    snr = 17
+    snr = 20
     seed = 42
     actual_cfo = 4321
     actual_delay = 0#2034 # Delay is added later
@@ -156,5 +156,5 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
 
 
 if __name__ == "__main__":
-    pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.BPSK)
+    pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.PSK8)
     run_pipeline(pipeline_config, 64, 32768, 42, plotting=True, ideal=False)
