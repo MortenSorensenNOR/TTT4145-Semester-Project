@@ -201,17 +201,16 @@ class RXPipeline:
             raise IndexError(msg)
 
         # applying the phase estimate from preamble before gardner
-        #print("current_pahse_estimate:",current_phase_estimate)
+        print("current_pahse_estimate:",current_phase_estimate)
 
         if self.config.gardner_ted:
             guard = self.config.SPS//2
             header_syms = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard]*np.exp(-1j*current_phase_estimate), self.config.SPS)
         else:
-            header_syms = decimate(buffer[:header_end*self.config.SPS]*np.exp(-1j*current_phase_estimate), self.config.SPS)
+            header_syms = decimate(buffer[:header_end*self.config.SPS]*np.exp(-1j*(current_phase_estimate)), self.config.SPS)
         
         residual_phase_estimate = 0.0
-        
-        #print(header_syms[:9])
+        print(header_syms[:9]*np.exp(1j*current_phase_estimate), header_syms[:9])
         if self.config.PRE_HEADER_GUARD_BITS > 0 and np.mean(np.real(header_syms[:self.config.PRE_HEADER_GUARD_BITS])) > 0:
             #header_syms = -header_syms
             residual_phase_estimate = -np.pi
@@ -225,9 +224,20 @@ class RXPipeline:
             header_syms_corr, phase_est = header_syms[:header_end], [current_phase_estimate]
         #print(header_syms_corr[:9])
         # demodulate header
-        header_bits = self.bpsk.symbols2bits(header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
-        print("header_bits:", header_bits.flatten())
-        header = self.frame_constructor.decode_header(header_bits)
+
+        try:
+            header_bits = self.bpsk.symbols2bits(header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
+            print("header_bits:", header_bits.flatten())
+            header = self.frame_constructor.decode_header(header_bits)
+        except Exception as e:
+            # Hacky solution for when costas loop locks on wrong phase. Only happens at lower SNR
+            print(e)
+            raise ValueError(e)
+            print("trying inverted header")
+            header_bits = self.bpsk.symbols2bits(-header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
+            print("header_bits_inverted:", header_bits.flatten())
+            header = self.frame_constructor.decode_header(header_bits)
+            current_phase_estimate -= np.pi
 
         return header, header_end, (phase_est[-1]+current_phase_estimate)
 

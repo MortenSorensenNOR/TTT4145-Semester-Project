@@ -101,7 +101,7 @@ def test_ideal(specs, seed):
 @given(
     specs=packet_specs(),
     cfo_hz=st.floats(-5000, 5000, allow_nan=False, allow_infinity=False),
-    phase=st.floats(0, 2 * np.pi, allow_nan=False, allow_infinity=False),
+    phase=st.floats(-np.pi, np.pi, allow_nan=False, allow_infinity=False),
     seed=st.integers(0, 2**31),
 )
 def test_channel(snr_db, specs, cfo_hz, phase, seed):
@@ -251,6 +251,26 @@ def ber_report():
     plt.savefig("tests/plots/pipeline/ber_report.png", dpi=150)
     print("\nPlot saved to tests/plots/pipeline/ber_report.png")
 
+def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
+    tx_packets, signal = make_packets_and_signal(specs, seed)
+    _, config = tx_packets[0]
+
+    channel = ChannelModel(ChannelConfig(
+        sample_rate=config.SAMPLE_RATE,
+        snr_db=snr_db,
+        cfo_hz=cfo_hz,
+        initial_phase_rad=phase,
+        seed=seed,
+    ))
+    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    assert_all_received(tx_packets, rx_packets)
 
 if __name__ == "__main__":
-    ber_report()
+    #ber_report()
+    replay_scenario(
+        snr_db=30,
+        specs=[(0, 6, ModulationSchemes.BPSK)],
+        cfo_hz=218.0,
+        phase=0.0,
+        seed=3,
+    )
