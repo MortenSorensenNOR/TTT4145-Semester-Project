@@ -22,7 +22,7 @@ class PipelineConfig:
     RRC_ALPHA: float = 0.35
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
     CODING_RATE: CodeRates = CodeRates.NONE
-    PRE_HEADER_GUARD_BITS: int = 4
+    PRE_HEADER_GUARD_BITS: int = 0
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.03) #Need to tune more

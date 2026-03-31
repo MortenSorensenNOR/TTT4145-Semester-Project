@@ -44,7 +44,7 @@ def test_simple(pipeline_config, packet_length, buffer_length, seed_rng):
 
 def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotting = False, ideal=False):
 
-    snr = 20
+    snr = 15
     seed = 42
     actual_cfo = 4321
     actual_delay = 0#2034 # Delay is added later

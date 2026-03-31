@@ -213,7 +213,7 @@ def fine_timing(
 
     peak_idxs = np.argmax(z, axis=1)
     peak_complex = z_complex[np.arange(len(peak_idxs)), peak_idxs]
-    zc_phase_at_peak = np.angle(s[peak_idxs])
+    zc_phase_at_peak = 0# np.angle(s[peak_idxs])
 
     return FineResult(
         sample_idxs=starts + peak_idxs,
