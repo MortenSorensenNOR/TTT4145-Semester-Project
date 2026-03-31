@@ -236,6 +236,15 @@ wheels = [
 ]
 
 [[package]]
+name = "mpmath"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/47/dd32fa426cc72114383ac549964eecb20ecfd886d1e5ccf5340b55b02f57/mpmath-1.3.0.tar.gz", hash = "sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f", size = 508106, upload-time = "2023-03-07T16:47:11.061Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl", hash = "sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c", size = 536198, upload-time = "2023-03-07T16:47:09.197Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -362,6 +371,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pyadi-iio"
+version = "0.0.20"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pylibiio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c3/a0/bedb2abc8c4b5fd862bf6aaa485939ac640bb3bad13c07493cb1b5b50a57/pyadi_iio-0.0.20.tar.gz", hash = "sha256:0ebf0706d3e1a89886698509e71f42178bc58a5f03a47f7f9088f8d86900e7a7", size = 125469, upload-time = "2025-11-19T15:22:43.805Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/71/b769d758ffba8a8a35324138c42ac6ac5ede30121d7022ada9ba7f8f3548/pyadi_iio-0.0.20-py3-none-any.whl", hash = "sha256:9ff2235bf0bac8310a00028348343a8bd6ab59647f7525270ba329b1a51101d0", size = 204209, upload-time = "2025-11-19T15:22:42.73Z" },
+]
+
+[[package]]
 name = "pybind11"
 version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -377,6 +399,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631, upload-time = "2025-06-21T13:39:12.283Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload-time = "2025-06-21T13:39:07.939Z" },
+]
+
+[[package]]
+name = "pylibiio"
+version = "0.25"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/27/ac30c489e86bd297111b09242b19aa05e470dfef8725a233346e9d67c642/pylibiio-0.25.tar.gz", hash = "sha256:f2615ab20093ec8ca87417f1e38dfdca1baa21a719328f4b27d28c99b1d23eb5", size = 14143, upload-time = "2023-08-10T14:03:16.994Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/68/a1/34bea2ef5bc4561e3c16506ff09ef157625771e7cb567e88711075c0b9a4/pylibiio-0.25-py3-none-any.whl", hash = "sha256:e49a0b317c9d4df100f4a2540e5aa6201222c3bd5495b296237e6598466afad1", size = 11490, upload-time = "2023-08-10T14:03:15.927Z" },
 ]
 
 [[package]]
@@ -423,8 +454,10 @@ source = { editable = "." }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
+    { name = "pyadi-iio" },
     { name = "pybind11" },
     { name = "scipy" },
+    { name = "sympy" },
 ]
 
 [package.dev-dependencies]
@@ -435,10 +468,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "matplotlib", specifier = ">=3.0" },
     { name = "numpy", specifier = ">=2.4.2" },
+    { name = "pyadi-iio", specifier = ">=0.0.17" },
     { name = "pybind11", specifier = ">=3.0.2" },
-    { name = "scipy", specifier = ">=1.17.1" },
+    { name = "scipy", specifier = ">=1.9" },
+    { name = "sympy", specifier = ">=1.14.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -514,4 +549,16 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
+]
+
+[[package]]
+name = "sympy"
+version = "1.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mpmath" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
 ]
