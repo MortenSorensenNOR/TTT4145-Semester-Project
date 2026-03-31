@@ -25,7 +25,7 @@ class PipelineConfig:
     PRE_HEADER_GUARD_BITS: int = 0
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.03) #Need to tune more
+    COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
 
     pulse_shaping: bool = True
     pilots: bool = False
