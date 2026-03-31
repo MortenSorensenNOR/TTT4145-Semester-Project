@@ -42,9 +42,9 @@ def random_seed_rng(draw):
 def test_simple(pipeline_config, packet_length, buffer_length, seed_rng):
     run_pipeline(pipeline_config, 2**packet_length, 2**buffer_length, seed_rng)
 
-def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotting = False):
+def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotting = False, ideal=False):
 
-    snr = 20
+    snr = 17
     seed = 42
     actual_cfo = 4321
     actual_delay = 0#2034 # Delay is added later
@@ -90,20 +90,21 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
         current_detection = len(np.concat(tx_signal_list))+zeros_before_len+sync_len-tx.config.SPS+len(tx.guard_syms)*tx.config.SPS
         tx_signal_list.append(np.concat([np.zeros(zeros_before_len, dtype=complex), tx_signal_packet, np.zeros(zeros_after_len, dtype=complex)]))
         
-        detections_list.append(current_detection)
+        detections_list.append(current_detection+tx.config.SPS)
 
-    tx_signal = 1*np.concat(tx_signal_list)
+    tx_signal = np.concat(tx_signal_list)
 
     # Trim or pad to exactly buffer_length
     if len(tx_signal) >= buffer_length:
         tx_signal = tx_signal[:buffer_length]
     else:
         tx_signal = np.concat([tx_signal, np.zeros(buffer_length - len(tx_signal), dtype=complex)])
-        # apply channel
-    rx_signal = channel.apply(tx_signal)
     
     # ----- Toggle for ideal signal ------
-    rx_signal = tx_signal#*np.exp(-1j*np.pi/4)
+    if ideal:
+        rx_signal = tx_signal#*np.exp(-1j*np.pi/4)
+    else:
+        rx_signal = channel.apply(tx_signal)
 
     print("pipeline_config:", pipeline_config, seed, packet_length)
     print("\nnum_of_packets:",num_of_packets, "\nbuffer_length:",buffer_length, "\nsignal length = buffer length?",len(rx_signal)==buffer_length, "\ncorrect detection indexes=", detections_list)
@@ -133,7 +134,7 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
     
     for rx_packet in rx_packets:
         assert packet.length == rx_packet.length
-        ber = np.mean(packet.payload[:len(rx_packet.payload)] != rx_packet.payload)
+        ber = np.mean(packet.payload != rx_packet.payload)
         for i in range(len(rx_packet.payload)):
             #print(i, packet.payload[i], rx_packet.payload[i])
             pass
@@ -141,7 +142,11 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
         print(packet.payload.shape, rx_packet.payload.shape)
         print(ber)
         assert packet.payload.shape == rx_packet.payload.shape
-        assert ber <= 1e-5
+
+        if ideal:
+            assert ber == 0
+        else:
+            assert ber <= 0
 
     last_packet_end = (detections_list[-1]+(72+(packet_length*8//(pipeline_config.MOD_SCHEME.value+1)))*tx.config.SPS)
     
@@ -151,5 +156,5 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
 
 
 if __name__ == "__main__":
-    pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)
-    run_pipeline(pipeline_config, 64, 2**16, 42, plotting=True)
+    pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.BPSK)
+    run_pipeline(pipeline_config, 64, 32768, 42, plotting=True, ideal=False)

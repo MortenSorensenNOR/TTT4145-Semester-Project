@@ -10,17 +10,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from modules.costas_loop.costas import CostasConfig, apply_costas_loop, _ext
-from modules.modulators import BPSK, QPSK, PSK8
+from modules.modulators import BPSK, QPSK, PSK8, Modulator
 from modules.frame_constructor import ModulationSchemes
 
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
 
-NUM_SYMBOLS          = 1000
+NUM_SYMBOLS          = 10000
 INITIAL_PHASE_OFFSET = np.pi / 8
 PHASE_DRIFT          = np.pi / 5   # total drift over all symbols
-BN                   = 0.01        # loop noise bandwidth
+BN                   = 0.09        # loop noise bandwidth
 
 impl = "C++ (pybind11)" if _ext else "Python (fallback)"
 print(f"Implementation : {impl}\n")
@@ -29,9 +29,9 @@ print(f"Implementation : {impl}\n")
 # Helper
 # ---------------------------------------------------------------------------
 
-def run(modulator, label, modulation_scheme):
+def run(modulator: Modulator, label, modulation_scheme):
     rng   = np.random.default_rng(42)
-    bits  = rng.integers(0, 2, size=NUM_SYMBOLS * modulator.bits_per_symbol)
+    bits  = rng.integers(0, 2, size=NUM_SYMBOLS * modulator.bits_per_symbol).reshape(-1, modulation_scheme.value+1)
     syms  = modulator.bits2symbols(bits)
     drift = np.linspace(0, PHASE_DRIFT, NUM_SYMBOLS)
     noisy = syms * np.exp(1j * (INITIAL_PHASE_OFFSET + drift))
@@ -44,6 +44,11 @@ def run(modulator, label, modulation_scheme):
 
     print(f"{label:8s}  {ms:.4f} ms   residual phase error: "
           f"{np.degrees(np.mean(np.abs(phase_est[-100:] - drift[-100:] - INITIAL_PHASE_OFFSET))):.3f} deg")
+
+    corrected_bits = modulator.symbols2bits(corrected)
+
+    ber = np.mean(corrected_bits != bits)
+    print(modulator, ber)
 
     return corrected, phase_est, drift
 
