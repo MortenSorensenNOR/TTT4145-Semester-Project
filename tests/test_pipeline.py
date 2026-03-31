@@ -164,19 +164,19 @@ def _trial(mod, snr_db, cfo_hz):
     rx_packets = RXPipeline(config).receive(channel.apply(signal))
 
     match = next((p for p in rx_packets if p.seq_num == 0), None)
-    if match is None:
+    if match is None or match.payload.shape != packet.payload.shape:
         return None, False
     ber = float(np.mean(match.payload != packet.payload))
     return ber, True
 
 def ber_report():
     CFO_CONDITIONS = [("no CFO", 0), ("CFO 2.5kHz", 2500), ("CFO 5kHz", 5000)]
+    # Smallest BER detectable given trial count and packet size
+    BER_FLOOR = 0.5 / (N_TRIALS * REPORT_LENGTH * 8)
 
+    # Run all trials once and store per CFO condition
+    all_results = {}
     for cfo_label, cfo_hz in CFO_CONDITIONS:
-        print(f"\n=== {cfo_label} ===")
-        print(f"{'SNR':>6} | {'BPSK BER':>10} {'BPSK PER':>10} | {'QPSK BER':>10} {'QPSK PER':>10}")
-        print("-" * 62)
-
         results = {}
         for mod in MOD_SCHEMES:
             snr_bers, snr_pers = [], []
@@ -188,41 +188,55 @@ def ber_report():
                 snr_bers.append(mean_ber)
                 snr_pers.append(per)
             results[mod] = (snr_bers, snr_pers)
+        all_results[cfo_label] = (cfo_hz, results)
 
+    # Print table
+    for cfo_label, (_, results) in all_results.items():
+        print(f"\n=== {cfo_label} ===")
+        print(f"{'SNR':>6} | {'BPSK BER':>10} {'BPSK PER':>10} | {'QPSK BER':>10} {'QPSK PER':>10}")
+        print("-" * 62)
         for i, snr in enumerate(SNR_SWEEP):
             row = f"{snr:>6}"
             for mod in MOD_SCHEMES:
                 bers, pers = results[mod]
-                ber_str = f"{bers[i]:.4f}" if not np.isnan(bers[i]) else "   N/A"
+                ber_str = f"{bers[i]:.2e}" if not np.isnan(bers[i]) else "   N/A"
                 row += f" | {ber_str:>10} {pers[i]:>10.4f}"
             print(row)
 
+    # Plot
     fig, axes = plt.subplots(len(CFO_CONDITIONS), 2, figsize=(12, 4 * len(CFO_CONDITIONS)), sharex=True)
-    for row_idx, (cfo_label, cfo_hz) in enumerate(CFO_CONDITIONS):
-        results = {}
-        for mod in MOD_SCHEMES:
-            snr_bers, snr_pers = [], []
-            for snr_db in SNR_SWEEP:
-                trials = [_trial(mod, snr_db, cfo_hz) for _ in range(N_TRIALS)]
-                decoded_bers = [b for b, ok in trials if ok]
-                per = 1 - len(decoded_bers) / N_TRIALS
-                mean_ber = np.mean(decoded_bers) if decoded_bers else float("nan")
-                snr_bers.append(mean_ber)
-                snr_pers.append(per)
-            results[mod] = (snr_bers, snr_pers)
-
+    for row_idx, (cfo_label, (_, results)) in enumerate(all_results.items()):
         ax_ber, ax_per = axes[row_idx]
+
         for mod in MOD_SCHEMES:
             bers, pers = results[mod]
-            valid = [(s, b) for s, b in zip(SNR_SWEEP, bers) if not np.isnan(b)]
-            if valid:
-                xs, ys = zip(*valid)
-                ax_ber.semilogy(xs, ys, marker='o', label=mod.name)
+            # Split into points where BER was measured vs where no packet decoded
+            xs_measured, ys_measured = [], []
+            xs_zero, ys_zero = [], []
+            for snr, ber in zip(SNR_SWEEP, bers):
+                if np.isnan(ber):
+                    continue
+                if ber == 0.0:
+                    xs_zero.append(snr)
+                    ys_zero.append(BER_FLOOR)
+                else:
+                    xs_measured.append(snr)
+                    ys_measured.append(ber)
+
+            color = None
+            if xs_measured:
+                line, = ax_ber.semilogy(xs_measured, ys_measured, marker='o', label=mod.name)
+                color = line.get_color()
+            if xs_zero:
+                ax_ber.semilogy(xs_zero, ys_zero, marker='v', linestyle='none',
+                                color=color, label=f"{mod.name} (0 errors)" if not xs_measured else None)
+
             ax_per.plot(SNR_SWEEP, pers, marker='o', label=mod.name)
 
+        ax_ber.axhline(BER_FLOOR, color='grey', linestyle=':', linewidth=0.8, label=f"floor (1/{N_TRIALS*REPORT_LENGTH*8} bits)")
         ax_ber.set_title(f"BER — {cfo_label}")
         ax_ber.set_ylabel("BER")
-        ax_ber.legend()
+        ax_ber.legend(fontsize=8)
         ax_ber.grid(True, which="both", ls="--", alpha=0.5)
 
         ax_per.set_title(f"PER — {cfo_label}")

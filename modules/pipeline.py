@@ -22,7 +22,7 @@ class PipelineConfig:
     RRC_ALPHA: float = 0.35
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
     CODING_RATE: CodeRates = CodeRates.NONE
-    PRE_HEADER_GUARD_BITS: int = 0
+    PRE_HEADER_GUARD_BITS: int = 8
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
@@ -225,19 +225,9 @@ class RXPipeline:
             header_syms_corr, phase_est = header_syms[:header_end], [current_phase_estimate]
         #print(header_syms_corr[:9])
         # demodulate header
-        try:
-            header_bits = self.bpsk.symbols2bits(header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
-            print("header_bits:", header_bits.flatten())
-            header = self.frame_constructor.decode_header(header_bits)
-        except Exception as e:
-            # Hacky solution for when costas loop locks on wrong phase. Only happens at lower SNR
-            print(e)
-            #raise ValueError(e)
-            print("trying inverted header")
-            header_bits = self.bpsk.symbols2bits(-header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
-            print("header_bits_inverted:", header_bits.flatten())
-            header = self.frame_constructor.decode_header(header_bits)
-            current_phase_estimate -= np.pi
+        header_bits = self.bpsk.symbols2bits(header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
+        print("header_bits:", header_bits.flatten())
+        header = self.frame_constructor.decode_header(header_bits)
 
         return header, header_end, (phase_est[-1]+current_phase_estimate)
 
