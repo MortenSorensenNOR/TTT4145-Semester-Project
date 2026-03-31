@@ -156,5 +156,5 @@ def run_pipeline(pipeline_config, packet_length, buffer_length, seed_rng, plotti
 
 
 if __name__ == "__main__":
-    pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.PSK8)
-    run_pipeline(pipeline_config, 64, 32768, 42, plotting=True, ideal=False)
+    pipeline_config = PipelineConfig(MOD_SCHEME=ModulationSchemes.QPSK)
+    run_pipeline(pipeline_config, 1024, 2**18, 42, plotting=True, ideal=False)

@@ -202,7 +202,7 @@ class RXPipeline:
             raise IndexError(msg)
 
         # applying the phase estimate from preamble before gardner
-        print("current_pahse_estimate:",current_phase_estimate)
+        #print("current_pahse_estimate:",current_phase_estimate)
 
         if self.config.gardner_ted:
             guard = self.config.SPS//2
@@ -212,19 +212,19 @@ class RXPipeline:
         
         residual_phase_estimate = 0.0
         
-        print(header_syms[:9])
+        #print(header_syms[:9])
         if self.config.PRE_HEADER_GUARD_BITS > 0 and np.mean(np.real(header_syms[:self.config.PRE_HEADER_GUARD_BITS])) > 0:
             #header_syms = -header_syms
             residual_phase_estimate = -np.pi
-            print("inverted header syms")
-            print(header_syms[:9])
+            #print("inverted header syms")
+            #print(header_syms[:9])
 
         # costas correction
         if self.config.costas_loop:
             header_syms_corr, phase_est = apply_costas_loop(header_syms[:header_end], self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=residual_phase_estimate, current_frequency_offset=cfo)
         else:
             header_syms_corr, phase_est = header_syms[:header_end], [current_phase_estimate]
-        print(header_syms_corr[:9])
+        #print(header_syms_corr[:9])
         # demodulate header
         try:
             header_bits = self.bpsk.symbols2bits(header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
@@ -255,16 +255,16 @@ class RXPipeline:
         else:
             rx_syms = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS]*np.exp(-1j*current_phase_estimate), self.config.SPS)
         
-        print("rx_syms_real:", len(rx_syms), "rx_syms_ideal:", payload_end-payload_start)
-        print("rx_syms:", rx_syms[:8])
-        print("current_phase_estimate:", current_phase_estimate)
+        #print("rx_syms_real:", len(rx_syms), "rx_syms_ideal:", payload_end-payload_start)
+        #print("rx_syms:", rx_syms[:8])
+        #print("current_phase_estimate:", current_phase_estimate)
 
         if self.config.costas_loop:
             rx_syms, _ = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=0.0, current_frequency_offset=cfo)
         else:
             rx_syms = rx_syms[:payload_end-payload_start]
 
-        print("rx_syms costas:", rx_syms[:8])
+        #print("rx_syms costas:", rx_syms[:8])
 
         print("modulation:", header.mod_scheme)
         # demodulate
