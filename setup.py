@@ -1,4 +1,5 @@
 # setup.py  (project root) building the pybind extensions
+import os
 import platform
 import subprocess
 from pybind11.setup_helpers import Pybind11Extension, build_ext
@@ -21,8 +22,9 @@ def _cpu_info() -> str:
 
 
 def _compile_flags() -> list[str]:
-    machine = platform.machine().lower()
-    cpu = _cpu_info()
+    cross = os.environ.get("CROSS_COMPILE", "").lower()
+    machine = platform.machine().lower() if not cross else cross.split("-")[0]
+    cpu = os.environ.get("TARGET_CPU", _cpu_info()).lower()
     base = ["-O3", "-ffast-math", "-funroll-loops", "-fomit-frame-pointer"]
 
     if machine.startswith("arm"):
