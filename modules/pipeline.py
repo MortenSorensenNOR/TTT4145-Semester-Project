@@ -93,7 +93,7 @@ class TXPipeline:
 
         payload_syms = self.payload_modulator.bits2symbols(payload_bits)
         # construct signal
-        tx_syms = np.concat([self.guard_syms,self.sync_syms, known_sequence_syms, header_syms, payload_syms,self.guard_syms])
+        tx_syms = np.concatenate([self.guard_syms,self.sync_syms, known_sequence_syms, header_syms, payload_syms,self.guard_syms])
 
         # upsample and filter
         tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)

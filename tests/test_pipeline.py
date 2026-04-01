@@ -28,7 +28,7 @@ def make_packets_and_signal(specs, seed=None):
         packet = Packet(src_mac=0, dst_mac=1, type=0, seq_num=seq_num, length=length, payload=bits)
         tx_packets.append((packet, config))
         signal_parts.append(tx.transmit(packet))
-    return tx_packets, np.concat(signal_parts)
+    return tx_packets, np.concatenate(signal_parts)
 
 def assert_packets(tx_packets, rx_packets):
     """Strict: no false detections, every TX packet received with correct content."""
