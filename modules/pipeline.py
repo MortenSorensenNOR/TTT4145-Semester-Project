@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 import numpy as np
-from scipy.signal import residue
 
 from modules import gardner_ted
 from modules.pulse_shaping import *
@@ -9,7 +8,8 @@ from modules.frame_constructor import *
 from modules.golay import *
 from modules.frame_sync import *
 from modules.costas_loop.costas import *
-from modules.ldpc.ldpc import *
+# from modules.ldpc.ldpc import *
+from modules.ldpc.channel_coding import *
 from modules.gardner_ted.gardner import *
 
 from utils.plotting import *
