@@ -5,7 +5,6 @@ from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy import signal
 
 
 def pluto_max_cfo(carrier_hz: float = 433e6, num_devices: int = 2) -> float:
@@ -198,13 +197,7 @@ def apply_fractional_delay(
     # Apply fractional delay using Lagrange interpolation if needed
     if frac_delay > FRACTIONAL_DELAY_THRESHOLD:
         h = _lagrange_coefficients(frac_delay)
-        n_taps = len(h)
-
-        # Apply fractional delay filter
-        # Pad to handle filter edge effects
-        y_padded = np.concatenate([np.zeros(n_taps - 1, dtype=x.dtype), y])
-        y_filtered = signal.lfilter(h, 1.0, y_padded)
-        y = cast("NDArray[np.complex128]", y_filtered[n_taps - 1 : n_taps - 1 + len(x)])
+        y = cast("NDArray[np.complex128]", np.convolve(y, h)[: len(x)])
 
     new_buffer = _build_delay_buffer(x, int_delay, buffer)
 

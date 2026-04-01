@@ -12,7 +12,7 @@ sdr.sample_rate = int(sample_rate)
 # Config Tx
 sdr.tx_rf_bandwidth = int(sample_rate) # filter cutoff, just set it to the same as sample rate
 sdr.tx_lo = int(center_freq)
-sdr.tx_hardwaregain_chan0 = -50 # Increase to increase tx power, valid range is -90 to 0 dB
+sdr.tx_hardwaregain_chan0 = -10 # Increase to increase tx power, valid range is -90 to 0 dB
 
 # Config Rx
 sdr.rx_lo = int(center_freq)
