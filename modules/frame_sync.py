@@ -16,6 +16,14 @@ References:
     https://pysdr.org/content/sync.html
 [6] MATLAB - HDL OFDM Receiver (full coarse→fine pipeline):
     https://www.mathworks.com/help/wireless-hdl/ug/hdlofdmreceiver.html
+[7] kit-cel/gr-lte — differential correlation for PSS detection:
+    https://github.com/kit-cel/gr-lte (lib/mimo_pss_coarse_sync_impl.cc)
+[8] Nasraoui et al., "Efficient Two-Stage Differential Sliding Correlation
+    for OFDM Synchronization", IEEE WCNC 2012. DOI: 10.1109/wcnc.2012.6214130
+[9] Schmidl & Cox, "Robust Frequency and Timing Synchronization for OFDM",
+    IEEE Trans. Commun., vol. 45, no. 12, Dec. 1997 (integer CFO via B(g)).
+[10] srsRAN_4G — two-stage CFO (fractional + integer) implementation:
+    https://github.com/srsran/srsRAN_4G (lib/src/phy/sync/sync.c)
 
 """
 
@@ -213,7 +221,7 @@ def fine_timing(
 
     peak_idxs = np.argmax(z, axis=1)
     peak_complex = z_complex[np.arange(len(peak_idxs)), peak_idxs]
-    zc_phase_at_peak = 0# np.angle(s[peak_idxs])
+    zc_phase_at_peak = 0  # np.angle(s[peak_idxs])
 
     return FineResult(
         sample_idxs=starts + peak_idxs,
