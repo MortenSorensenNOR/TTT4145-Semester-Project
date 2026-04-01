@@ -268,9 +268,9 @@ def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
 if __name__ == "__main__":
     #ber_report()
     replay_scenario(
-        snr_db=30,
-        specs=[(0, 6, ModulationSchemes.BPSK)],
-        cfo_hz=218.0,
-        phase=0.0,
-        seed=3,
+        snr_db=15,
+        specs=[(0, 6, ModulationSchemes.BPSK)],  # or any other generated value
+        cfo_hz=0.0,
+        phase=2.0,
+        seed=0,  # or any other generated value
     )
