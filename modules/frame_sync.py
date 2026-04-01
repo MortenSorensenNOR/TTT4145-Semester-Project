@@ -14,16 +14,6 @@ References:
     Sec. 3.2.2-3.2.3 (matched filter / cross-correlation), Sec. 10.2.2 (peak timing).
 [5] PySDR - Synchronization chapter ("Frame Synchronization"):
     https://pysdr.org/content/sync.html
-[6] MATLAB - HDL OFDM Receiver (full coarse→fine pipeline):
-    https://www.mathworks.com/help/wireless-hdl/ug/hdlofdmreceiver.html
-[7] kit-cel/gr-lte — differential correlation for PSS detection:
-    https://github.com/kit-cel/gr-lte (lib/mimo_pss_coarse_sync_impl.cc)
-[8] Nasraoui et al., "Efficient Two-Stage Differential Sliding Correlation
-    for OFDM Synchronization", IEEE WCNC 2012. DOI: 10.1109/wcnc.2012.6214130
-[9] Schmidl & Cox, "Robust Frequency and Timing Synchronization for OFDM",
-    IEEE Trans. Commun., vol. 45, no. 12, Dec. 1997 (integer CFO via B(g)).
-[10] srsRAN_4G — two-stage CFO (fractional + integer) implementation:
-    https://github.com/srsran/srsRAN_4G (lib/src/phy/sync/sync.c)
 
 """
 
@@ -50,10 +40,8 @@ class SynchronizerConfig:
     long_preamble_nsym: int = 139
     long_margin_nsym: int = 5
 
-    plateau_edge_fraction: float = 0.5
     energy_floor: float = np.finfo(np.float64).tiny
-
-    detection_threshold: float = 0.5 #Need to tune. Works okay with 0.5
+    detection_threshold: float = 0.5
 
 
 @dataclass
@@ -180,7 +168,7 @@ def coarse_sync(
 
 def fine_timing(
     samples: np.ndarray,
-    s: np.ndarray,
+    long_ref: np.ndarray,
     d_hats: np.ndarray,
     cfo_hats: np.ndarray,
     fs: int,
@@ -197,7 +185,7 @@ def fine_timing(
 
     samples_per_rep = cfg.short_preamble_nsym * samples_per_symbol
     sample_margin = cfg.long_margin_nsym * samples_per_symbol
-    window_len = 2 * sample_margin + len(s)
+    window_len = 2 * sample_margin + len(long_ref)
 
     starts = np.clip(
         d_hats + cfg.short_preamble_nreps * samples_per_rep - sample_margin,
@@ -210,22 +198,30 @@ def fine_timing(
     cfo_phase = -2j * np.pi * (cfo_hats[:, None] / fs) * indices
     windows = samples[indices] * np.exp(cfo_phase)
 
-    # batch cross-correlation via FFT
-    valid_len = window_len - len(s) + 1
-    pad_len = window_len + len(s) - 1
-    s_f = np.conj(np.fft.fft(s, n=pad_len))
+    # Batch cross-correlation via FFT
+    valid_len = window_len - len(long_ref) + 1
+    pad_len = window_len + len(long_ref) - 1
+    ref_f = np.conj(np.fft.fft(long_ref, n=pad_len))
     w_f = np.fft.fft(windows, n=pad_len, axis=1)
 
-    z_complex = np.fft.ifft(w_f * s_f, axis=1)[:, :valid_len]
-    z = np.abs(z_complex)
+    z_complex = np.fft.ifft(w_f * ref_f, axis=1)[:, :valid_len]
+    z_mag = np.abs(z_complex)
 
-    peak_idxs = np.argmax(z, axis=1)
+    peak_idxs = np.argmax(z_mag, axis=1)
     peak_complex = z_complex[np.arange(len(peak_idxs)), peak_idxs]
-    zc_phase_at_peak = 0  # np.angle(s[peak_idxs])
+    z_mean = np.mean(z_mag, axis=1)
+
+    sample_idxs = starts + peak_idxs
+    channel_phase = np.angle(peak_complex)
+
+    # Project the phase forward to the payload start so a constant correction
+    # removes the CFO-accumulated phase there (Costas loop tracks the rest).
+    payload_positions = sample_idxs + len(long_ref)
+    phase_at_payload = channel_phase + 2 * np.pi * (cfo_hats / fs) * payload_positions
 
     return FineResult(
-        sample_idxs=starts + peak_idxs,
-        peak_ratios=np.max(z, axis=1) / np.where(np.mean(z, axis=1) == 0, 1, np.mean(z, axis=1)),
-        phase_estimates=np.angle(peak_complex)-zc_phase_at_peak,
+        sample_idxs=sample_idxs,
+        peak_ratios=np.max(z_mag, axis=1) / np.where(z_mean == 0, 1, z_mean),
+        phase_estimates=phase_at_payload,
     )
 
