@@ -73,13 +73,13 @@ long_ref = build_long_ref(sync_cfg, cfg.SPS, rrc_taps)
 tx_signal = upsample(tx_syms, cfg.SPS, rrc_taps)
 rx_buffer = tx_signal.copy()
 
-# Pre-compute coarse result so fine_timing has a valid input
-coarse = coarse_sync(rx_buffer, cfg.SAMPLE_RATE, cfg.SPS, sync_cfg)
-fine   = fine_timing(rx_buffer, long_ref, coarse.d_hats, coarse.cfo_hats,
-                     cfg.SAMPLE_RATE, cfg.SPS, sync_cfg)
-
-# Pre-filtered buffer (input to Costas / decimate stages)
+# Match-filter first; both coarse and fine sync run post-RRC
 filtered_buffer = match_filter(rx_buffer, rrc_taps)
+
+# Pre-compute coarse result so fine_timing has a valid input
+coarse = coarse_sync(filtered_buffer, cfg.SAMPLE_RATE, cfg.SPS, sync_cfg)
+fine   = fine_timing(filtered_buffer, long_ref, coarse.d_hats, coarse.cfo_hats,
+                     cfg.SAMPLE_RATE, cfg.SPS, sync_cfg)
 
 # Symbol buffers for Costas loop
 header_end_sym = 2 * fc.header_config.header_total_size
@@ -127,16 +127,16 @@ results.append(bench(
     lambda: match_filter(rx_buffer, rrc_taps),
 ))
 
-# 3. Coarse sync — Schmidl-Cox (full buffer scan)
+# 3. Coarse sync — Schmidl-Cox (full buffer scan, post-RRC)
 results.append(bench(
     "RX: coarse_sync (Schmidl-Cox)",
-    lambda: coarse_sync(rx_buffer, cfg.SAMPLE_RATE, cfg.SPS, sync_cfg),
+    lambda: coarse_sync(filtered_buffer, cfg.SAMPLE_RATE, cfg.SPS, sync_cfg),
 ))
 
-# 4. Fine timing — FFT cross-correlation
+# 4. Fine timing — FFT cross-correlation (post-RRC)
 results.append(bench(
     "RX: fine_timing (FFT xcorr)",
-    lambda: fine_timing(rx_buffer, long_ref, coarse.d_hats, coarse.cfo_hats,
+    lambda: fine_timing(filtered_buffer, long_ref, coarse.d_hats, coarse.cfo_hats,
                         cfg.SAMPLE_RATE, cfg.SPS, sync_cfg),
 ))
 
