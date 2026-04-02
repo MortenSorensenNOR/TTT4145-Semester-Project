@@ -1,11 +1,41 @@
 #!/bin/bash
-# sync.sh — Push local code to the Raspberry Pi
-# Usage: ./sync.sh [file_or_dir...]
-#   ./sync.sh                    # sync entire project
-#   ./sync.sh pluto/test/test_packet_loss.py   # sync one file
+# sync.sh — Push local code to remote targets
+# Usage:
+#   ./sync.sh                          # sync entire project (default remote)
+#   ./sync.sh file_or_dir              # sync specific file/dir (default remote)
+#   ./sync.sh pluto A                  # sync to Pluto A (192.168.2.1)
+#   ./sync.sh pluto B                  # sync to Pluto B (192.168.3.1)
 
-REMOTE="radiotester@100.114.51.4"
+DEFAULT_REMOTE="radiotester@100.114.51.4"
 REMOTE_DIR="~/TTT4145-Semester-Project"
+
+REMOTE="$DEFAULT_REMOTE"
+
+# =========================
+# Handle Pluto mode
+# =========================
+if [ "$1" == "pluto" ]; then
+    if [ "$2" == "A" ]; then
+        REMOTE="root@192.168.2.1"
+    elif [ "$2" == "B" ]; then
+        REMOTE="root@192.168.3.1"
+    else
+        echo "Usage: ./sync.sh pluto [A|B]"
+        exit 1
+    fi
+
+    echo "Syncing to Pluto $2 ($REMOTE)..."
+
+    rsync -avz --exclude '.venv' --exclude '__pycache__' --exclude '.git' --exclude 'vendor' --exclude "uv.lock" \
+        ./ "$REMOTE:$REMOTE_DIR/"
+
+    exit 0
+fi
+
+# =========================
+# Default behavior
+# =========================
+echo "Syncing to default remote ($REMOTE)..."
 
 if [ $# -eq 0 ]; then
     rsync -avz --exclude '.venv' --exclude '__pycache__' --exclude '.git' --exclude 'vendor' --exclude "uv.lock" \
