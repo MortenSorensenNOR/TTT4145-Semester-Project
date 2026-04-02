@@ -30,7 +30,10 @@ class BPSK(Modulator):
     def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
         if len(symbols) == 0:
             return np.array([], dtype=int)
-        return np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1).reshape(-1, 1)
+        # BPSK: decision boundary is the imaginary axis
+        bits = np.empty((len(symbols), 1), dtype=np.int8)
+        bits[:, 0] = np.real(symbols) > 0
+        return bits
 
 class QPSK(Modulator):
     def __init__(self) -> None:
@@ -48,8 +51,11 @@ class QPSK(Modulator):
     def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
         if len(symbols) == 0:
             return np.array([], dtype=int)
-        indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
-        return np.column_stack([indices // 2, indices % 2])
+        # QPSK mapping: [-1-j, -1+j, 1-j, 1+j]/√2 → bit0=sign(re), bit1=sign(im)
+        bits = np.empty((len(symbols), 2), dtype=np.int8)
+        bits[:, 0] = np.real(symbols) > 0
+        bits[:, 1] = np.imag(symbols) > 0
+        return bits
 
 class PSK8(Modulator):
     def __init__(self) -> None:
@@ -68,6 +74,15 @@ class PSK8(Modulator):
     def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
         if len(symbols) == 0:
             return np.array([], dtype=int)
-        indices = np.argmin(np.abs(symbols[:, None] - self.symbol_mapping[None, :]), axis=1)
-        return np.column_stack([indices // 4, (indices % 4) // 2, indices % 2])
+        # Quantize angle to nearest π/4 bin (0..7), then map to constellation index.
+        # Constellation phases: idx7=0, idx6=π/4, idx2=π/2, idx3=3π/4,
+        #                       idx1=π, idx0=-3π/4, idx4=-π/2, idx5=-π/4
+        _BIN_TO_IDX = np.array([7, 6, 2, 3, 1, 0, 4, 5], dtype=np.int8)
+        bins = np.round(np.angle(symbols) / (np.pi / 4)).astype(int) % 8
+        indices = _BIN_TO_IDX[bins]
+        bits = np.empty((len(symbols), 3), dtype=np.int8)
+        bits[:, 0] = indices >> 2
+        bits[:, 1] = (indices >> 1) & 1
+        bits[:, 2] = indices & 1
+        return bits
 
