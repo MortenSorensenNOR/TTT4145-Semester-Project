@@ -20,7 +20,7 @@ class PipelineConfig:
     CENTER_FREQ: int = 2_400_000_000
     SPS: int = 8
     SPAN: int = 8
-    RRC_ALPHA: float = 0.35
+    RRC_ALPHA: np.float32 = 0.35
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
     CODING_RATE: CodeRates = CodeRates.NONE
     PRE_HEADER_GUARD_BITS: int = 0
@@ -66,7 +66,7 @@ class TXPipeline:
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
 
-        self.guard_syms = np.zeros(500, dtype=complex)
+        self.guard_syms = np.zeros(500, dtype=np.complex64)
         # sync
         self.sync_syms = generate_preamble(self.config.SYNC_CONFIG)
 
@@ -104,9 +104,9 @@ class DetectionResult:
     """Single frame detection result."""
 
     payload_start: int
-    cfo_estimate: float
-    phase_estimate: float
-    confidence: float
+    cfo_estimate: np.float32
+    phase_estimate: np.float32
+    confidence: np.float32
 
 class RXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
@@ -168,14 +168,14 @@ class RXPipeline:
         return [
             DetectionResult(
                 payload_start=int(payload_starts[i]),
-                cfo_estimate=float(coarse.cfo_hats[i]),
-                phase_estimate=float(fine.phase_estimates[i]),
-                confidence=float(coarse.m_peaks[i]),
+                cfo_estimate=np.float32(coarse.cfo_hats[i]),
+                phase_estimate=np.float32(fine.phase_estimates[i]),
+                confidence=np.float32(coarse.m_peaks[i]),
             )
             for i in range(len(payload_starts))
         ]
 
-    def decode(self, buffer: np.ndarray, cfo: float, phase_estimate: float) -> Packet:
+    def decode(self, buffer: np.ndarray, cfo: np.float32, phase_estimate: np.float32) -> Packet:
         cfo_rad_per_symbol = 2 * np.pi * cfo / self.config.SAMPLE_RATE * self.config.SPS
         
         header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
@@ -193,7 +193,7 @@ class RXPipeline:
             valid=header.crc_passed,
         )
 
-    def header_decode(self, buffer: np.ndarray, cfo:float, current_phase_estimate: float) -> tuple[FrameHeader, int, float]:
+    def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
         header_end = 2 * self.frame_constructor.header_config.header_total_size + self.config.PRE_HEADER_GUARD_BITS
 
@@ -230,7 +230,7 @@ class RXPipeline:
 
         return header, header_end, phase_est[-1]
 
-    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:float, current_phase_estimate: float) -> np.ndarray:
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32) -> np.ndarray:
         payload_end = payload_start + (header.length*8)//(header.mod_scheme.value+1) # header.mod_scheme.value+1 is same as bits per symbol of modulator
         
         if payload_end*self.config.SPS > len(buffer):

@@ -20,11 +20,11 @@ class BPSK(Modulator):
     def __init__(self) -> None:
         self.bits_per_symbol = 1
         self.qam_order = 2
-        self.symbol_mapping = np.array([-1 + 0j, 1 + 0j])
+        self.symbol_mapping = np.array([-1 + 0j, 1 + 0j], dtype=np.complex64)
 
     def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
         if len(bitstream) == 0:
-            return np.array([], dtype=complex)
+            return np.array([], dtype=np.complex64)
         return self.symbol_mapping[bitstream.ravel()]
 
     def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
@@ -36,11 +36,11 @@ class QPSK(Modulator):
     def __init__(self) -> None:
         self.bits_per_symbol = 2
         self.qam_order = 4
-        self.symbol_mapping = np.array([-1 - 1j, -1 + 1j, 1 - 1j, 1 + 1j]) / np.sqrt(2)
+        self.symbol_mapping = np.array([-1 - 1j, -1 + 1j, 1 - 1j, 1 + 1j], dtype=np.complex64) / np.sqrt(2)
 
     def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
         if len(bitstream) == 0:
-            return np.array([], dtype=complex)
+            return np.array([], dtype=np.complex64)
         bitstream = bitstream.reshape(-1, 2)
         indices = bitstream[:, 0] * 2 + bitstream[:, 1]
         return self.symbol_mapping[indices]
@@ -56,11 +56,11 @@ class PSK8(Modulator):
         self.bits_per_symbol = 3
         self.qam_order = 8
         self.symbol_mapping = np.array([-1 - 1j, -np.sqrt(2) + 0j, 0 + np.sqrt(2)*1j, -1 + 1j,
-                                         0 - np.sqrt(2)*1j, 1 - 1j, 1 + 1j, np.sqrt(2)+ 0j]) / np.sqrt(2)
+                                         0 - np.sqrt(2)*1j, 1 - 1j, 1 + 1j, np.sqrt(2)+ 0j], dtype=np.complex64) / np.sqrt(2)
 
     def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
         if len(bitstream) == 0:
-            return np.array([], dtype=complex)
+            return np.array([], dtype=np.complex64)
         bitstream = bitstream.reshape(-1, 3)
         indices = bitstream[:, 0] * 4 + bitstream[:, 1] * 2 + bitstream[:, 2]
         return self.symbol_mapping[indices]

@@ -123,7 +123,7 @@ def _make_channel_model(ch: SyncFixture, cfo_hz: float, seed: int, **kwargs) -> 
 
 
 def _pad(tx: np.ndarray) -> np.ndarray:
-    return np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx])
+    return np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=np.complex64), tx])
 
 
 def _run_sync(rx, long_ref):
@@ -191,7 +191,7 @@ def test_sync_pipeline(cfo_hz: int, channel: SyncFixture) -> None:
     f1, f2 = _make_frame(rng, channel.rrc_taps), _make_frame(rng, channel.rrc_taps)
     amp = np.sqrt(np.mean(np.abs(f1) ** 2) / 2)
     guard = amp * (rng.standard_normal(GUARD_SAMPLES) + 1j * rng.standard_normal(GUARD_SAMPLES))
-    multi_tx = np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), f1, guard, f2, guard])
+    multi_tx = np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=np.complex64), f1, guard, f2, guard])
     buf = _make_channel_model(channel, cfo_hz, 7777).apply(multi_tx)
     cm = coarse_sync(buf, SAMPLE_RATE, SPS, SYNC_CFG)
     assert cm.m_peaks.size >= 2, f"expected >=2 frames, got {cm.m_peaks.size}"

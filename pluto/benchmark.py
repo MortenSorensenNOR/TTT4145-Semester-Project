@@ -61,7 +61,7 @@ header_bits, payload_bits = fc.encode(header, payload_input_bits)
 bpsk = BPSK()
 qpsk = QPSK()
 
-guard_syms   = np.zeros(500, dtype=complex)
+guard_syms   = np.zeros(500, dtype=np.complex64)
 preamble_syms = generate_preamble(sync_cfg)
 header_syms  = bpsk.bits2symbols(header_bits)
 payload_syms = qpsk.bits2symbols(payload_bits)

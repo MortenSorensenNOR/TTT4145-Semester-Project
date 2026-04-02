@@ -40,8 +40,8 @@ class SynchronizerConfig:
     long_preamble_nsym: int = 139
     long_margin_nsym: int = 5
 
-    energy_floor: float = np.finfo(np.float32).tiny
-    detection_threshold: float = 0.5
+    energy_floor: np.float32 = np.finfo(np.float32).tiny
+    detection_threshold: np.float32 = np.float32(0.5)
 
 
 @dataclass

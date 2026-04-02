@@ -5,13 +5,13 @@ import matplotlib.pyplot as plt
 
 from modules.gardner_ted.gardner import apply_gardner_ted
 
-def rrc_filter(sps: int, alpha: float, num_taps: int) -> np.ndarray:
+def rrc_filter(sps: int, alpha: np.float32, num_taps: int) -> np.ndarray:
     """Design a root-raised-cosine filter with unit energy."""
     t = (np.arange(num_taps) - (num_taps - 1) / 2) / sps
     zero_mask = t == 0
     if alpha > 0:
         special_val = 1 / (4 * alpha)
-        special_mask = np.abs(np.abs(t) - special_val) < 8 * np.finfo(float).eps
+        special_mask = np.abs(np.abs(t) - special_val) < 8 * np.finfo(np.float32).eps
         special_case = (
             alpha / np.sqrt(2)
             * ((1 + 2 / np.pi) * np.sin(np.pi / (4 * alpha)) + (1 - 2 / np.pi) * np.cos(np.pi / (4 * alpha)))
@@ -41,7 +41,7 @@ def rrc_filter(sps: int, alpha: float, num_taps: int) -> np.ndarray:
 def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
     """Zero-insert at sps rate and convolve with RRC taps."""
     if len(symbols) == 0:
-        return np.ndarray([], dtype=complex)
+        return np.ndarray([], dtype=np.complex64)
     upsampled = np.zeros(len(symbols) * sps, dtype=np.complex64)
     upsampled[::sps] = symbols.astype(np.complex64)
     return np.convolve(upsampled, rrc_taps, mode="full")
@@ -50,7 +50,7 @@ def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray
     """Match-filter with RRC taps, strip group delay, and decimate."""
 
     if len(signal) == 0:
-        return np.zeros(0, dtype=complex)
+        return np.zeros(0, dtype=np.complex64)
     filtered = np.convolve(signal, rrc_taps, mode="full")
     delay = len(rrc_taps) - 1
     n_symbols = (len(signal) - (len(rrc_taps) - 1)) // sps

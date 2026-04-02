@@ -73,7 +73,7 @@ def _make_rx(seed: int, cfo_hz: float, sf: dict) -> np.ndarray:
     preamble = generate_preamble(SYNC_CFG)
     payload = rng.choice(QPSK().symbol_mapping, N_PAYLOAD_SYMBOLS)
     tx = upsample(np.concatenate([preamble, payload]), SPS, sf["rrc_taps"])
-    rx = np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=complex), tx])
+    rx = np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=np.complex64), tx])
     # multipath -> CFO -> DC -> IQ -> AWGN
     delayed = np.empty_like(rx); delayed[0] = 0; delayed[1:] = rx[:-1]
     rx = sf["ch"][0] * rx + sf["ch"][1] * delayed

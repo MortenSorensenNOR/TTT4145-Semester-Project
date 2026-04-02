@@ -7,18 +7,18 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-def pluto_max_cfo(carrier_hz: float = 433e6, num_devices: int = 2) -> float:
+def pluto_max_cfo(carrier_hz: np.float32 = np.float32(433e6), num_devices: int = 2) -> np.float32:
     """Calculate maximum CFO for Pluto SDR (25 ppm oscillator)."""
     ppm = 25e-6  # 25 ppm oscillator tolerance
     return ppm * carrier_hz * num_devices
 
 
-def delay_ns_to_samples(delay_ns: float, sample_rate: float) -> float:
+def delay_ns_to_samples(delay_ns: np.float32, sample_rate: np.float32) -> np.float32:
     """Convert delay from nanoseconds to samples."""
     return delay_ns * 1e-9 * sample_rate
 
 
-def samples_to_delay_ns(delay_samples: float, sample_rate: float) -> float:
+def samples_to_delay_ns(delay_samples: np.float32, sample_rate: np.float32) -> np.float32:
     """Convert delay from samples to nanoseconds."""
     return delay_samples / sample_rate * 1e9
 
@@ -27,7 +27,7 @@ def samples_to_delay_ns(delay_samples: float, sample_rate: float) -> float:
 SPEED_OF_LIGHT = 299_792_458.0
 
 
-def distance_to_delay(distance_m: float) -> float:
+def distance_to_delay(distance_m: np.float32) -> np.float32:
     """Calculate propagation delay given a distance."""
     return distance_m / SPEED_OF_LIGHT
 
@@ -54,36 +54,36 @@ class ChannelConfig:
     """
 
     # Basic parameters
-    sample_rate: float = 1e6
-    snr_db: float = 20.0
-    reference_power: float = 1.0  # Reference signal power for SNR calculation
+    sample_rate: np.float32 = np.float32(1e6)
+    snr_db: np.float32 = np.float32(20.0)
+    reference_power: np.float32 = np.float32(1.0)  # Reference signal power for SNR calculation
 
     # Multipath configuration
     enable_multipath: bool = False
-    multipath_delays_samples: tuple[float, ...] = (0.0,)
-    multipath_gains_db: tuple[float, ...] = (0.0,)
+    multipath_delays_samples: tuple[np.float32, ...] = (np.float32(0.0),)
+    multipath_gains_db: tuple[np.float32, ...] = (np.float32(0.0),)
 
     # Fading configuration (only applies when enable_multipath is True)
-    doppler_hz: float = 0.0
+    doppler_hz: np.float32 = np.float32(0.0)
     fading_type: str = "rayleigh"  # "rayleigh" or "rician"
-    rician_k_db: float = 10.0  # Rician K-factor in dB
+    rician_k_db: np.float32 = np.float32(10.0)  # Rician K-factor in dB
 
     # CFO configuration (active when cfo_hz != 0)
-    cfo_hz: float = 0.0
+    cfo_hz: np.float32 = np.float32(0.0)
 
     # Phase offset configuration (active when initial_phase_rad or phase_drift_hz != 0)
-    initial_phase_rad: float = 0.0
-    phase_drift_hz: float = 0.0
+    initial_phase_rad: np.float32 = np.float32(0.0)
+    phase_drift_hz: np.float32 = np.float32(0.0)
 
     # Propagation delay configuration (active when delay_samples > 0)
-    delay_samples: float = 0.0
+    delay_samples: np.float32 = np.float32(0.0)
 
     # Phase noise configuration
     enable_phase_noise: bool = False
-    phase_noise_psd_dbchz: float = -100.0  # Phase noise PSD in dBc/Hz at 1 kHz offset
+    phase_noise_psd_dbchz: np.float32 = np.float32(-100.0)  # Phase noise PSD in dBc/Hz at 1 kHz offset
 
     # Sample clock offset configuration (active when sco_ppm != 0)
-    sco_ppm: float = 0.0
+    sco_ppm: np.float32 = np.float32(0.0)
 
     # Reproducibility
     seed: int | None = None
@@ -105,30 +105,30 @@ class StreamState:
     sample_index: int = 0
 
     # Fading state (for sum-of-sinusoids model)
-    fading_phases: NDArray[np.float64] | None = None
+    fading_phases: NDArray[np.float32] | None = None
 
     # Delay buffer for fractional delay filter
-    delay_buffer: NDArray[np.complex128] | None = None
+    delay_buffer: NDArray[np.complex64] | None = None
 
     # Multipath delay line buffer
-    multipath_buffer: NDArray[np.complex128] | None = None
+    multipath_buffer: NDArray[np.complex64] | None = None
 
     # Phase noise state
-    phase_noise_state: float = 0.0
+    phase_noise_state: np.float32 = np.float32(0.0)
 
     # SCO state (for resampling)
-    sco_phase: float = 0.0
-    sco_buffer: NDArray[np.complex128] | None = None
+    sco_phase: np.float32 = np.float32(0.0)
+    sco_buffer: NDArray[np.complex64] | None = None
 
     # Random number generator
     rng: np.random.Generator | None = None
 
 
 def _apply_integer_delay(
-    x: NDArray[np.complex128],
+    x: NDArray[np.complex64],
     int_delay: int,
-    buffer: NDArray[np.complex128] | None,
-) -> NDArray[np.complex128]:
+    buffer: NDArray[np.complex64] | None,
+) -> NDArray[np.complex64]:
     """Apply integer-sample delay and return a shifted signal with same length."""
     n_samples = len(x)
     y = np.zeros(n_samples, dtype=x.dtype)
@@ -145,13 +145,13 @@ def _apply_integer_delay(
     return y
 
 
-def _lagrange_coefficients(frac_delay: float, order: int = 4) -> NDArray[np.float64]:
+def _lagrange_coefficients(frac_delay: np.float32, order: int = 4) -> NDArray[np.float32]:
     """Calculate Lagrange interpolation coefficients for a fractional delay.
 
     Source: https://en.wikipedia.org/wiki/Lagrange_polynomial
     """
     n_taps = order + 1
-    coefficients = np.zeros(n_taps)
+    coefficients = np.zeros(n_taps, dtype=np.float32)
     for k in range(n_taps):
         coefficients[k] = 1.0
         for m in range(n_taps):
@@ -161,10 +161,10 @@ def _lagrange_coefficients(frac_delay: float, order: int = 4) -> NDArray[np.floa
 
 
 def _build_delay_buffer(
-    x: NDArray[np.complex128],
+    x: NDArray[np.complex64],
     int_delay: int,
-    buffer: NDArray[np.complex128] | None,
-) -> NDArray[np.complex128]:
+    buffer: NDArray[np.complex64] | None,
+) -> NDArray[np.complex64]:
     """Create the updated delay buffer for block-based processing."""
     n_samples = len(x)
     buffer_size = max(int_delay + 5, 5)
@@ -180,14 +180,14 @@ def _build_delay_buffer(
 
 
 def apply_fractional_delay(
-    x: NDArray[np.complex128],
-    delay_samples: float,
-    buffer: NDArray[np.complex128] | None = None,
-) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
+    x: NDArray[np.complex64],
+    delay_samples: np.float32,
+    buffer: NDArray[np.complex64] | None = None,
+) -> tuple[NDArray[np.complex64], NDArray[np.complex64]]:
     """Apply fractional sample delay using Lagrange interpolation."""
     if delay_samples == 0.0:
         new_buf = buffer if buffer is not None else np.zeros(4, dtype=x.dtype)
-        return x.copy(), cast("NDArray[np.complex128]", new_buf)
+        return x.copy(), cast("NDArray[np.complex64]", new_buf)
 
     int_delay = int(np.floor(delay_samples))
     frac_delay = delay_samples - int_delay
@@ -197,7 +197,7 @@ def apply_fractional_delay(
     # Apply fractional delay using Lagrange interpolation if needed
     if frac_delay > FRACTIONAL_DELAY_THRESHOLD:
         h = _lagrange_coefficients(frac_delay)
-        y = cast("NDArray[np.complex128]", np.convolve(y, h)[: len(x)])
+        y = cast("NDArray[np.complex64]", np.convolve(y, h)[: len(x)])
 
     new_buffer = _build_delay_buffer(x, int_delay, buffer)
 
@@ -205,12 +205,12 @@ def apply_fractional_delay(
 
 
 def apply_multipath(
-    x: NDArray[np.complex128],
-    delays_samples: tuple[float, ...],
-    gains_linear: NDArray[np.float64],
-    fading_gains: NDArray[np.complex128] | None = None,
-    buffer: NDArray[np.complex128] | None = None,
-) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
+    x: NDArray[np.complex64],
+    delays_samples: tuple[np.float32, ...],
+    gains_linear: NDArray[np.float32],
+    fading_gains: NDArray[np.complex64] | None = None,
+    buffer: NDArray[np.complex64] | None = None,
+) -> tuple[NDArray[np.complex64], NDArray[np.complex64]]:
     """Apply multipath channel using tapped delay line."""
     n_samples = len(x)
     max_delay = int(np.ceil(max(delays_samples))) + 1
@@ -258,9 +258,9 @@ def apply_multipath(
 def generate_fading_gains(
     config: ChannelConfig,
     n_samples: int,
-    phases: NDArray[np.float64] | None = None,
+    phases: NDArray[np.float32] | None = None,
     rng: np.random.Generator | None = None,
-) -> tuple[NDArray[np.complex128], NDArray[np.float64]]:
+) -> tuple[NDArray[np.complex64], NDArray[np.float32]]:
     """Generate time-varying fading gains using Clarke's sum-of-sinusoids model.
 
     Source: https://en.wikipedia.org/wiki/Rayleigh_fading#Clarke's_model
@@ -274,11 +274,11 @@ def generate_fading_gains(
 
     # Initialize phases if not provided
     if phases is None:
-        phases = rng.uniform(0, 2 * np.pi, (n_taps, n_sinusoids, 2))  # 2 for I/Q
+        phases = rng.uniform(0, 2 * np.pi, (n_taps, n_sinusoids, 2)).astype(np.float32)  # 2 for I/Q
 
     t = np.arange(n_samples) / config.sample_rate
 
-    gains = np.zeros((n_taps, n_samples), dtype=complex)
+    gains = np.zeros((n_taps, n_samples), dtype=np.complex64)
 
     for tap in range(n_taps):
         inphase = np.zeros(n_samples)
@@ -310,10 +310,10 @@ def generate_fading_gains(
 
 
 def apply_cfo_and_phase(
-    x: NDArray[np.complex128],
+    x: NDArray[np.complex64],
     config: ChannelConfig,
     sample_index: int,
-) -> NDArray[np.complex128]:
+) -> NDArray[np.complex64]:
     """Apply carrier frequency offset and phase offset."""
     n = len(x)
     t = np.arange(sample_index, sample_index + n) / config.sample_rate
@@ -324,12 +324,12 @@ def apply_cfo_and_phase(
 
 
 def apply_phase_noise(
-    x: NDArray[np.complex128],
-    psd_dbchz: float,
-    sample_rate: float,
-    state: float,
+    x: NDArray[np.complex64],
+    psd_dbchz: np.float32,
+    sample_rate: np.float32,
+    state: np.float32,
     rng: np.random.Generator,
-) -> tuple[NDArray[np.complex128], float]:
+) -> tuple[NDArray[np.complex64], np.float32]:
     """Apply phase noise using a filtered random walk model."""
     n = len(x)
 
@@ -355,11 +355,11 @@ def apply_phase_noise(
 
 
 def apply_sco(
-    x: NDArray[np.complex128],
-    sco_ppm: float,
-    phase: float,
-    buffer: NDArray[np.complex128] | None = None,
-) -> tuple[NDArray[np.complex128], float, NDArray[np.complex128]]:
+    x: NDArray[np.complex64],
+    sco_ppm: np.float32,
+    phase: np.float32,
+    buffer: NDArray[np.complex64] | None = None,
+) -> tuple[NDArray[np.complex64], np.float32, NDArray[np.complex64]]:
     """Apply sample clock offset via resampling using Catmull-Rom interpolation.
 
     Source: https://en.wikipedia.org/wiki/Centripetal_Catmull%E2%80%93Rom_spline
@@ -413,11 +413,11 @@ def apply_sco(
 
 
 def apply_awgn(
-    x: NDArray[np.complex128],
-    snr_db: float,
+    x: NDArray[np.complex64],
+    snr_db: np.float32,
     rng: np.random.Generator,
-    reference_power: float = 1.0,
-) -> NDArray[np.complex128]:
+    reference_power: np.float32 = np.float32(1.0),
+) -> NDArray[np.complex64]:
     """Add AWGN to achieve specified SNR."""
     # Calculate noise power for desired SNR using reference power
     snr_linear = 10 ** (snr_db / 10)
@@ -450,7 +450,7 @@ class ChannelModel:
         self._state: StreamState | None = None
 
         # Pre-compute linear gains from dB
-        self._multipath_gains_linear = 10 ** (np.array(config.multipath_gains_db) / 20)
+        self._multipath_gains_linear = 10 ** (np.array(config.multipath_gains_db, dtype=np.float32) / 20)
 
     def reset(self) -> None:
         """Reset channel state for new transmission."""
@@ -465,8 +465,8 @@ class ChannelModel:
             fading_phases=None,
             delay_buffer=None,
             multipath_buffer=None,
-            phase_noise_state=0.0,
-            sco_phase=0.0,
+            phase_noise_state=np.float32(0.0),
+            sco_phase=np.float32(0.0),
             sco_buffer=None,
             rng=rng,
         )
@@ -477,7 +477,7 @@ class ChannelModel:
             self._state = self._init_state()
         return self._state
 
-    def apply(self, x: NDArray[np.complex128]) -> NDArray[np.complex128]:
+    def apply(self, x: NDArray[np.complex64]) -> NDArray[np.complex64]:
         """Apply channel model to entire signal (batch mode).
 
         Unlike process_block, pads the input so the propagation delay does not
@@ -489,10 +489,10 @@ class ChannelModel:
             x = np.concatenate([x, np.zeros(pad, dtype=x.dtype)])
         return self.process_block(x)
 
-    def process_block(self, x: NDArray[np.complex128]) -> NDArray[np.complex128]:
+    def process_block(self, x: NDArray[np.complex64]) -> NDArray[np.complex64]:
         """Process a single block of samples (streaming mode)."""
         state = self._get_state()
-        y = x.astype(np.complex128)
+        y = x.astype(np.complex64)
         n_samples = len(x)
         cfg = self.config
 
@@ -518,7 +518,7 @@ class ChannelModel:
             y, state.multipath_buffer = apply_multipath(
                 y,
                 cfg.multipath_delays_samples,
-                self._multipath_gains_linear,
+                self._multipath_gains_linear.astype(np.float32),
                 fading_gains,
                 state.multipath_buffer,
             )
