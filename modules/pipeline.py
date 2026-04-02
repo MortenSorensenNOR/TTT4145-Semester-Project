@@ -125,12 +125,12 @@ class RXPipeline:
 
     def receive(self, buffer: np.ndarray) -> list[Packet]:
         """Detect and decode all frames in buffer."""
-        detections = self.detect(buffer)
+        filtered_buffer = match_filter(buffer, self.rrc_taps)
+        detections = self.detect(filtered_buffer)
         if not detections:
             return []
 
         packets = []
-        filtered_buffer = match_filter(buffer, self.rrc_taps)
 
         for det in detections:
             rx_syms = filtered_buffer[det.payload_start:]
@@ -143,12 +143,13 @@ class RXPipeline:
 
         return packets
 
-    def detect(self, buffer: np.ndarray) -> list[DetectionResult]:
+    def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:
+        """Detect frames in a match-filtered buffer. Both coarse and fine sync run post-RRC."""
         cfg = self.config.SYNC_CONFIG
         sps = self.config.SPS
 
         try:
-            coarse = coarse_sync(buffer, self.config.SAMPLE_RATE, sps, cfg)
+            coarse = coarse_sync(filtered_buffer, self.config.SAMPLE_RATE, sps, cfg)
         except Exception as e:
             print(e)
             return []
@@ -158,13 +159,13 @@ class RXPipeline:
             return []
 
         try:
-            fine = fine_timing(buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
+            fine = fine_timing(filtered_buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
                                self.config.SAMPLE_RATE, sps, cfg)
         except Exception as e:
             print(e)
             return []
 
-        payload_starts = fine.sample_idxs + len(self.long_ref) - (self.config.SPS*self.config.SPAN)# - self.config.SPS, #Should fix this in fine_timing
+        payload_starts = fine.sample_idxs + len(self.long_ref)
         return [
             DetectionResult(
                 payload_start=int(payload_starts[i]),

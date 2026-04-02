@@ -34,11 +34,11 @@ class SynchronizerConfig:
 
     zc_root: int = 7
 
-    short_preamble_nsym: int = 13
+    short_preamble_nsym: int = 37
     short_preamble_nreps: int = 8
 
     long_preamble_nsym: int = 139
-    long_margin_nsym: int = 5
+    long_margin_nsym: int = 15
 
     energy_floor: np.float32 = np.finfo(np.float32).tiny
     detection_threshold: np.float32 = np.float32(0.5)
@@ -89,11 +89,18 @@ def generate_preamble(config: SynchronizerConfig) -> np.ndarray:
 
 
 def build_long_ref(cfg: SynchronizerConfig, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
-    """Build the upsampled + filtered long preamble reference for matched filtering."""
+    """Build the long preamble reference for matched filtering on post-RRC signals.
+
+    Applies RRC twice (TX + RX matched filter = RC) so the reference matches
+    what the preamble looks like in the matched-filtered receive stream.
+    Output length is unchanged: long_preamble_nsym * sps samples.
+    """
     zc = generate_zadoff_chu(cfg.zc_root, cfg.long_preamble_nsym)
     up = np.zeros(len(zc) * sps, dtype=np.complex64)
     up[::sps] = zc
-    return np.convolve(up, rrc_taps, mode="same")
+    tx_filtered = np.convolve(up, rrc_taps, mode="same")
+    # Apply second RRC (RX matched filter) — mode="same" keeps the ZC peak aligned at sample 0
+    return np.convolve(tx_filtered.astype(np.complex64), rrc_taps, mode="same").astype(np.complex64)
 
 
 def coarse_sync(
