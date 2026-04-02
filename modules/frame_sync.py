@@ -37,7 +37,7 @@ class SynchronizerConfig:
     short_preamble_nsym: int = 37
     short_preamble_nreps: int = 8
 
-    long_preamble_nsym: int = 139
+    long_preamble_nsym: int = 113
     long_margin_nsym: int = 15
 
     energy_floor: np.float32 = np.finfo(np.float32).tiny
@@ -174,6 +174,20 @@ def coarse_sync(
     return CoarseResult(d_hats, cfo_hats, m_peaks)
 
 
+def build_fine_ref(long_ref: np.ndarray, cfg: SynchronizerConfig, sps: int) -> np.ndarray:
+    """Precompute the FFT of the long reference for use in fine_timing.
+
+    Call once at startup and pass the result to fine_timing to avoid
+    recomputing the FFT on every call. Pads to the next power of 2 so
+    numpy uses its fast radix-2 path.
+    """
+    sample_margin = cfg.long_margin_nsym * sps
+    window_len = 2 * sample_margin + len(long_ref)
+    min_pad = window_len + len(long_ref) - 1
+    pad_len = 1 << (min_pad - 1).bit_length()  # next power of 2
+    return np.conj(np.fft.fft(long_ref, n=pad_len)).astype(np.complex64)
+
+
 def fine_timing(
     samples: np.ndarray,
     long_ref: np.ndarray,
@@ -182,8 +196,13 @@ def fine_timing(
     fs: int,
     samples_per_symbol: int,
     cfg: SynchronizerConfig,
+    ref_f: np.ndarray | None = None,
 ) -> FineResult:
-    """Fine timing by cross-correlation with the long preamble [4] [5]."""
+    """Fine timing by cross-correlation with the long preamble [4] [5].
+
+    Pass a precomputed ref_f (from build_fine_ref) to avoid recomputing
+    the FFT of long_ref on every call.
+    """
     if not np.iscomplexobj(samples):
         msg = "samples must be complex (conj is a no-op on reals)"
         raise TypeError(msg)
@@ -208,8 +227,12 @@ def fine_timing(
 
     # Batch cross-correlation via FFT
     valid_len = window_len - len(long_ref) + 1
-    pad_len = window_len + len(long_ref) - 1
-    ref_f = np.conj(np.fft.fft(long_ref, n=pad_len))
+    if ref_f is not None:
+        pad_len = len(ref_f)  # matches whatever build_fine_ref used
+    else:
+        min_pad = window_len + len(long_ref) - 1
+        pad_len = 1 << (min_pad - 1).bit_length()  # next power of 2
+        ref_f = np.conj(np.fft.fft(long_ref, n=pad_len))
     w_f = np.fft.fft(windows, n=pad_len, axis=1)
 
     z_complex = np.fft.ifft(w_f * ref_f, axis=1)[:, :valid_len]

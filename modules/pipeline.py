@@ -122,6 +122,7 @@ class RXPipeline:
 
         # generate the known long preamble for matched filtering
         self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
+        self.ref_f = build_fine_ref(self.long_ref, self.config.SYNC_CONFIG, self.config.SPS)
 
     def receive(self, buffer: np.ndarray) -> list[Packet]:
         """Detect and decode all frames in buffer."""
@@ -160,7 +161,7 @@ class RXPipeline:
 
         try:
             fine = fine_timing(filtered_buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
-                               self.config.SAMPLE_RATE, sps, cfg)
+                               self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
         except Exception as e:
             print(e)
             return []

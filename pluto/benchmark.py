@@ -21,6 +21,7 @@ from modules.pipeline import PipelineConfig
 from modules.frame_sync import (
     SynchronizerConfig,
     build_long_ref,
+    build_fine_ref,
     coarse_sync,
     fine_timing,
     generate_preamble,
@@ -34,8 +35,8 @@ from modules.costas_loop.costas import CostasConfig, apply_costas_loop
 # Benchmark parameters
 # ---------------------------------------------------------------------------
 
-N_REPS = 10          # repetitions per stage (increase for more stable results)
-PAYLOAD_BYTES = 100  # realistic payload size
+N_REPS = 10           # repetitions per stage (increase for more stable results)
+PAYLOAD_BYTES = 1500  # max Ethernet MTU — realistic worst-case payload size
 
 # ---------------------------------------------------------------------------
 # Build shared fixtures once (not included in timing)
@@ -68,6 +69,7 @@ payload_syms = qpsk.bits2symbols(payload_bits)
 tx_syms = np.concatenate([guard_syms, preamble_syms, header_syms, payload_syms, guard_syms])
 
 long_ref = build_long_ref(sync_cfg, cfg.SPS, rrc_taps)
+ref_f    = build_fine_ref(long_ref, sync_cfg, cfg.SPS)
 
 # Full upsampled TX signal (used as RX input)
 tx_signal = upsample(tx_syms, cfg.SPS, rrc_taps)
@@ -79,7 +81,7 @@ filtered_buffer = match_filter(rx_buffer, rrc_taps)
 # Pre-compute coarse result so fine_timing has a valid input
 coarse = coarse_sync(filtered_buffer, cfg.SAMPLE_RATE, cfg.SPS, sync_cfg)
 fine   = fine_timing(filtered_buffer, long_ref, coarse.d_hats, coarse.cfo_hats,
-                     cfg.SAMPLE_RATE, cfg.SPS, sync_cfg)
+                     cfg.SAMPLE_RATE, cfg.SPS, sync_cfg, ref_f)
 
 # Symbol buffers for Costas loop
 header_end_sym = 2 * fc.header_config.header_total_size
@@ -137,7 +139,7 @@ results.append(bench(
 results.append(bench(
     "RX: fine_timing (FFT xcorr)",
     lambda: fine_timing(filtered_buffer, long_ref, coarse.d_hats, coarse.cfo_hats,
-                        cfg.SAMPLE_RATE, cfg.SPS, sync_cfg),
+                        cfg.SAMPLE_RATE, cfg.SPS, sync_cfg, ref_f),
 ))
 
 # 5. Costas loop — header (BPSK)
