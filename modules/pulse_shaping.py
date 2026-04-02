@@ -35,15 +35,15 @@ def rrc_filter(sps: int, alpha: float, num_taps: int) -> np.ndarray:
         ],
     )
 
-    return h / np.sqrt(np.sum(h**2))
+    return (h / np.sqrt(np.sum(h**2))).astype(np.float32)
 
 
 def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
     """Zero-insert at sps rate and convolve with RRC taps."""
     if len(symbols) == 0:
         return np.ndarray([], dtype=complex)
-    upsampled = np.zeros(len(symbols) * sps, dtype=complex)
-    upsampled[::sps] = symbols
+    upsampled = np.zeros(len(symbols) * sps, dtype=np.complex64)
+    upsampled[::sps] = symbols.astype(np.complex64)
     return np.convolve(upsampled, rrc_taps, mode="full")
 
 def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
@@ -62,7 +62,7 @@ def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray
     return filtered[delay : delay + n_out * sps : sps]
 
 def match_filter(signal: np.ndarray, rrc_taps: np.ndarray) -> np.ndarray:
-    filtered_full = np.convolve(signal, rrc_taps, mode="full")
+    filtered_full = np.convolve(signal.astype(np.complex64), rrc_taps, mode="full")
     delay = len(rrc_taps) - 1
     return filtered_full[delay:]
 

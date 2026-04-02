@@ -137,6 +137,7 @@ def coarse_sync(
         msg = f"samples too short ({len(samples)} samples): need >= 2L={2 * sample_cnt} for two adjacent windows"
         raise ValueError(msg)
 
+    samples = samples.astype(np.complex64)
     cs_p = np.concatenate((np.zeros(1, dtype=np.complex64), np.cumsum(np.conj(samples[:-sample_cnt]) * samples[sample_cnt:])))
     p_d = cs_p[sample_cnt:] - cs_p[:-sample_cnt]
 
