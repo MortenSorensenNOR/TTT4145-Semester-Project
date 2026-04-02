@@ -40,7 +40,7 @@ class SynchronizerConfig:
     long_preamble_nsym: int = 139
     long_margin_nsym: int = 5
 
-    energy_floor: float = np.finfo(np.float64).tiny
+    energy_floor: float = np.finfo(np.float32).tiny
     detection_threshold: float = 0.5
 
 
@@ -77,7 +77,7 @@ def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
         raise ValueError(msg)
 
     n = np.arange(n_zc)
-    return np.exp(-1j * np.pi * u * n * (n + 1) / n_zc)
+    return np.exp(-1j * np.pi * u * n * (n + 1) / n_zc).astype(np.complex64)
 
 
 def generate_preamble(config: SynchronizerConfig) -> np.ndarray:
@@ -91,7 +91,7 @@ def generate_preamble(config: SynchronizerConfig) -> np.ndarray:
 def build_long_ref(cfg: SynchronizerConfig, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
     """Build the upsampled + filtered long preamble reference for matched filtering."""
     zc = generate_zadoff_chu(cfg.zc_root, cfg.long_preamble_nsym)
-    up = np.zeros(len(zc) * sps, dtype=complex)
+    up = np.zeros(len(zc) * sps, dtype=np.complex64)
     up[::sps] = zc
     return np.convolve(up, rrc_taps, mode="same")
 
@@ -137,10 +137,10 @@ def coarse_sync(
         msg = f"samples too short ({len(samples)} samples): need >= 2L={2 * sample_cnt} for two adjacent windows"
         raise ValueError(msg)
 
-    cs_p = np.concatenate(([0j], np.cumsum(np.conj(samples[:-sample_cnt]) * samples[sample_cnt:])))
+    cs_p = np.concatenate((np.zeros(1, dtype=np.complex64), np.cumsum(np.conj(samples[:-sample_cnt]) * samples[sample_cnt:])))
     p_d = cs_p[sample_cnt:] - cs_p[:-sample_cnt]
 
-    cs_r = np.concatenate(([0.0], np.cumsum(np.abs(samples[sample_cnt:]) ** 2)))
+    cs_r = np.concatenate((np.zeros(1, dtype=np.float32), np.cumsum(np.abs(samples[sample_cnt:]) ** 2)))
     r_d = cs_r[sample_cnt:] - cs_r[:-sample_cnt]
 
     m_d = np.abs(p_d) ** 2 / np.maximum(r_d**2, cfg.energy_floor)
@@ -181,7 +181,7 @@ def fine_timing(
         raise TypeError(msg)
 
     d_hats = np.atleast_1d(np.asarray(d_hats, dtype=np.intp))
-    cfo_hats = np.atleast_1d(np.asarray(cfo_hats, dtype=np.float64))
+    cfo_hats = np.atleast_1d(np.asarray(cfo_hats, dtype=np.float32))
 
     samples_per_rep = cfg.short_preamble_nsym * samples_per_symbol
     sample_margin = cfg.long_margin_nsym * samples_per_symbol
@@ -195,7 +195,7 @@ def fine_timing(
 
     # (n_frames, window_len) index array via broadcasting
     indices = starts[:, None] + np.arange(window_len)
-    cfo_phase = -2j * np.pi * (cfo_hats[:, None] / fs) * indices
+    cfo_phase = (-2j * np.pi * (cfo_hats[:, None] / fs) * indices).astype(np.complex64)
     windows = samples[indices] * np.exp(cfo_phase)
 
     # Batch cross-correlation via FFT
