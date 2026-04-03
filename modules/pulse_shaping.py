@@ -44,7 +44,8 @@ def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
         return np.ndarray([], dtype=np.complex64)
     upsampled = np.zeros(len(symbols) * sps, dtype=np.complex64)
     upsampled[::sps] = symbols.astype(np.complex64)
-    return np.convolve(upsampled, rrc_taps, mode="full")
+    filtered = np.convolve(upsampled, rrc_taps, mode="full")
+    return filtered
 
 def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
     """Match-filter with RRC taps, strip group delay, and decimate."""
@@ -55,11 +56,6 @@ def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray
     delay = len(rrc_taps) - 1
     n_symbols = (len(signal) - (len(rrc_taps) - 1)) // sps
     return filtered[delay : delay + n_symbols * sps : sps]
-    # Old code that got the wrong symbol timing making all BER to 50%
-    delay = (len(rrc_taps) - 1)//2
-    n_out = max(0, (len(signal) - len(rrc_taps) + 1) // sps)
-    filtered = np.convolve(signal, rrc_taps, mode="full")
-    return filtered[delay : delay + n_out * sps : sps]
 
 def match_filter(signal: np.ndarray, rrc_taps: np.ndarray) -> np.ndarray:
     filtered_full = np.convolve(signal.astype(np.complex64), rrc_taps, mode="full")
