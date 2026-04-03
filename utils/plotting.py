@@ -270,3 +270,43 @@ def plot_llr_heatmap(
 
     plt.tight_layout()
     return fig, axes
+
+
+def largest_active_region(
+    x: np.ndarray,
+    threshold: float = 1000,
+    smooth_len: int = 64,
+    pad: int = 50,
+) -> tuple[int, int] | None:
+    """
+    Find the largest active burst using a smoothed magnitude envelope.
+    Returns (start, end), end exclusive.
+    """
+    mag = np.abs(x)
+
+    # Smooth the magnitude to estimate burst envelope
+    kernel = np.ones(smooth_len) / smooth_len
+    env = np.convolve(mag, kernel, mode="same")
+
+    active = env > threshold
+    if not np.any(active):
+        return None
+
+    changes = np.diff(active.astype(int))
+    starts = np.where(changes == 1)[0] + 1
+    ends = np.where(changes == -1)[0] + 1
+
+    if active[0]:
+        starts = np.r_[0, starts]
+    if active[-1]:
+        ends = np.r_[ends, len(x)]
+
+    regions = [(s, e) for s, e in zip(starts, ends)]
+    if not regions:
+        return None
+
+    start, end = max(regions, key=lambda r: r[1] - r[0])
+
+    start = max(0, start - pad)
+    end = min(len(x), end + pad)
+    return start, end

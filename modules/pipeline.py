@@ -92,6 +92,7 @@ class TXPipeline:
         header_syms = self.bpsk.bits2symbols(header_bits)
 
         payload_syms = self.payload_modulator.bits2symbols(payload_bits)
+
         # construct signal
         tx_syms = np.concatenate([self.guard_syms,self.sync_syms, self.pre_header_guard_syms, header_syms, payload_syms,self.guard_syms])
 
@@ -131,8 +132,13 @@ class RXPipeline:
         if not detections:
             return []
 
-        packets = []
+        for det in detections:
+            print(
+                f"Found: start {det.payload_start}, "
+                f"cfo: {det.cfo_estimate}, phase: {det.phase_estimate}"
+            )
 
+        packets = []
         for det in detections:
             rx_syms = filtered_buffer[det.payload_start:]
             print("\ndetection at index:", det.payload_start)

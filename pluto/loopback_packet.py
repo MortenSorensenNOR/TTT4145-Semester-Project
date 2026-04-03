@@ -45,7 +45,7 @@ N_FLUSH  = 10   # RX flushes before capture to discard stale samples
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("--gain",    type=float, default=-30,  help="TX gain in dB (default: -30)")
-parser.add_argument("--payload", type=int,   default=100,  help="Payload bytes (default: 100)")
+parser.add_argument("--payload", type=int,   default=10,  help="Payload bytes (default: 100)")
 parser.add_argument("--trials",  type=int,   default=3,    help="Number of RX captures (default: 3)")
 args = parser.parse_args()
 
@@ -88,7 +88,7 @@ frame_len = len(tx_samples)
 
 # RX buffer must fit at least 2 full frames so the sync has room to find the
 # frame start regardless of cyclic phase. Round up to next power of 2.
-rx_buf_size = int(2 ** np.ceil(np.log2(max(2 * frame_len, 2**15)))) // 2
+rx_buf_size = int(2 ** np.ceil(np.log2(max(2 * frame_len, 2**15))))
 
 print(f"\nPipeline config : SPS={pipe_cfg.SPS}, RRC_alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
 print(f"Payload         : {args.payload} bytes  ({args.payload * 8} bits)")
@@ -122,6 +122,8 @@ failed = 0
 for trial in range(args.trials):
     rx_raw = sdr.rx().astype(np.complex64)
     rx_raw = 2 * rx_raw / DAC_SCALE
+    np.save(f"pluto/plots/rx_raw_{trial}.npy", rx_raw)
+
     packets = rx_pipe.receive(rx_raw.astype(np.complex64))
 
     if not packets:

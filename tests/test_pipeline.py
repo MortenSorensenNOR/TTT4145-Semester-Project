@@ -262,15 +262,26 @@ def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
         initial_phase_rad=phase,
         seed=seed,
     ))
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+
+    rx_signal = channel.apply(signal)
+    plt.figure()
+    plot_iq(rx_signal)
+
+    rx_signal = np.load("pluto/plots/rx_raw_0.npy")
+
+    plt.figure()
+    plot_iq(rx_signal)
+    plt.show()
+
+    rx_packets = RXPipeline(config).receive(rx_signal)
     assert_all_received(tx_packets, rx_packets)
 
 if __name__ == "__main__":
     #ber_report()
     replay_scenario(
-        snr_db=15,
-        specs=[(0, 6, ModulationSchemes.BPSK)],  # or any other generated value
+        snr_db=80,
+        specs=[(0, 10, ModulationSchemes.QPSK)],  # or any other generated value
         cfo_hz=0.0,
-        phase=2.0,
+        phase=-0.1,
         seed=0,  # or any other generated value
     )
