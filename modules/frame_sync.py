@@ -38,10 +38,14 @@ class SynchronizerConfig:
     short_preamble_nreps: int = 8
 
     long_preamble_nsym: int = 113
-    long_margin_nsym: int = 15
+    long_margin_nsym: int = 140
 
     energy_floor: np.float32 = np.finfo(np.float32).tiny
     detection_threshold: np.float32 = np.float32(0.5)
+    # Minimum r_d as a fraction of the peak r_d in the buffer.
+    # Filters low-energy regions (noise floor) where M(d)≈1 spuriously.
+    # Set to 0.0 to disable (default for backward compat with simulation).
+    energy_gate_fraction: np.float32 = np.float32(0.01)
 
 
 @dataclass
@@ -159,7 +163,15 @@ def coarse_sync(
         + cfg.long_preamble_nsym * samples_per_symbol
     )
 
-    above = np.flatnonzero(m_d > cfg.detection_threshold)
+    # Energy gate: suppress low-power regions where thermal noise yields M(d)≈1 spuriously.
+    # In hardware, the guard has r_d ~1000x smaller than the preamble but M(d)≈1 because
+    # both |p_d| and r_d are equally tiny. Requiring r_d > fraction*max(r_d) filters this out.
+    if cfg.energy_gate_fraction > 0 and r_d.max() > 0:
+        energy_gate = r_d > (r_d.max() * cfg.energy_gate_fraction)
+    else:
+        energy_gate = np.ones(len(m_d), dtype=bool)
+
+    above = np.flatnonzero((m_d > cfg.detection_threshold) & energy_gate)
     if above.size == 0:
         return CoarseResult(np.empty(0, np.intp), np.empty(0), np.empty(0))
 

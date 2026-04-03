@@ -127,6 +127,7 @@ class RXPipeline:
 
     def receive(self, buffer: np.ndarray) -> list[Packet]:
         """Detect and decode all frames in buffer."""
+        buffer = buffer - np.mean(buffer)
         filtered_buffer = match_filter(buffer, self.rrc_taps)
         detections = self.detect(filtered_buffer)
         if not detections:

@@ -263,15 +263,8 @@ def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
         seed=seed,
     ))
 
-    rx_signal = channel.apply(signal)
-    plt.figure()
-    plot_iq(rx_signal)
-
+    rx_signal_sim = channel.apply(signal)
     rx_signal = np.load("pluto/plots/rx_raw_0.npy")
-
-    plt.figure()
-    plot_iq(rx_signal)
-    plt.show()
 
     rx_packets = RXPipeline(config).receive(rx_signal)
     assert_all_received(tx_packets, rx_packets)
