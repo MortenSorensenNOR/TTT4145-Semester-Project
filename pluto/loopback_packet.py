@@ -19,10 +19,14 @@ import argparse
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import numpy as np
+import matplotlib.pyplot as plt
 import adi
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from utils.plotting import *
+from modules.pulse_shaping import *
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
 from pluto.config import (
@@ -72,20 +76,19 @@ packet = Packet(
 # ---------------------------------------------------------------------------
 # TX: encode → modulate → RRC pulse shaping
 # ---------------------------------------------------------------------------
-
 tx_samples = tx_pipe.transmit(packet)
 
 # Normalize to [-1, 1] then scale to DAC range
 peak = np.max(np.abs(tx_samples))
 if peak > 0:
     tx_samples = tx_samples / peak
-tx_samples = (tx_samples * DAC_SCALE * 0.7).astype(np.complex64)
+tx_samples = (tx_samples * DAC_SCALE).astype(np.complex64)
 
 frame_len = len(tx_samples)
 
 # RX buffer must fit at least 2 full frames so the sync has room to find the
 # frame start regardless of cyclic phase. Round up to next power of 2.
-rx_buf_size = int(2 ** np.ceil(np.log2(max(2 * frame_len, 2**15))))
+rx_buf_size = int(2 ** np.ceil(np.log2(max(2 * frame_len, 2**15)))) // 2
 
 print(f"\nPipeline config : SPS={pipe_cfg.SPS}, RRC_alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
 print(f"Payload         : {args.payload} bytes  ({args.payload * 8} bits)")
@@ -99,7 +102,7 @@ print(f"TX gain         : {args.gain} dB\n")
 
 sdr = adi.Pluto(PLUTO_IP)
 configure_tx(sdr, freq=CENTER_FREQ, gain=args.gain, cyclic=True)
-configure_rx(sdr, freq=CENTER_FREQ, gain_mode="slow_attack")
+configure_rx(sdr, freq=CENTER_FREQ, gain_mode="manual")
 sdr.rx_buffer_size = rx_buf_size  # override default from configure_rx
 
 # Start cyclic TX (continuously loops the frame)
@@ -118,7 +121,8 @@ failed = 0
 
 for trial in range(args.trials):
     rx_raw = sdr.rx().astype(np.complex64)
-    packets = rx_pipe.receive(rx_raw)
+    rx_raw = 2 * rx_raw / DAC_SCALE
+    packets = rx_pipe.receive(rx_raw.astype(np.complex64))
 
     if not packets:
         print(f"[Trial {trial + 1}/{args.trials}] FAIL — no frame detected")

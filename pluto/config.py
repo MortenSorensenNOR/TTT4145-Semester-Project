@@ -68,9 +68,12 @@ def configure_rx(
     *,
     freq: int = CENTER_FREQ,
     gain_mode: str = "slow_attack",
+    rx_gain: int = 70
 ) -> None:
     """Apply standard RX settings to an SDR."""
     sdr.gain_control_mode_chan0 = gain_mode
+    if gain_mode == "manual":
+        sdr.rx_hardwaregain_chan0 = rx_gain
     sdr.rx_lo = int(freq)
     sdr.sample_rate = SAMPLE_RATE
     sdr.rx_rf_bandwidth = int(SAMPLE_RATE)
