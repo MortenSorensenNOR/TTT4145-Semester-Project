@@ -121,10 +121,3 @@ def apply_gardner_ted(
         return result
     else:
         return _gardner_py(signal, int(sps), float(gain))
-
-    signal = np.asarray(signal, dtype=np.complex64)
-
-    if _ext is not None:
-        return _ext.gardner_ted(signal, int(sps), float(gain))
-    else:
-        return _gardner_py(signal, int(sps), float(gain))

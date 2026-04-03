@@ -70,6 +70,12 @@ class TXPipeline:
         # sync
         self.sync_syms = generate_preamble(self.config.SYNC_CONFIG)
 
+        # Adding extra known bits before header to figure out phase ambiguity of BPSK header
+        if config.PRE_HEADER_GUARD_BITS > 0:
+            self.pre_header_guard_syms = self.bpsk.bits2symbols(np.array([[0]*config.PRE_HEADER_GUARD_BITS]))
+        else:
+            self.pre_header_guard_syms = np.array([])
+
     def transmit(self, packet: Packet) -> np.ndarray:
         # construct bits
         header = FrameHeader(
@@ -85,15 +91,9 @@ class TXPipeline:
         # modulate
         header_syms = self.bpsk.bits2symbols(header_bits)
 
-        # Adding extra known bits before header to figure out phase ambiguity of BPSK header
-        if self.config.PRE_HEADER_GUARD_BITS > 0:
-            known_sequence_syms = self.bpsk.bits2symbols(np.array([[0]*self.config.PRE_HEADER_GUARD_BITS]))
-        else:
-            known_sequence_syms = np.array([])
-
         payload_syms = self.payload_modulator.bits2symbols(payload_bits)
         # construct signal
-        tx_syms = np.concatenate([self.guard_syms,self.sync_syms, known_sequence_syms, header_syms, payload_syms,self.guard_syms])
+        tx_syms = np.concatenate([self.guard_syms,self.sync_syms, self.pre_header_guard_syms, header_syms, payload_syms,self.guard_syms])
 
         # upsample and filter
         tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)

@@ -1,148 +1,83 @@
-// File: modules/gardner_ted/gardner_ext.cpp
-//
-// Gardner timing error detector C++ extension via pybind11.
-//
-// Optimisations applied:
-//   - No complex exponentials — cubic interpolation uses only multiply/add
-//   - SoA (struct-of-arrays) layout for NEON auto-vectorisation on ARM A9
-//   - Catmull-Rom cubic interpolation split into real/imag to avoid std::complex overhead
-//   - Horner's method for polynomial evaluation — fewer multiplies
-//   - Compiled with -O3 -ffast-math on all platforms
-//   - Additional -mcpu=cortex-a9 -mfpu=neon flags applied on ARM (see gardner_setup.py)
-
-#include <cmath>
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 #include <complex>
 #include <vector>
-
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
+#include <algorithm>
+#include <cmath>
 
 namespace py = pybind11;
-using c64 = std::complex<float>;
-using f32 = float;
+using cf32 = std::complex<float>;
 
-// ---------------------------------------------------------------------------
-// Catmull-Rom cubic interpolation via Horner's method.
-// Real and imag computed separately — avoids std::complex overhead,
-// enables NEON auto-vectorisation on A9.
-// ---------------------------------------------------------------------------
-
-static inline f32 cubic_interp_f32(
-    f32 v0, f32 v1, f32 v2, f32 v3, f32 mu)
-{
-    f32 c0 =  v1;
-    f32 c1 = -0.5f*v0 + 0.5f*v2;
-    f32 c2 =  v0 - 2.5f*v1 + 2.0f*v2 - 0.5f*v3;
-    f32 c3 = -0.5f*v0 + 1.5f*v1 - 1.5f*v2 + 0.5f*v3;
+// ---------------- Catmull-Rom cubic interpolation ----------------
+static inline float interp1(float v0, float v1, float v2, float v3, float mu) {
+    float c0 = v1;
+    float c1 = -0.5f*v0 + 0.5f*v2;
+    float c2 = v0 - 2.5f*v1 + 2.0f*v2 - 0.5f*v3;
+    float c3 = -0.5f*v0 + 1.5f*v1 - 1.5f*v2 + 0.5f*v3;
     return c0 + mu*(c1 + mu*(c2 + mu*c3));
 }
 
-static inline void interp_cx(
-    const f32* re, const f32* im, int idx, f32 mu, int n,
-    f32& out_re, f32& out_im)
-{
+static inline cf32 cubic_interp(const float* re, const float* im, int idx, float mu, int n) {
     if (idx < 1 || idx + 2 >= n) {
-        int c  = idx < 0 ? 0 : (idx >= n ? n-1 : idx);
-        out_re = re[c];
-        out_im = im[c];
-        return;
+        int c = std::max(0, std::min(idx, n-1));
+        return cf32(re[c], im[c]);
     }
-    out_re = cubic_interp_f32(re[idx-1], re[idx], re[idx+1], re[idx+2], mu);
-    out_im = cubic_interp_f32(im[idx-1], im[idx], im[idx+1], im[idx+2], mu);
+    float r = interp1(re[idx-1], re[idx], re[idx+1], re[idx+2], mu);
+    float i = interp1(im[idx-1], im[idx], im[idx+1], im[idx+2], mu);
+    return cf32(r, i);
 }
 
-// ---------------------------------------------------------------------------
-// Gardner TED
-//
-// Error detector:
-//   e = Re{ (y[k] - y[k-T]) * conj(y[k-T/2]) }
-//
-// Loop filter (type-1, proportional only):
-//   mu  = clamp(mu + gain * e,  -0.5, 0.5)
-//
-// Timing advance:
-//   k  += sps + mu
-// ---------------------------------------------------------------------------
+// ---------------- Gardner TED ----------------
+py::array_t<cf32> gardner_ted(py::array signal_in, int sps, float gain) {
+    py::array_t<cf32> arr(signal_in);  // Cast input to complex64
+    py::buffer_info buf = arr.request();
+    if (buf.ndim != 1) throw std::runtime_error("Input must be 1-D");
+    const int n = static_cast<int>(buf.size);
+    const cf32* sig = static_cast<const cf32*>(buf.ptr);
 
-py::array_t<c64> gardner_ted(
-    py::array_t<c64, py::array::c_style | py::array::forcecast> symbols,
-    int sps,
-    f32 gain)
-{
-    auto in = symbols.unchecked<1>();
-    int  n  = static_cast<int>(in.shape(0));
+    // Split real/imag planes
+    std::vector<float> re(n), im(n);
+    for (int i = 0; i < n; ++i) { re[i] = sig[i].real(); im[i] = sig[i].imag(); }
 
-    // SoA split — lets the compiler vectorise inner multiplies with NEON
-    std::vector<f32> re(n), im(n);
-    for (int i = 0; i < n; ++i) {
-        re[i] = in(i).real();
-        im[i] = in(i).imag();
+    std::vector<cf32> out;
+    out.reserve(n / sps + 8);
+
+    float k = static_cast<float>(sps); // start after first symbol
+    float mu_acc = 0.0f;
+
+    while (k < n - 1) {
+        int k_int = static_cast<int>(k);
+        float k_frac = k - k_int;
+
+        int k_prev_int = k_int - sps;
+        float mu_prev = k - sps - k_prev_int;
+
+        int k_mid_int = static_cast<int>(k - sps*0.5f);
+        float mu_mid = k - sps*0.5f - k_mid_int;
+
+        // Interpolate
+        cf32 curr = cubic_interp(re.data(), im.data(), k_int, k_frac, n);
+        cf32 mid  = cubic_interp(re.data(), im.data(), k_mid_int, mu_mid, n);
+        cf32 prev = cubic_interp(re.data(), im.data(), k_prev_int, mu_prev, n);
+
+        // Gardner error
+        float e = (curr.real() - prev.real())*mid.real() + (curr.imag() - prev.imag())*mid.imag();
+
+        mu_acc = std::clamp(mu_acc + gain*e, -0.5f, 0.5f);
+
+        out.push_back(curr);
+
+        k += static_cast<float>(sps) + mu_acc;
     }
 
-    std::vector<c64> out;
-    out.reserve(n / sps + 2);
-
-    f32 mu = 0.0f;
-    f32 k  = static_cast<f32>(sps);
-
-    while (true) {
-        int   k_int     = static_cast<int>(k);
-        f32   k_mid_f   = k - sps * 0.5f;
-        int   k_mid_int = static_cast<int>(k_mid_f);
-        int   k_prev    = k_int - sps;
-
-        if (k_int + 2 >= n || k_mid_int < 0 || k_prev < 0)
-            break;
-
-        f32 cr, ci, mr, mi, pr, pi;
-        interp_cx(re.data(), im.data(), k_int,     k     - k_int,         n, cr, ci);
-        interp_cx(re.data(), im.data(), k_mid_int, k_mid_f - k_mid_int,   n, mr, mi);
-        interp_cx(re.data(), im.data(), k_prev,    k     - k_int,         n, pr, pi);
-
-        // Re{ (curr - prev) * conj(mid) }  =  (cr-pr)*mr + (ci-pi)*mi
-        f32 dr = cr - pr;
-        f32 di = ci - pi;
-        f32 e  = dr * mr + di * mi;
-
-        mu += gain * e;
-        if      (mu >  0.5f) mu =  0.5f;
-        else if (mu < -0.5f) mu = -0.5f;
-
-        k += static_cast<f32>(sps) + mu;
-
-        out.emplace_back(cr, ci);
-    }
-
-    auto result = py::array_t<c64>(static_cast<py::ssize_t>(out.size()));
-    auto ptr    = result.mutable_unchecked<1>();
-    for (size_t i = 0; i < out.size(); ++i)
-        ptr(i) = out[i];
-
+    py::array_t<cf32> result(out.size());
+    cf32* dst = static_cast<cf32*>(result.request().ptr);
+    std::copy(out.begin(), out.end(), dst);
     return result;
 }
 
-// ---------------------------------------------------------------------------
-// Module
-// ---------------------------------------------------------------------------
-
 PYBIND11_MODULE(gardner_ext, m) {
-    m.doc() = R"pbdoc(
-        Gardner timing error detector — optimised pybind11 C++ extension.
-
-        Optimisations:
-          - SoA real/imag layout     — enables NEON auto-vectorisation on ARM A9
-          - Horner's method          — fewer multiplies in cubic interpolation
-          - No std::complex in loop  — avoids ABI overhead on A9
-          - No complex exponentials  — pure multiply/add in hot path
-          - -O3 -ffast-math          — all platforms
-
-        Signature:
-            gardner_ted(symbols, sps, gain=0.001) -> np.ndarray[complex64]
-    )pbdoc";
-
-    m.def("gardner_ted", &gardner_ted,
-        py::arg("symbols"),
-        py::arg("sps"),
-        py::arg("gain") = 0.001f,
-        "Gardner TED with Catmull-Rom cubic interpolation");
+    m.doc() = "Gardner TED C++ extension with Catmull-Rom interpolation";
+    m.def("gardner_ted", &gardner_ted, py::arg("signal"), py::arg("sps"), py::arg("gain"));
 }
+
