@@ -18,7 +18,7 @@ def make_packets_and_signal(specs, seed=None):
         config = PipelineConfig(MOD_SCHEME=mod)
         tx = TXPipeline(config)
 
-        bits = rng.integers(0, 2, length * 8).reshape(-1, mod.value + 1)
+        bits = rng.integers(0, 2, length * 8).reshape(-1, 1)
         packet = Packet(
             src_mac=0,
             dst_mac=1,
@@ -232,7 +232,7 @@ def _trial(mod, snr_db, cfo_hz):
     rng = np.random.default_rng()
     config = PipelineConfig(MOD_SCHEME=mod)
 
-    bits = rng.integers(0, 2, REPORT_LENGTH * 8).reshape(-1, mod.value + 1)
+    bits = rng.integers(0, 2, REPORT_LENGTH * 8).reshape(-1, 1)
     packet = Packet(
         src_mac=0,
         dst_mac=1,
