@@ -8,7 +8,7 @@ from modules.pipeline import *
 from modules.frame_constructor import ModulationSchemes
 from modules.channel import *
 
-MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK]
+MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
 
 @composite
 def packet_specs(draw):
@@ -24,7 +24,7 @@ def make_packets_and_signal(specs, seed=None):
     for seq_num, length, mod in specs:
         config = PipelineConfig(MOD_SCHEME=mod)
         tx = TXPipeline(config)
-        bits = rng.integers(0, 2, length * 8).reshape(-1, mod.value + 1)
+        bits = rng.integers(0, 2, (length * 8)).reshape(-1, 1)
         packet = Packet(src_mac=0, dst_mac=1, type=0, seq_num=seq_num, length=length, payload=bits)
         tx_packets.append((packet, config))
         signal_parts.append(tx.transmit(packet))
@@ -96,7 +96,7 @@ def test_ideal(specs, seed):
     assert_packets(tx_packets, rx_packets)
     assert len(rx_packets) == len(tx_packets)
 
-@pytest.mark.parametrize("snr_db", [15, 20, 25, 30])
+@pytest.mark.parametrize("snr_db", [15, 16, 17.5 , 20, 25, 30])
 @settings(deadline=10000, suppress_health_check=[HealthCheck.too_slow])
 @given(
     specs=packet_specs(),
@@ -115,6 +115,12 @@ def test_channel(snr_db, specs, cfo_hz, phase, seed):
         initial_phase_rad=phase,
         seed=seed,
     ))
+
+    if snr_db <= 16:
+        for i in specs:
+            if i[2] == ModulationSchemes.PSK8:
+                pytest.xfail("8PSK might mot decode reliably at 15dB SNR")
+
     rx_packets = RXPipeline(config).receive(channel.apply(signal))
     assert_all_received(tx_packets, rx_packets)
 
@@ -151,7 +157,7 @@ N_TRIALS = 10
 def _trial(mod, snr_db, cfo_hz):
     rng = np.random.default_rng()
     config = PipelineConfig(MOD_SCHEME=mod)
-    bits = rng.integers(0, 2, REPORT_LENGTH * 8).reshape(-1, mod.value + 1)
+    bits = rng.integers(0, 2, REPORT_LENGTH * 8).reshape(-1, 1)
     packet = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=REPORT_LENGTH, payload=bits)
     signal = TXPipeline(config).transmit(packet)
 
@@ -193,8 +199,8 @@ def ber_report():
     # Print table
     for cfo_label, (_, results) in all_results.items():
         print(f"\n=== {cfo_label} ===")
-        print(f"{'SNR':>6} | {'BPSK BER':>10} {'BPSK PER':>10} | {'QPSK BER':>10} {'QPSK PER':>10}")
-        print("-" * 62)
+        print(f"{'SNR':>6} | {'BPSK BER':>10} {'BPSK PER':>10} | {'QPSK BER':>10} {'QPSK PER':>10} | {'8PSK BER':>10} {'8PSK PER':>10}")
+        print("-" * 80)
         for i, snr in enumerate(SNR_SWEEP):
             row = f"{snr:>6}"
             for mod in MOD_SCHEMES:
@@ -264,17 +270,17 @@ def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
     ))
 
     rx_signal_sim = channel.apply(signal)
-    rx_signal = np.load("pluto/plots/rx_raw_0.npy")
+    rx_signal = rx_signal_sim# np.load("pluto/plots/rx_raw_0.npy")
 
     rx_packets = RXPipeline(config).receive(rx_signal)
     assert_all_received(tx_packets, rx_packets)
 
 if __name__ == "__main__":
-    #ber_report()
+    ber_report()
     replay_scenario(
-        snr_db=80,
-        specs=[(0, 10, ModulationSchemes.QPSK)],  # or any other generated value
+        snr_db=19,
+        specs=[(0, 6, ModulationSchemes.PSK8)],  # or any other generated value
         cfo_hz=0.0,
-        phase=-0.1,
-        seed=0,  # or any other generated value
+        phase=-0.0,
+        seed=2,  # or any other generated value
     )

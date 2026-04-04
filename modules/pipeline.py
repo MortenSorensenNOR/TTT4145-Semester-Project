@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from math import ceil
 import numpy as np
 
 from modules import gardner_ted
@@ -90,8 +91,7 @@ class TXPipeline:
         print("header_bits:", header_bits)
         # modulate
         header_syms = self.bpsk.bits2symbols(header_bits)
-
-        payload_syms = self.payload_modulator.bits2symbols(payload_bits)
+        payload_syms = self.payload_modulator.bits2symbols(payload_bits.reshape(-1, header.mod_scheme.value+1))#.reshape(-1, header.mod_scheme.value+1))
 
         # construct signal
         tx_syms = np.concatenate([self.guard_syms,self.sync_syms, self.pre_header_guard_syms, header_syms, payload_syms,self.guard_syms])
@@ -209,7 +209,6 @@ class RXPipeline:
             msg = "header end is outside of buffer"
             raise IndexError(msg)
 
-        # applying the phase estimate from preamble before gardner
         print("current_pahse_estimate:",current_phase_estimate)
 
         if self.config.gardner_ted:
@@ -223,7 +222,6 @@ class RXPipeline:
             header_syms_corr, phase_est = apply_costas_loop(header_syms[:header_end], self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
         else:
             header_syms_corr, phase_est = header_syms[:header_end], [current_phase_estimate]
-        #print(header_syms_corr[:9])
         
         # checks known pre header bits and flips syms and rotates phase estimate
         if self.config.PRE_HEADER_GUARD_BITS > 0:
@@ -239,7 +237,7 @@ class RXPipeline:
         return header, header_end, phase_est[-1]
 
     def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32) -> np.ndarray:
-        payload_end = payload_start + (header.length*8)//(header.mod_scheme.value+1) # header.mod_scheme.value+1 is same as bits per symbol of modulator
+        payload_end = payload_start + ceil((header.length*8 + self.frame_constructor.PAYLOAD_CRC_BITS)/(header.mod_scheme.value+1)) # header.mod_scheme.value+1 is same as bits per symbol of modulator
         
         if payload_end*self.config.SPS > len(buffer):
             msg = "payload end is outside of buffer"
@@ -250,9 +248,7 @@ class RXPipeline:
             rx_syms = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard], self.config.SPS)
         else:
             rx_syms = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS)
-        
-        #print("rx_syms_real:", len(rx_syms), "rx_syms_ideal:", payload_end-payload_start)
-        print("rx_syms:", rx_syms[:8])
+
         print("current_phase_estimate:", current_phase_estimate)
 
         if self.config.costas_loop:
@@ -260,19 +256,18 @@ class RXPipeline:
         else:
             rx_syms = rx_syms[:payload_end-payload_start]
 
-        print("rx_syms costas:", rx_syms[:8])
-
         print("modulation:", header.mod_scheme)
         # demodulate
         match (header.mod_scheme):
             case ModulationSchemes.BPSK:
-                payload_bits = self.bpsk.symbols2bits(rx_syms)
+                payload_bits_encoded = self.bpsk.symbols2bits(rx_syms)
             case ModulationSchemes.QPSK:
-                payload_bits = self.qpsk.symbols2bits(rx_syms)
+                payload_bits_encoded = self.qpsk.symbols2bits(rx_syms)
             case ModulationSchemes.PSK8:
-                payload_bits = self.psk8.symbols2bits(rx_syms)
-
-        return payload_bits
+                payload_bits_encoded = self.psk8.symbols2bits(rx_syms)
+        
+        payload_bits = self.frame_constructor.decode_payload(header, np.concat(payload_bits_encoded))
+        return payload_bits.reshape(-1,1)
 
 if __name__ == "__main__":
     config = PipelineConfig()

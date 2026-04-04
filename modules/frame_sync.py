@@ -265,6 +265,6 @@ def fine_timing(
     return FineResult(
         sample_idxs=sample_idxs,
         peak_ratios=np.max(z_mag, axis=1) / np.where(z_mean == 0, 1, z_mean),
-        phase_estimates=phase_at_payload,
+        phase_estimates=phase_at_payload%(2*np.pi),
     )
 
