@@ -63,6 +63,49 @@ def assert_all_received(tx_packets, rx_packets):
         assert np.array_equal(rx_pkt.payload, tx_pkt.payload)
 
 
+def diagnose_and_assert(tx_packets, rx_packets):
+    """Like assert_all_received, but prints a failure breakdown before asserting.
+
+    Categorises failures into three buckets:
+      - not_detected : sync missed entirely (counts against PER)
+      - invalid      : detected but header/CRC marked packet invalid (counts against PER)
+      - payload_err  : detected and valid header, but payload bits wrong (counts against BER)
+    """
+    tx_by_seq = {p.seq_num: p for p, _ in tx_packets}
+    rx_by_seq = {p.seq_num: p for p in rx_packets if p.seq_num in tx_by_seq}
+
+    not_detected, invalid, payload_err = [], [], []
+
+    for seq_num, tx_pkt in tx_by_seq.items():
+        if seq_num not in rx_by_seq:
+            not_detected.append(seq_num)
+            continue
+        rx_pkt = rx_by_seq[seq_num]
+        if not rx_pkt.valid:
+            invalid.append(seq_num)
+            continue
+        if rx_pkt.length != tx_pkt.length or not np.array_equal(rx_pkt.payload, tx_pkt.payload):
+            if rx_pkt.payload.shape == tx_pkt.payload.shape:
+                ber = float(np.mean(rx_pkt.payload != tx_pkt.payload))
+            else:
+                ber = 1.0
+            payload_err.append((seq_num, ber))
+
+    if not_detected or invalid or payload_err:
+        total = len(tx_by_seq)
+        parts = [f"{total} tx"]
+        if not_detected:
+            parts.append(f"not_detected={len(not_detected)}")
+        if invalid:
+            parts.append(f"invalid={len(invalid)}")
+        if payload_err:
+            mean_ber = float(np.mean([b for _, b in payload_err]))
+            parts.append(f"payload_err={len(payload_err)} (BER={mean_ber:.2e})")
+        print(f"\n  MULTIPATH DIAG: {', '.join(parts)}")
+
+    assert_all_received(tx_packets, rx_packets)
+
+
 # ----------------------------
 # Detection tests
 # ----------------------------
@@ -186,6 +229,184 @@ def test_channel(snr_db, specs, cfo_hz, phase, seed):
 
     rx_packets = RXPipeline(config).receive(channel.apply(signal))
     assert_all_received(tx_packets, rx_packets)
+
+
+# ITU-R M.1225 channel profiles at 5.336 MHz sample rate
+# Pedestrian speed (~3 km/h at 433 MHz) → Doppler ≈ 1.2 Hz
+# Vehicular speed (~120 km/h at 433 MHz) → Doppler ≈ 48 Hz
+PEDESTRIAN_DOPPLER_HZ = np.float32(1.2)
+VEHICULAR_DOPPLER_HZ = np.float32(48.0)
+
+# Pedestrian A — tap delays (ns): 0, 110, 190, 410  →  ~0–2 samples spread
+PEDESTRIAN_A_DELAYS = (np.float32(0.0), np.float32(0.587), np.float32(1.014), np.float32(2.188))
+PEDESTRIAN_A_GAINS_DB = (np.float32(0.0), np.float32(-9.7), np.float32(-19.2), np.float32(-22.8))
+
+# Pedestrian B — tap delays (ns): 0, 200, 800, 1200, 2300, 3700  →  ~0–20 samples spread
+PEDESTRIAN_B_DELAYS = (
+    np.float32(0.0), np.float32(1.067), np.float32(4.269),
+    np.float32(6.403), np.float32(12.273), np.float32(19.743),
+)
+PEDESTRIAN_B_GAINS_DB = (
+    np.float32(0.0), np.float32(-0.9), np.float32(-4.9),
+    np.float32(-8.0), np.float32(-7.8), np.float32(-23.9),
+)
+
+# Vehicular A — tap delays (ns): 0, 310, 710, 1090, 1730, 2510  →  ~0–13 samples spread
+VEHICULAR_A_DELAYS = (
+    np.float32(0.0), np.float32(1.654), np.float32(3.789),
+    np.float32(5.816), np.float32(9.227), np.float32(13.393),
+)
+VEHICULAR_A_GAINS_DB = (
+    np.float32(0.0), np.float32(-1.0), np.float32(-9.0),
+    np.float32(-10.0), np.float32(-15.0), np.float32(-20.0),
+)
+
+# Vehicular B — tap delays (ns): 0, 300, 8900, 12900, 17100, 20000  →  ~0–107 samples spread
+VEHICULAR_B_DELAYS = (
+    np.float32(0.0), np.float32(1.601), np.float32(47.490),
+    np.float32(68.834), np.float32(91.246), np.float32(106.720),
+)
+VEHICULAR_B_GAINS_DB = (
+    np.float32(-2.5), np.float32(0.0), np.float32(-12.8),
+    np.float32(-10.0), np.float32(-25.2), np.float32(-16.0),
+)
+
+
+@pytest.mark.parametrize("snr_db", [20, 25, 30])
+@pytest.mark.parametrize(
+    "specs, cfo_hz, phase, seed",
+    [
+        ([(0, 6, ModulationSchemes.BPSK)], 0.0, 0.0, 0),
+        ([(0, 8, ModulationSchemes.QPSK)], 1000.0, 0.5, 1),
+        (
+            [(0, 6, ModulationSchemes.BPSK), (1, 8, ModulationSchemes.QPSK)],
+            -2500.0,
+            1.0,
+            2,
+        ),
+    ],
+)
+def test_channel_multipath(snr_db, specs, cfo_hz, phase, seed):
+    tx_packets, signal = make_packets_and_signal(specs, seed)
+    _, config = tx_packets[0]
+
+    channel = ChannelModel(ChannelConfig(
+        sample_rate=config.SAMPLE_RATE,
+        snr_db=snr_db,
+        cfo_hz=cfo_hz,
+        initial_phase_rad=phase,
+        enable_multipath=True,
+        multipath_delays_samples=PEDESTRIAN_A_DELAYS,
+        multipath_gains_db=PEDESTRIAN_A_GAINS_DB,
+        doppler_hz=PEDESTRIAN_DOPPLER_HZ,
+        fading_type="rayleigh",
+        seed=seed,
+    ))
+
+    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    diagnose_and_assert(tx_packets, rx_packets)
+
+
+@pytest.mark.xfail(strict=False, reason="Pedestrian B: ~20-sample delay spread stresses receiver without equalizer")
+@pytest.mark.parametrize("snr_db", [20, 25, 30])
+@pytest.mark.parametrize(
+    "specs, cfo_hz, phase, seed",
+    [
+        ([(0, 6, ModulationSchemes.BPSK)], 0.0, 0.0, 0),
+        ([(0, 8, ModulationSchemes.QPSK)], 1000.0, 0.5, 1),
+        (
+            [(0, 6, ModulationSchemes.BPSK), (1, 8, ModulationSchemes.QPSK)],
+            -2500.0,
+            1.0,
+            2,
+        ),
+    ],
+)
+def test_channel_pedestrian_b(snr_db, specs, cfo_hz, phase, seed):
+    tx_packets, signal = make_packets_and_signal(specs, seed)
+    _, config = tx_packets[0]
+
+    channel = ChannelModel(ChannelConfig(
+        sample_rate=config.SAMPLE_RATE,
+        snr_db=snr_db,
+        cfo_hz=cfo_hz,
+        initial_phase_rad=phase,
+        enable_multipath=True,
+        multipath_delays_samples=PEDESTRIAN_B_DELAYS,
+        multipath_gains_db=PEDESTRIAN_B_GAINS_DB,
+        doppler_hz=PEDESTRIAN_DOPPLER_HZ,
+        fading_type="rayleigh",
+        seed=seed,
+    ))
+
+    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    diagnose_and_assert(tx_packets, rx_packets)
+
+
+@pytest.mark.xfail(strict=False, reason="Vehicular A: fast fading (~48 Hz Doppler) within packet duration")
+@pytest.mark.parametrize("snr_db", [20, 25, 30])
+@pytest.mark.parametrize(
+    "specs, cfo_hz, phase, seed",
+    [
+        ([(0, 6, ModulationSchemes.BPSK)], 0.0, 0.0, 0),
+        ([(0, 8, ModulationSchemes.QPSK)], 1000.0, 0.5, 1),
+        (
+            [(0, 6, ModulationSchemes.BPSK), (1, 8, ModulationSchemes.QPSK)],
+            -2500.0,
+            1.0,
+            2,
+        ),
+    ],
+)
+def test_channel_vehicular_a(snr_db, specs, cfo_hz, phase, seed):
+    tx_packets, signal = make_packets_and_signal(specs, seed)
+    _, config = tx_packets[0]
+
+    channel = ChannelModel(ChannelConfig(
+        sample_rate=config.SAMPLE_RATE,
+        snr_db=snr_db,
+        cfo_hz=cfo_hz,
+        initial_phase_rad=phase,
+        enable_multipath=True,
+        multipath_delays_samples=VEHICULAR_A_DELAYS,
+        multipath_gains_db=VEHICULAR_A_GAINS_DB,
+        doppler_hz=VEHICULAR_DOPPLER_HZ,
+        fading_type="rayleigh",
+        seed=seed,
+    ))
+
+    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    diagnose_and_assert(tx_packets, rx_packets)
+
+
+@pytest.mark.xfail(strict=False, reason="Vehicular B: ~107-sample delay spread and fast fading — no equalizer")
+@pytest.mark.parametrize("snr_db", [25, 30])
+@pytest.mark.parametrize(
+    "specs, cfo_hz, phase, seed",
+    [
+        ([(0, 6, ModulationSchemes.BPSK)], 0.0, 0.0, 0),
+        ([(0, 8, ModulationSchemes.QPSK)], 1000.0, 0.5, 1),
+    ],
+)
+def test_channel_vehicular_b(snr_db, specs, cfo_hz, phase, seed):
+    tx_packets, signal = make_packets_and_signal(specs, seed)
+    _, config = tx_packets[0]
+
+    channel = ChannelModel(ChannelConfig(
+        sample_rate=config.SAMPLE_RATE,
+        snr_db=snr_db,
+        cfo_hz=cfo_hz,
+        initial_phase_rad=phase,
+        enable_multipath=True,
+        multipath_delays_samples=VEHICULAR_B_DELAYS,
+        multipath_gains_db=VEHICULAR_B_GAINS_DB,
+        doppler_hz=VEHICULAR_DOPPLER_HZ,
+        fading_type="rayleigh",
+        seed=seed,
+    ))
+
+    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    diagnose_and_assert(tx_packets, rx_packets)
 
 
 @pytest.mark.xfail(strict=False, reason="sub-15 dB SNR may not decode reliably")
