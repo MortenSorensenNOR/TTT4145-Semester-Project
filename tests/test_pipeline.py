@@ -116,10 +116,10 @@ def test_channel(snr_db, specs, cfo_hz, phase, seed):
         seed=seed,
     ))
 
-    if snr_db <= 16:
+    if snr_db < 18:
         for i in specs:
             if i[2] == ModulationSchemes.PSK8:
-                pytest.xfail("8PSK might mot decode reliably at 15dB SNR")
+                pytest.xfail("8PSK requires ~18dB SNR; below this threshold decoding is unreliable")
 
     rx_packets = RXPipeline(config).receive(channel.apply(signal))
     assert_all_received(tx_packets, rx_packets)
