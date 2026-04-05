@@ -131,6 +131,9 @@ class RXPipeline:
         # generate the known long preamble for matched filtering
         self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
         self.ref_f = build_fine_ref(self.long_ref, self.config.SYNC_CONFIG, self.config.SPS)
+        # decimated (symbol-rate) reference for fine timing on the decimated buffer
+        self.long_ref_dec = decimate(self.long_ref, self.config.SPS)
+        self.ref_f_dec = build_fine_ref(self.long_ref_dec, self.config.SYNC_CONFIG, 1)
 
     def receive(self, buffer: np.ndarray) -> list[Packet]:
         """Detect and decode all frames in buffer."""
@@ -161,10 +164,8 @@ class RXPipeline:
     def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:
         """Detect frames in a match-filtered buffer. Both coarse and fine sync run post-RRC.
 
-        Coarse sync runs on a decimated (symbol-rate) copy of the buffer for speed (~8x).
-        Fine timing runs on the full-rate filtered buffer for sub-sample precision.
-        d_hats from coarse (symbol indices) are converted back to sample indices before
-        passing to fine timing.
+        Both coarse and fine sync run on a decimated (symbol-rate) copy of the buffer.
+        Output sample indices are converted back to the full-rate domain for decode().
         """
         cfg = self.config.SYNC_CONFIG
         sps = self.config.SPS
@@ -181,17 +182,15 @@ class RXPipeline:
             print("no")
             return []
 
-        # Convert symbol-domain d_hats back to sample-domain for fine timing
-        d_hats_samples = coarse.d_hats * sps
-
         try:
-            fine = fine_timing(filtered_buffer, self.long_ref, d_hats_samples, coarse.cfo_hats,
-                               self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
+            fine = fine_timing(decimated, self.long_ref_dec, coarse.d_hats, coarse.cfo_hats,
+                               fs_sym, 1, cfg, self.ref_f_dec)
         except Exception as e:
             print(e)
             return []
 
-        payload_starts = fine.sample_idxs + len(self.long_ref)
+        # fine.sample_idxs are in symbol units; convert to sample indices for decode()
+        payload_starts = (fine.sample_idxs + len(self.long_ref_dec)) * sps
         return [
             DetectionResult(
                 payload_start=int(payload_starts[i]),
