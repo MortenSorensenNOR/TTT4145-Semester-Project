@@ -8,7 +8,7 @@ from modules.pipeline import *
 from modules.frame_constructor import ModulationSchemes
 from modules.channel import *
 
-MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK]#, ModulationSchemes.PSK8]
+MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
 
 @composite
 def packet_specs(draw):
@@ -96,7 +96,7 @@ def test_ideal(specs, seed):
     assert_packets(tx_packets, rx_packets)
     assert len(rx_packets) == len(tx_packets)
 
-@pytest.mark.parametrize("snr_db", [15, 16, 17.5 , 20, 25, 30])
+@pytest.mark.parametrize("snr_db", [15, 16, 17.5, 18.5, 20, 25, 30])
 @settings(deadline=10000, suppress_health_check=[HealthCheck.too_slow])
 @given(
     specs=packet_specs(),
@@ -278,9 +278,12 @@ def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
 if __name__ == "__main__":
     #ber_report()
     replay_scenario(
-        snr_db=17.5,
-        specs=[(0, 6, ModulationSchemes.QPSK), (1, 6, ModulationSchemes.QPSK)],  # or any other generated value
+        snr_db=20, # fails at 18
+        specs=[(0, 6, ModulationSchemes.BPSK),
+        (1, 6, ModulationSchemes.PSK8),
+        (2, 6, ModulationSchemes.BPSK),
+        (3, 8, ModulationSchemes.BPSK)],
         cfo_hz=0.0,
-        phase=1.0,
-        seed=4,  # or any other generated value
+        phase=0.0,
+        seed=175,
     )

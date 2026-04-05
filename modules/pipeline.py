@@ -27,12 +27,12 @@ class PipelineConfig:
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
-    GARDNER_CONFIG = GardnerConfig(0.01)
+    GARDNER_CONFIG = GardnerConfig(0.007) #Probably needs more tuning (can overshoot at low SNR above 0.007 at PSK8)
 
     pulse_shaping: bool = True
     pilots: bool = False
     costas_loop: bool = True
-    gardner_ted: bool = True # Not working correctly!
+    gardner_ted: bool = True
     channnel_coding: bool = False
     interleaving: bool = False
     cfo_correction: bool = True
@@ -186,11 +186,11 @@ class RXPipeline:
     def decode(self, buffer: np.ndarray, cfo: np.float32, phase_estimate: np.float32) -> Packet:
         cfo_rad_per_symbol = 2 * np.pi * cfo / self.config.SAMPLE_RATE * self.config.SPS
         
-        header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
+        header, payload_start, current_phase_estimate, current_timing_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
         if header.length == 0:
             msg = "Payload length = 0"
             raise ValueError(msg)
-        payload = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
+        payload = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate, current_timing_estimate)
         return Packet(
             src_mac=header.src,
             dst_mac=header.dst,
@@ -213,10 +213,9 @@ class RXPipeline:
 
         if self.config.gardner_ted:
             guard = self.config.SPS
-            header_syms, timing_estimates = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, ModulationSchemes.BPSK, self.config.SPS)
+            header_syms, timing_est = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, ModulationSchemes.BPSK, self.config.SPS)
         else:
-            header_syms = decimate(buffer[:header_end*self.config.SPS], self.config.SPS)
-        print(timing_estimates)
+            header_syms, timing_est = decimate(buffer[:header_end*self.config.SPS], self.config.SPS), [0.0]
         # costas correction
         if self.config.costas_loop:
             header_syms_corr, phase_est = apply_costas_loop(header_syms[:header_end], self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
@@ -234,9 +233,9 @@ class RXPipeline:
         print("header_bits:", header_bits.flatten())
         header = self.frame_constructor.decode_header(header_bits)
 
-        return header, header_end, phase_est[-1]
+        return header, header_end, phase_est[-1], timing_est[-1]
 
-    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32) -> np.ndarray:
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32, current_timing_estimate: np.float32) -> np.ndarray:
         payload_end = payload_start + ceil((header.length*8 + self.frame_constructor.PAYLOAD_CRC_BITS)/(header.mod_scheme.value+1)) # header.mod_scheme.value+1 is same as bits per symbol of modulator
         
         if payload_end*self.config.SPS > len(buffer):
@@ -245,14 +244,13 @@ class RXPipeline:
         
         if self.config.gardner_ted:
             guard = self.config.SPS
-            rx_syms, timing_estimates = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, header.mod_scheme, self.config.SPS)
+            rx_syms, timing_est = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, header.mod_scheme, self.config.SPS, current_timing_offset=current_timing_estimate)
         else:
-            rx_syms = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS)
-        print(timing_estimates, rx_syms.shape, payload_end-payload_start)
+            rx_syms, timing_est = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS), [0.0]
         print("current_phase_estimate:", current_phase_estimate)
 
         if self.config.costas_loop:
-            rx_syms, _ = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
+            rx_syms, phase_est = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
         else:
             rx_syms = rx_syms[:payload_end-payload_start]
 
