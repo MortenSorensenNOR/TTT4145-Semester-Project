@@ -9,18 +9,14 @@ after the matched filter and requires no knowledge of the transmitted data.
 
 Timing error equations
 ----------------------
-BPSK:   e[m] = Re(z_mid) * ( Re(z_prev) − Re(z_curr) )
-QPSK:   e[m] = Re{ conj(z_mid) * (z_prev − z_curr) }
+BPSK:   e[m] = Re(z_mid) * ( Re(z_prev) - Re(z_curr) )
+QPSK:   e[m] = Re{ conj(z_mid) * (z_prev - z_curr) }
 8-PSK:  same as QPSK, normalised by |z_mid|
 
-where z_curr / z_prev are the current and previous symbol-rate samples
-(interpolated) and z_mid is the interpolated midpoint between them.
-
-PI loop filter
---------------
-    integrator += beta  * e[m]
-    mu         += alpha * e[m] + integrator
-    mu          = clamp(mu, -0.5, 0.5)   # symbol-period units
+Strobe alignment
+----------------
+strobe is pre-loaded to (sps - 1) so the first fire is at sample index 0.
+With mu=0 this exactly reproduces simple decimation: x[0], x[sps], x[2*sps]...
 
 Reference
 ---------
@@ -31,6 +27,7 @@ IEEE Trans. Commun., vol. COM-34, pp. 423-429, May 1986.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -44,7 +41,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
-    from modules.gardner_ted import gardner_ext as _ext
+    from modules import gardner_ext as _ext
     logger.info("Loaded gardner_ext pybind11 C++ extension.")
 except ImportError:
     _ext = None
@@ -57,57 +54,56 @@ except ImportError:
 # Pure-Python fallbacks
 # ---------------------------------------------------------------------------
 
-def _farrow(xm1: complex, x0: complex, x1: complex, x2: complex, eta: float) -> complex:
-    """4-tap cubic Farrow interpolation, eta in [0, 1)."""
-    c0 =  x0
-    c1 = -(1/6)*xm1 - 0.5*x0  + x1           - (1/3)*x2
-    c2 =  (0.5)*xm1 - x0      + 0.5*x1
-    c3 = -(1/6)*xm1 + 0.5*x0  - 0.5*x1 + (1/6)*x2
-    return c0 + eta * (c1 + eta * (c2 + eta * c3))
-
-
 def _xget(x: np.ndarray, idx: int) -> complex:
-    return x[max(0, min(idx, len(x) - 1))]
+    return complex(x[max(0, min(idx, len(x) - 1))])
 
 
-def _interp_at(x: np.ndarray, base: int, frac_offset: float) -> complex:
-    """Interpolate x at (base + frac_offset), frac_offset may be non-integer."""
-    import math
-    ioff = int(math.floor(frac_offset))
-    eta  = frac_offset - ioff
-    n    = base + ioff
-    return _farrow(
-        _xget(x, n - 1), _xget(x, n), _xget(x, n + 1), _xget(x, n + 2), eta
-    )
+def _farrow(xm1: complex, x0: complex, x1: complex, x2: complex, eta: float) -> complex:
+    """4-tap cubic Farrow, eta in [0, 1)."""
+    c0 =  x0
+    c1 = -(1/6)*xm1 - 0.5*x0  +     x1 - (1/3)*x2
+    c2 =   0.5 *xm1 -     x0  + 0.5*x1
+    c3 = -(1/6)*xm1 + 0.5*x0  - 0.5*x1 + (1/6)*x2
+    return c0 + eta*(c1 + eta*(c2 + eta*c3))
+
+
+def _interp(x: np.ndarray, pos: float) -> complex:
+    n   = int(math.floor(pos))
+    eta = pos - n
+    return _farrow(_xget(x,n-1), _xget(x,n), _xget(x,n+1), _xget(x,n+2), eta)
 
 
 def _gardner_core_py(samples, alpha, beta, sps, mu, integrator, ted_fn):
-    x      = np.asarray(samples, dtype=np.complex64)
-    N      = len(x)
-    sps_f  = float(sps)
+    x     = np.asarray(samples, dtype=np.complex64)
+    N     = len(x)
+    sps_f = float(sps)
 
-    out_syms = []
-    out_mu   = []
+    out_syms  = []
+    out_mu    = []
 
-    strobe   = sps_f          # fire on first symbol
-    prev_sym = complex(x[0])
+    # Pre-load so first fire is at i=0, matching simple decimation.
+    strobe    = sps_f - 1.0
+    prev_sym  = None
 
-    for i in range(1, N):
+    for i in range(N):
         strobe += 1.0
         if strobe < sps_f:
             continue
 
         strobe -= sps_f
-        eta_on  = strobe + mu * sps_f
-        on_time = _interp_at(x, i, eta_on)
-        mid_sym = _interp_at(x, i, eta_on - sps_f * 0.5)
 
-        e = ted_fn(prev_sym, mid_sym, on_time)
+        on_time_pos = float(i) - strobe + mu * sps_f
+        mid_pos     = on_time_pos - sps_f * 0.5
 
-        integrator += beta  * e
-        mu         += alpha * e + integrator
-        if   mu >  0.5: mu -= 1.0
-        elif mu < -0.5: mu += 1.0
+        on_time = _interp(x, on_time_pos)
+        mid_sym = _interp(x, mid_pos)
+
+        if prev_sym is not None:
+            e = ted_fn(prev_sym, mid_sym, on_time)
+            integrator += beta  * e
+            mu         += alpha * e + integrator
+            if   mu >  0.5: mu -= 1.0
+            elif mu < -0.5: mu += 1.0
 
         prev_sym = on_time
         out_syms.append(on_time)
@@ -123,12 +119,12 @@ def _ted_bpsk_py(prev, mid, curr):
     return mid.real * (prev.real - curr.real)
 
 def _ted_qpsk_py(prev, mid, curr):
-    diff = prev - curr
-    return mid.real * diff.real + mid.imag * diff.imag
+    d = prev - curr
+    return mid.real * d.real + mid.imag * d.imag
 
 def _ted_8psk_py(prev, mid, curr):
-    diff = prev - curr
-    e    = mid.real * diff.real + mid.imag * diff.imag
+    d    = prev - curr
+    e    = mid.real * d.real + mid.imag * d.imag
     ampl = abs(mid)
     return e / ampl if ampl > 1e-6 else e
 
@@ -137,7 +133,6 @@ def _make_py_fn(ted_fn):
     def _fn(samples, alpha, beta, sps, mu=0.0, integrator=0.0):
         return _gardner_core_py(samples, alpha, beta, sps, mu, integrator, ted_fn)
     return _fn
-
 
 _py_bpsk = _make_py_fn(_ted_bpsk_py)
 _py_qpsk = _make_py_fn(_ted_qpsk_py)
@@ -158,7 +153,6 @@ _func_map: dict = {
 # ---------------------------------------------------------------------------
 
 def _loop_parameters(bn: float, zeta: float) -> tuple[float, float]:
-    """Convert normalised noise bandwidth + damping to PI gains (alpha, beta)."""
     wn    = bn / (zeta + 1.0 / (4.0 * zeta))
     denom = 1.0 + 2.0 * zeta * wn + wn ** 2
     return (4.0 * zeta * wn) / denom, (4.0 * wn ** 2) / denom
@@ -172,14 +166,12 @@ class GardnerConfig:
     ----------
     loop_noise_bandwidth_normalized:
         Normalised loop noise bandwidth (Bn·Ts). Typical range 0.005–0.05.
-        Smaller → slower convergence, lower steady-state jitter.
     damping_factor:
         Loop damping factor ζ. 0.707 = maximally-flat (Butterworth) response.
     initial_timing_offset:
-        Seed value for mu, in symbol-period units [-0.5, 0.5].
-        Use 0.0 when timing is approximately known, or 0.25 as a neutral start.
+        Seed value for mu, symbol-period units [-0.5, 0.5].
     initial_frequency_offset:
-        Seed value for the PI integrator (symbol-rate drift estimate).
+        Seed value for the PI integrator.
     alpha, beta:
         Loop-filter gains — computed automatically, do not set manually.
     """
@@ -216,35 +208,27 @@ def apply_gardner_ted(
     Parameters
     ----------
     samples:
-        Complex baseband samples at ``sps`` samples per symbol (cast to
-        complex64 internally).  Must be matched-filter output.
+        Complex baseband samples at ``sps`` samples-per-symbol (matched-filter
+        output), cast to complex64 internally.
     config:
-        Loop configuration (bandwidth, damping, initial state).
+        Loop configuration.
     modulation:
-        Modulation scheme — selects the phase-error detector variant.
+        Modulation scheme — selects the TED error detector variant.
     sps:
-        Samples per symbol (>= 2).  The loop automatically handles any
-        integer SPS; Farrow interpolation gives sub-sample accuracy.
+        Samples per symbol (>= 2).
     current_timing_offset:
-        Override for the initial fractional timing offset mu ∈ [-0.5, 0.5].
+        Override for initial mu ∈ [-0.5, 0.5] (symbol-period units).
         Defaults to ``config.initial_timing_offset``.
     current_frequency_offset:
-        Override for the initial PI integrator state.
+        Override for initial PI integrator state.
         Defaults to ``config.initial_frequency_offset``.
 
     Returns
     -------
     corrected_symbols : np.ndarray[complex64]
-        One timing-corrected symbol per symbol period.
+        One timing-corrected sample per symbol period.
     timing_estimates  : np.ndarray[float32]
-        Fractional timing offset mu per symbol (for diagnostics / handoff).
-
-    Raises
-    ------
-    ValueError
-        If ``sps < 2`` or fewer than ``2*sps`` samples are provided.
-    NotImplementedError
-        If ``modulation`` has no registered Gardner TED variant.
+        Fractional timing offset mu per symbol (diagnostic / state handoff).
     """
     if sps < 2:
         raise ValueError(f"apply_gardner_ted: sps must be >= 2, got {sps}")

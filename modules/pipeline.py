@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from math import ceil
 import numpy as np
 
-from modules import gardner_ted
 from modules.pulse_shaping import *
 from modules.modulators import *
 from modules.frame_constructor import *
@@ -28,7 +27,7 @@ class PipelineConfig:
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
-    GARDNER_CONFIG = GardnerConfig(0.07)
+    GARDNER_CONFIG = GardnerConfig(0.01)
 
     pulse_shaping: bool = True
     pilots: bool = False
@@ -245,8 +244,8 @@ class RXPipeline:
             raise IndexError(msg)
         
         if self.config.gardner_ted:
-            guard = self.config.SPS//2
-            rx_syms, timing_estimates = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.GARDNER_CONFIG, header.mod_scheme, self.config.SPS, current_frequency_offset=cfo)
+            guard = self.config.SPS
+            rx_syms, timing_estimates = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, header.mod_scheme, self.config.SPS)
         else:
             rx_syms = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS)
         print(timing_estimates, rx_syms.shape, payload_end-payload_start)
