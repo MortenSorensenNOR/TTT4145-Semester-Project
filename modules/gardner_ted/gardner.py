@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
-    from modules import gardner_ext as _ext
+    from modules.gardner_ted import gardner_ext as _ext
     logger.info("Loaded gardner_ext pybind11 C++ extension.")
 except ImportError:
     _ext = None
