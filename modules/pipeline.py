@@ -27,7 +27,7 @@ class PipelineConfig:
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
-    GARDNER_CONFIG = GardnerConfig(0.007) #Probably needs more tuning (can overshoot at low SNR above 0.007 at PSK8)
+    GARDNER_CONFIG = GardnerConfig(0.0025) #Probably needs more tuning
 
     pulse_shaping: bool = True
     pilots: bool = False
