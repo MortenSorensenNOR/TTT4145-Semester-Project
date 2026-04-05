@@ -264,7 +264,7 @@ class RXPipeline:
             case ModulationSchemes.PSK8:
                 payload_bits_encoded = self.psk8.symbols2bits(rx_syms)
         
-        payload_bits = self.frame_constructor.decode_payload(header, np.concat(payload_bits_encoded))
+        payload_bits = self.frame_constructor.decode_payload(header, np.concatenate(payload_bits_encoded))
         return payload_bits.reshape(-1,1)
 
 if __name__ == "__main__":
