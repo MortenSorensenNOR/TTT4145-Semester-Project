@@ -78,9 +78,14 @@ rx_buffer = tx_signal.copy()
 # Match-filter first; both coarse and fine sync run post-RRC
 filtered_buffer = match_filter(rx_buffer, rrc_taps)
 
+# Decimate to symbol rate for coarse sync (8x smaller buffer)
+decimated_buffer = decimate(filtered_buffer, cfg.SPS)
+fs_sym = cfg.SAMPLE_RATE // cfg.SPS
+
 # Pre-compute coarse result so fine_timing has a valid input
-coarse = coarse_sync(filtered_buffer, cfg.SAMPLE_RATE, cfg.SPS, sync_cfg)
-fine   = fine_timing(filtered_buffer, long_ref, coarse.d_hats, coarse.cfo_hats,
+coarse = coarse_sync(decimated_buffer, fs_sym, 1, sync_cfg)
+d_hats_samples = coarse.d_hats * cfg.SPS
+fine   = fine_timing(filtered_buffer, long_ref, d_hats_samples, coarse.cfo_hats,
                      cfg.SAMPLE_RATE, cfg.SPS, sync_cfg, ref_f)
 
 # Symbol buffers for Costas loop
@@ -129,16 +134,16 @@ results.append(bench(
     lambda: match_filter(rx_buffer, rrc_taps),
 ))
 
-# 3. Coarse sync — Schmidl-Cox (full buffer scan, post-RRC)
+# 3. Coarse sync — Schmidl-Cox (decimated buffer, symbol rate)
 results.append(bench(
-    "RX: coarse_sync (Schmidl-Cox)",
-    lambda: coarse_sync(filtered_buffer, cfg.SAMPLE_RATE, cfg.SPS, sync_cfg),
+    "RX: coarse_sync (Schmidl-Cox, decimated)",
+    lambda: coarse_sync(decimated_buffer, fs_sym, 1, sync_cfg),
 ))
 
-# 4. Fine timing — FFT cross-correlation (post-RRC)
+# 4. Fine timing — FFT cross-correlation (full-rate filtered buffer)
 results.append(bench(
     "RX: fine_timing (FFT xcorr)",
-    lambda: fine_timing(filtered_buffer, long_ref, coarse.d_hats, coarse.cfo_hats,
+    lambda: fine_timing(filtered_buffer, long_ref, d_hats_samples, coarse.cfo_hats,
                         cfg.SAMPLE_RATE, cfg.SPS, sync_cfg, ref_f),
 ))
 

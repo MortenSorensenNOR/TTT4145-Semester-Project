@@ -47,6 +47,15 @@ def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
     filtered = np.convolve(upsampled, rrc_taps, mode="full")
     return filtered
 
+
+def upsample_no_filter(symbols: np.ndarray, sps: int) -> np.ndarray:
+    """Zero-insert at sps rate without any filtering (for hardware RRC path)."""
+    if len(symbols) == 0:
+        return np.ndarray([], dtype=np.complex64)
+    upsampled = np.zeros(len(symbols) * sps, dtype=np.complex64)
+    upsampled[::sps] = symbols.astype(np.complex64)
+    return upsampled
+
 def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
     """Match-filter with RRC taps, strip group delay, and decimate."""
 

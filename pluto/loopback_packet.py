@@ -36,7 +36,6 @@ from pluto.config import (
     configure_tx,
 )
 
-PLUTO_IP = "ip:192.168.2.1"
 N_FLUSH  = 10   # RX flushes before capture to discard stale samples
 
 # ---------------------------------------------------------------------------
@@ -47,6 +46,7 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.R
 parser.add_argument("--gain",    type=float, default=-30,  help="TX gain in dB (default: -30)")
 parser.add_argument("--payload", type=int,   default=10,  help="Payload bytes (default: 100)")
 parser.add_argument("--trials",  type=int,   default=3,    help="Number of RX captures (default: 3)")
+parser.add_argument("--ip", type=str, default="192.168.2.1", help="ip of pluto")
 args = parser.parse_args()
 
 # ---------------------------------------------------------------------------
@@ -100,6 +100,7 @@ print(f"TX gain         : {args.gain} dB\n")
 # Configure SDR
 # ---------------------------------------------------------------------------
 
+PLUTO_IP = "ip:" + args.ip
 sdr = adi.Pluto(PLUTO_IP)
 configure_tx(sdr, freq=CENTER_FREQ, gain=args.gain, cyclic=True)
 configure_rx(sdr, freq=CENTER_FREQ, gain_mode="manual")

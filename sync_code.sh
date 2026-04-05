@@ -26,7 +26,7 @@ if [ "$1" == "pluto" ]; then
 
     echo "Syncing to Pluto $2 ($REMOTE)..."
 
-    rsync -avz --exclude '.venv' --exclude '__pycache__' --exclude '.git' --exclude 'vendor' --exclude "uv.lock" \
+    sshpass -p analog rsync -avz --exclude '.venv' --exclude '__pycache__' --exclude '.git' --exclude 'vendor' --exclude "uv.lock" \
         ./ "$REMOTE:$REMOTE_DIR/"
 
     exit 0
@@ -40,6 +40,9 @@ echo "Syncing to default remote ($REMOTE)..."
 if [ $# -eq 0 ]; then
     rsync -avz --exclude '.venv' --exclude '__pycache__' --exclude '.git' --exclude 'vendor' --exclude "uv.lock" \
         ./ "$REMOTE:$REMOTE_DIR/"
+
+    echo "Syncing from $REMOTE to Pluto A and B..."
+    ssh "$REMOTE" "cd $REMOTE_DIR && ./sync_code.sh pluto A && ./sync_code.sh pluto B"
 else
     for f in "$@"; do
         rsync -avz "$f" "$REMOTE:$REMOTE_DIR/$f"

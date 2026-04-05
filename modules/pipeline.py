@@ -36,6 +36,10 @@ class PipelineConfig:
     channnel_coding: bool = False
     interleaving: bool = False
     cfo_correction: bool = True
+    # When True: TX skips software RRC convolution (just zero-inserts),
+    # RX skips software match-filter — both assume the Pluto FPGA's
+    # hardware RRC filter is active between the AD9363 and DMA.
+    hardware_rrc: bool = False
 
 @dataclass
 class Packet:
@@ -96,8 +100,11 @@ class TXPipeline:
         # construct signal
         tx_syms = np.concatenate([self.guard_syms,self.sync_syms, self.pre_header_guard_syms, header_syms, payload_syms,self.guard_syms])
 
-        # upsample and filter
-        tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
+        # upsample and filter (skip SW RRC if hardware filter handles it)
+        if self.config.hardware_rrc:
+            tx_signal = upsample_no_filter(tx_syms, self.config.SPS)
+        else:
+            tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
         return tx_signal
 
 @dataclass
@@ -127,7 +134,8 @@ class RXPipeline:
 
     def receive(self, buffer: np.ndarray) -> list[Packet]:
         """Detect and decode all frames in buffer."""
-        filtered_buffer = match_filter(buffer, self.rrc_taps)
+        # Skip SW match-filter if hardware RRC already did it
+        filtered_buffer = buffer if self.config.hardware_rrc else match_filter(buffer, self.rrc_taps)
         detections = self.detect(filtered_buffer)
         if not detections:
             return []
@@ -151,12 +159,20 @@ class RXPipeline:
         return packets
 
     def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:
-        """Detect frames in a match-filtered buffer. Both coarse and fine sync run post-RRC."""
+        """Detect frames in a match-filtered buffer. Both coarse and fine sync run post-RRC.
+
+        Coarse sync runs on a decimated (symbol-rate) copy of the buffer for speed (~8x).
+        Fine timing runs on the full-rate filtered buffer for sub-sample precision.
+        d_hats from coarse (symbol indices) are converted back to sample indices before
+        passing to fine timing.
+        """
         cfg = self.config.SYNC_CONFIG
         sps = self.config.SPS
+        fs_sym = self.config.SAMPLE_RATE // sps  # symbol rate
 
+        decimated = decimate(filtered_buffer, sps)
         try:
-            coarse = coarse_sync(filtered_buffer, self.config.SAMPLE_RATE, sps, cfg)
+            coarse = coarse_sync(decimated, fs_sym, 1, cfg)
         except Exception as e:
             print(e)
             return []
@@ -165,8 +181,11 @@ class RXPipeline:
             print("no")
             return []
 
+        # Convert symbol-domain d_hats back to sample-domain for fine timing
+        d_hats_samples = coarse.d_hats * sps
+
         try:
-            fine = fine_timing(filtered_buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
+            fine = fine_timing(filtered_buffer, self.long_ref, d_hats_samples, coarse.cfo_hats,
                                self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
         except Exception as e:
             print(e)
