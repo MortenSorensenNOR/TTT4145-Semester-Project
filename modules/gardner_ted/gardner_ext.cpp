@@ -101,7 +101,17 @@ static inline float ted_qpsk(cx64 prev, cx64 mid, cx64 curr)
     cx64 d = prev - curr;
     return mid.real()*d.real() + mid.imag()*d.imag();
 }
-
+/*
+static inline float ted_8psk(cx64 prev, cx64 mid, cx64 curr)
+{
+    // Plain complex Gardner — identical to QPSK.
+    // The variable TED gain across 8-PSK transition types averages out over
+    // many symbols and does not prevent convergence.
+    // Previous normalisations (/|mid| or /|diff|^2) produced unstable S-curves.
+    cx64 d = prev - curr;
+    return mid.real()*d.real() + mid.imag()*d.imag();
+}
+*/
 static inline float ted_8psk(cx64 prev, cx64 mid, cx64 curr)
 {
     // Same as QPSK but amplitude-normalised to stabilise TED gain across the
