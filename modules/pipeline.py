@@ -32,7 +32,7 @@ class PipelineConfig:
     pulse_shaping: bool = True
     pilots: bool = False
     costas_loop: bool = True
-    gardner_ted: bool = True
+    gardner_ted: bool = False
     channnel_coding: bool = False
     interleaving: bool = False
     cfo_correction: bool = True
