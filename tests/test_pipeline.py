@@ -8,7 +8,7 @@ from modules.pipeline import *
 from modules.frame_constructor import ModulationSchemes
 from modules.channel import *
 
-MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
+MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK]#, ModulationSchemes.PSK8]
 
 @composite
 def packet_specs(draw):
@@ -276,11 +276,11 @@ def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
     assert_all_received(tx_packets, rx_packets)
 
 if __name__ == "__main__":
-    ber_report()
+    #ber_report()
     replay_scenario(
-        snr_db=19,
-        specs=[(0, 6, ModulationSchemes.PSK8)],  # or any other generated value
+        snr_db=17.5,
+        specs=[(0, 6, ModulationSchemes.QPSK), (1, 6, ModulationSchemes.QPSK)],  # or any other generated value
         cfo_hz=0.0,
-        phase=-0.0,
-        seed=2,  # or any other generated value
+        phase=1.0,
+        seed=4,  # or any other generated value
     )

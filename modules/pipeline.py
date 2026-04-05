@@ -28,11 +28,12 @@ class PipelineConfig:
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
+    GARDNER_CONFIG = GardnerConfig(0.07)
 
     pulse_shaping: bool = True
     pilots: bool = False
     costas_loop: bool = True
-    gardner_ted: bool = False # Not working!
+    gardner_ted: bool = True # Not working correctly!
     channnel_coding: bool = False
     interleaving: bool = False
     cfo_correction: bool = True
@@ -212,11 +213,11 @@ class RXPipeline:
         print("current_pahse_estimate:",current_phase_estimate)
 
         if self.config.gardner_ted:
-            guard = self.config.SPS//2
-            header_syms = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard], self.config.SPS)
+            guard = self.config.SPS
+            header_syms, timing_estimates = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, ModulationSchemes.BPSK, self.config.SPS)
         else:
             header_syms = decimate(buffer[:header_end*self.config.SPS], self.config.SPS)
-
+        print(timing_estimates)
         # costas correction
         if self.config.costas_loop:
             header_syms_corr, phase_est = apply_costas_loop(header_syms[:header_end], self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
@@ -244,11 +245,11 @@ class RXPipeline:
             raise IndexError(msg)
         
         if self.config.gardner_ted:
-            guard = self.config.SPS
-            rx_syms = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard], self.config.SPS)
+            guard = self.config.SPS//2
+            rx_syms, timing_estimates = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.GARDNER_CONFIG, header.mod_scheme, self.config.SPS, current_frequency_offset=cfo)
         else:
             rx_syms = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS)
-
+        print(timing_estimates, rx_syms.shape, payload_end-payload_start)
         print("current_phase_estimate:", current_phase_estimate)
 
         if self.config.costas_loop:
