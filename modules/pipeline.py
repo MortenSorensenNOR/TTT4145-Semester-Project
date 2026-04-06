@@ -164,8 +164,10 @@ class RXPipeline:
     def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:
         """Detect frames in a match-filtered buffer. Both coarse and fine sync run post-RRC.
 
-        Both coarse and fine sync run on a decimated (symbol-rate) copy of the buffer.
-        Output sample indices are converted back to the full-rate domain for decode().
+        Coarse sync runs on a decimated (symbol-rate) copy for speed (~8x).
+        Fine timing runs on the full-rate filtered buffer to preserve sub-symbol
+        timing precision needed for correct decimation in decode().
+        d_hats from coarse (symbol indices) are converted to sample indices first.
         """
         cfg = self.config.SYNC_CONFIG
         sps = self.config.SPS
@@ -182,15 +184,17 @@ class RXPipeline:
             print("no")
             return []
 
+        # Convert symbol-domain d_hats to sample-domain for full-rate fine timing
+        d_hats_samples = coarse.d_hats * sps
+
         try:
-            fine = fine_timing(decimated, self.long_ref_dec, coarse.d_hats, coarse.cfo_hats,
-                               fs_sym, 1, cfg, self.ref_f_dec)
+            fine = fine_timing(filtered_buffer, self.long_ref, d_hats_samples, coarse.cfo_hats,
+                               self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
         except Exception as e:
             print(e)
             return []
 
-        # fine.sample_idxs are in symbol units; convert to sample indices for decode()
-        payload_starts = (fine.sample_idxs + len(self.long_ref_dec)) * sps
+        payload_starts = fine.sample_idxs + len(self.long_ref)
         return [
             DetectionResult(
                 payload_start=int(payload_starts[i]),

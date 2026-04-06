@@ -38,7 +38,7 @@ class SynchronizerConfig:
     short_preamble_nreps: int = 8
 
     long_preamble_nsym: int = 113
-    long_margin_nsym: int = 140
+    long_margin_nsym: int = 15
 
     energy_floor: np.float32 = np.finfo(np.float32).tiny
     detection_threshold: np.float32 = np.float32(0.5)
@@ -234,8 +234,8 @@ def fine_timing(
 
     # (n_frames, window_len) index array via broadcasting
     indices = starts[:, None] + np.arange(window_len)
-    cfo_phase = (-2j * np.pi * (cfo_hats[:, None] / fs) * indices).astype(np.complex64)
-    windows = samples[indices] * np.exp(cfo_phase)
+    phase_rad = (-2 * np.pi * (cfo_hats[:, None] / fs) * indices).astype(np.float32)
+    windows = samples[indices] * (np.cos(phase_rad) + 1j * np.sin(phase_rad)).astype(np.complex64)
 
     # Batch cross-correlation via FFT
     valid_len = window_len - len(long_ref) + 1

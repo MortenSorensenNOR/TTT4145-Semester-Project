@@ -53,7 +53,7 @@ args = parser.parse_args()
 # Build pipelines
 # ---------------------------------------------------------------------------
 
-pipe_cfg = PipelineConfig()
+pipe_cfg = PipelineConfig(hardware_rrc=True)
 tx_pipe  = TXPipeline(pipe_cfg)
 rx_pipe  = RXPipeline(pipe_cfg)
 

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REMOTE="radiotester@100.114.51.4"
-PLUTO_IP="192.168.2.1"
+PLUTO_IP="192.168.3.1"
 PLUTO_USER="root"
 PLUTO_PASS="analog"
 

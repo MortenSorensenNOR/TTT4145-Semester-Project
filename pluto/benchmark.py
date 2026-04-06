@@ -85,9 +85,10 @@ decimated_buffer = decimate(filtered_buffer, cfg.SPS)
 fs_sym = cfg.SAMPLE_RATE // cfg.SPS
 
 # Pre-compute coarse/fine results so downstream benchmarks have valid inputs
-coarse = coarse_sync(decimated_buffer, fs_sym, 1, sync_cfg)
-fine   = fine_timing(decimated_buffer, long_ref_dec, coarse.d_hats, coarse.cfo_hats,
-                     fs_sym, 1, sync_cfg, ref_f_dec)
+coarse         = coarse_sync(decimated_buffer, fs_sym, 1, sync_cfg)
+d_hats_samples = coarse.d_hats * cfg.SPS
+fine           = fine_timing(filtered_buffer, long_ref, d_hats_samples, coarse.cfo_hats,
+                             cfg.SAMPLE_RATE, cfg.SPS, sync_cfg, ref_f)
 
 # Symbol buffers for Costas loop
 header_end_sym = 2 * fc.header_config.header_total_size
@@ -141,11 +142,11 @@ results.append(bench(
     lambda: coarse_sync(decimated_buffer, fs_sym, 1, sync_cfg),
 ))
 
-# 4. Fine timing — FFT cross-correlation (decimated buffer, symbol rate)
+# 4. Fine timing — FFT cross-correlation (full-rate buffer, margin=15 → FFT size 2048)
 results.append(bench(
-    "RX: fine_timing (FFT xcorr, decimated)",
-    lambda: fine_timing(decimated_buffer, long_ref_dec, coarse.d_hats, coarse.cfo_hats,
-                        fs_sym, 1, sync_cfg, ref_f_dec),
+    "RX: fine_timing (FFT xcorr)",
+    lambda: fine_timing(filtered_buffer, long_ref, d_hats_samples, coarse.cfo_hats,
+                        cfg.SAMPLE_RATE, cfg.SPS, sync_cfg, ref_f),
 ))
 
 # 5. Costas loop — header (BPSK)
