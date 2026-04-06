@@ -17,16 +17,16 @@ if TYPE_CHECKING:
 
     import adi
 
-SAMPLE_RATE = 5_336_000
+SAMPLE_RATE = 2_400_000
 CENTER_FREQ = 2_400_000_000
-SPS = 8
+SPS = 4
 SPAN = 8
-RRC_ALPHA = 0.35
+RRC_ALPHA = 0.25
 RRC_NUM_TAPS = 2 * SPS * SPAN + 1
 DAC_SCALE = 2**14
 RX_GAIN = 70.0
 MOD_SCHEME = ModulationSchemes.QPSK
-CODING_RATE = CodeRates.THREE_QUARTER_RATE  # Higher rate = more throughput (needs good SNR)
+CODING_RATE = CodeRates.NONE  # Higher rate = more throughput (needs good SNR)
 DEFAULT_TX_GAIN = -50
 RX_BUFFER_SIZE = 2**14  # Smaller buffer = lower latency
 NODE_SRC = 0

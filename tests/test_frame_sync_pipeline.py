@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
-from modules.frame_sync import (
+from modules.frame_sync.frame_sync import (
     SynchronizerConfig,
     build_long_ref,
     coarse_sync,

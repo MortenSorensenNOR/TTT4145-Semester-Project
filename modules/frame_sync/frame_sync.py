@@ -17,10 +17,23 @@ References:
 
 """
 
+import logging
 from dataclasses import dataclass
 from math import isqrt
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+try:
+    from modules.frame_sync import frame_sync_ext as _ext
+    logger.info("Loaded frame_sync_ext pybind11 C++ extension.")
+except ImportError:
+    _ext = None
+    logger.warning(
+        "frame_sync_ext not found — falling back to pure-Python implementation. "
+        "Build it with: uv run python setup.py build_ext --inplace"
+    )
 
 
 def _is_prime(n: int) -> bool:
@@ -148,6 +161,14 @@ def coarse_sync(
         msg = f"samples too short ({len(samples)} samples): need >= 2L={2 * sample_cnt} for two adjacent windows"
         raise ValueError(msg)
 
+    if _ext is not None:
+        d_hats, cfo_hats, m_peaks = _ext.coarse_sync(
+            samples, fs, samples_per_symbol,
+            cfg.short_preamble_nsym, cfg.short_preamble_nreps, cfg.long_preamble_nsym,
+            float(cfg.energy_floor), float(cfg.detection_threshold), float(cfg.energy_gate_fraction),
+        )
+        return CoarseResult(d_hats, cfo_hats, m_peaks)
+
     samples = samples.astype(np.complex64)
     cs_p = np.concatenate((np.zeros(1, dtype=np.complex64), np.cumsum(np.conj(samples[:-sample_cnt]) * samples[sample_cnt:])))
     p_d = cs_p[sample_cnt:] - cs_p[:-sample_cnt]
@@ -222,6 +243,18 @@ def fine_timing(
     d_hats = np.atleast_1d(np.asarray(d_hats, dtype=np.intp))
     cfo_hats = np.atleast_1d(np.asarray(cfo_hats, dtype=np.float32))
 
+    if _ext is not None:
+        sample_idxs, peak_ratios, phase_estimates = _ext.fine_timing(
+            samples, long_ref, d_hats, cfo_hats,
+            fs, samples_per_symbol,
+            cfg.short_preamble_nsym, cfg.short_preamble_nreps, cfg.long_margin_nsym,
+        )
+        return FineResult(
+            sample_idxs=sample_idxs,
+            peak_ratios=peak_ratios,
+            phase_estimates=phase_estimates,
+        )
+
     samples_per_rep = cfg.short_preamble_nsym * samples_per_symbol
     sample_margin = cfg.long_margin_nsym * samples_per_symbol
     window_len = 2 * sample_margin + len(long_ref)
@@ -267,4 +300,3 @@ def fine_timing(
         peak_ratios=np.max(z_mag, axis=1) / np.where(z_mean == 0, 1, z_mean),
         phase_estimates=phase_at_payload%(2*np.pi),
     )
-

@@ -6,7 +6,7 @@ from modules.pulse_shaping import *
 from modules.modulators import *
 from modules.frame_constructor import *
 from modules.golay import *
-from modules.frame_sync import *
+from modules.frame_sync.frame_sync import *
 from modules.costas_loop.costas import *
 # from modules.ldpc.ldpc import *
 from modules.ldpc.channel_coding import *

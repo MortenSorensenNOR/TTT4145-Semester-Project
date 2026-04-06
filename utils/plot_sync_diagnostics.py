@@ -16,7 +16,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from modules.frame_sync import (
+from modules.frame_sync.frame_sync import (
     CoarseResult,
     SynchronizerConfig,
     build_long_ref,
