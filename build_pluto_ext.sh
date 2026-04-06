@@ -40,4 +40,7 @@ compile modules/costas_loop/costas_pybind11.cpp \
 compile modules/gardner_ted/gardner_ext.cpp \
         modules/gardner_ted/gardner_ext.cpython-311-arm-linux-gnueabihf.so
 
+compile modules/frame_sync/frame_sync_ext.cpp \
+        modules/frame_sync/frame_sync_ext.cpython-311-arm-linux-gnueabihf.so
+
 echo "==> Done"
