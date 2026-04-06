@@ -243,18 +243,6 @@ def fine_timing(
     d_hats = np.atleast_1d(np.asarray(d_hats, dtype=np.intp))
     cfo_hats = np.atleast_1d(np.asarray(cfo_hats, dtype=np.float32))
 
-    if _ext is not None:
-        sample_idxs, peak_ratios, phase_estimates = _ext.fine_timing(
-            samples, long_ref, d_hats, cfo_hats,
-            fs, samples_per_symbol,
-            cfg.short_preamble_nsym, cfg.short_preamble_nreps, cfg.long_margin_nsym,
-        )
-        return FineResult(
-            sample_idxs=sample_idxs,
-            peak_ratios=peak_ratios,
-            phase_estimates=phase_estimates,
-        )
-
     samples_per_rep = cfg.short_preamble_nsym * samples_per_symbol
     sample_margin = cfg.long_margin_nsym * samples_per_symbol
     window_len = 2 * sample_margin + len(long_ref)
