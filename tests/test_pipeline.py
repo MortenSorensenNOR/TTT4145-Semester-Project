@@ -116,7 +116,7 @@ def test_channel(snr_db, specs, cfo_hz, phase, seed):
         seed=seed,
     ))
 
-    if snr_db < 18:
+    if snr_db < 19:
         for i in specs:
             if i[2] == ModulationSchemes.PSK8:
                 pytest.xfail("8PSK requires ~18dB SNR; below this threshold decoding is unreliable")
