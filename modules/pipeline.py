@@ -92,7 +92,7 @@ class TXPipeline:
             sequence_number=packet.seq_num,
         )
         (header_bits, payload_bits) = self.frame_constructor.encode(header, packet.payload)
-        print("header_bits:", header_bits)
+
         # modulate
         header_syms = self.bpsk.bits2symbols(header_bits)
         payload_syms = self.payload_modulator.bits2symbols(payload_bits.reshape(-1, header.mod_scheme.value+1))#.reshape(-1, header.mod_scheme.value+1))
@@ -143,21 +143,22 @@ class RXPipeline:
         if not detections:
             return []
 
-        for det in detections:
-            print(
-                f"Found: start {det.payload_start}, "
-                f"cfo: {det.cfo_estimate}, phase: {det.phase_estimate}"
-            )
+        # for det in detections:
+        #     print(
+        #         f"Found: start {det.payload_start}, "
+        #         f"cfo: {det.cfo_estimate}, phase: {det.phase_estimate}"
+        #     )
 
         packets = []
         for det in detections:
             rx_syms = filtered_buffer[det.payload_start:]
-            print("\ndetection at index:", det.payload_start)
+            # print("\ndetection at index:", det.payload_start)
             try:
                 decoded_packet = self.decode(rx_syms, det.cfo_estimate, det.phase_estimate)
                 packets.append(decoded_packet)
             except Exception as e:
-                print("DECODE ERROR:", e)
+                # print("DECODE ERROR:", e)
+                pass
 
         return packets
 
@@ -177,11 +178,10 @@ class RXPipeline:
         try:
             coarse = coarse_sync(decimated, fs_sym, 1, cfg)
         except Exception as e:
-            print(e)
+            # print(e)
             return []
 
         if coarse.m_peaks.size == 0:
-            print("no")
             return []
 
         # Convert symbol-domain d_hats to sample-domain for full-rate fine timing
@@ -191,7 +191,7 @@ class RXPipeline:
             fine = fine_timing(filtered_buffer, self.long_ref, d_hats_samples, coarse.cfo_hats,
                                self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
         except Exception as e:
-            print(e)
+            # print(e)
             return []
 
         payload_starts = fine.sample_idxs + len(self.long_ref)
@@ -231,8 +231,6 @@ class RXPipeline:
             msg = "header end is outside of buffer"
             raise IndexError(msg)
 
-        print("current_pahse_estimate:",current_phase_estimate)
-
         if self.config.gardner_ted:
             guard = self.config.SPS
             header_syms, timing_est = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, ModulationSchemes.BPSK, self.config.SPS)
@@ -252,7 +250,6 @@ class RXPipeline:
 
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
-        print("header_bits:", header_bits.flatten())
         header = self.frame_constructor.decode_header(header_bits)
 
         return header, header_end, phase_est[-1], timing_est[-1]
@@ -269,14 +266,12 @@ class RXPipeline:
             rx_syms, timing_est = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, header.mod_scheme, self.config.SPS, current_timing_offset=current_timing_estimate)
         else:
             rx_syms, timing_est = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS), [0.0]
-        print("current_phase_estimate:", current_phase_estimate)
 
         if self.config.costas_loop:
             rx_syms, phase_est = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
         else:
             rx_syms = rx_syms[:payload_end-payload_start]
 
-        print("modulation:", header.mod_scheme)
         # demodulate
         match (header.mod_scheme):
             case ModulationSchemes.BPSK:

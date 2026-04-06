@@ -276,7 +276,7 @@ def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
     assert_all_received(tx_packets, rx_packets)
 
 if __name__ == "__main__":
-    ber_report()
+    # ber_report()
     replay_scenario(
         snr_db=20, # fails at 18
         specs=[(0, 6, ModulationSchemes.BPSK),

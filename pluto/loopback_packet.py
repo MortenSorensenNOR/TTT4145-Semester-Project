@@ -17,6 +17,7 @@ Flags (all optional):
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -123,9 +124,13 @@ failed = 0
 for trial in range(args.trials):
     rx_raw = sdr.rx().astype(np.complex64)
     rx_raw = 2 * rx_raw / DAC_SCALE
-    np.save(f"pluto/plots/rx_raw_{trial}.npy", rx_raw)
 
+    start = time.perf_counter()
     packets = rx_pipe.receive(rx_raw.astype(np.complex64))
+
+    end = time.perf_counter()
+    time_rx = end - start
+    print(f"Koden tok {time_rx:.4f} sekunder å kjøre.")
 
     if not packets:
         print(f"[Trial {trial + 1}/{args.trials}] FAIL — no frame detected")

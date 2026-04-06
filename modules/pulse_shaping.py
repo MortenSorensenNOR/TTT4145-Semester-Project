@@ -35,7 +35,9 @@ def rrc_filter(sps: int, alpha: np.float32, num_taps: int) -> np.ndarray:
         ],
     )
 
-    return (h / np.sqrt(np.sum(h**2))).astype(np.float32)
+    # h_norm = (h / np.sqrt(np.sum(h**2))) 
+    h_norm = h / np.max(h)
+    return h_norm.astype(np.float32)
 
 
 def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
