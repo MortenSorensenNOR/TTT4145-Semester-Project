@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 import numpy as np
-import time
+
 from modules.golay import Golay
 
 def int_to_bits(n: int, length: int) -> np.ndarray:
@@ -233,12 +233,8 @@ class FrameConstructor:
     def decode_header(self, header_encoded: np.ndarray) -> FrameHeader:
         """Decode a Golay-encoded header and verify CRC."""
         header_hard = header_encoded.astype(np.int8)
-        start = time.perf_counter()
         header_bits = self.golay.decode(header_hard)
-        print("golay: ", (time.perf_counter()-start)*1e3)
-        start_2 = time.perf_counter()
         header = self.frame_header_constructor.decode(header_bits)
-        print("decode:", (time.perf_counter()-start_2)*1e3)
         if not header.crc_passed:
             msg = "Header did not yield valid crc"
             raise ValueError(msg)
