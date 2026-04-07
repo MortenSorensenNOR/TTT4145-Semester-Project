@@ -4,15 +4,21 @@
 //
 // Optimisations applied:
 //   - LUT-based sin/cos (avoids libm on every symbol — critical on ARM A9)
+//   - LUT reduced to 256 entries (2 KB, well within A9 32 KB L1 data cache)
+//   - LUT_SCALE precomputed — replaces float divide in phase_to_idx
+//   - wrap() uses conditionals instead of fmod() — avoids libm call per symbol
+//   - SoA split removed — inner loop is sequential (phase feedback dependency),
+//     so SoA gave no vectorisation benefit and added two redundant array passes
+//   - Output written directly in the inner loop — eliminates second pack pass
+//     and out_re/out_im allocations
 //   - 8PSK: repeated multiply instead of std::pow (avoids log/exp)
-//   - SoA (struct-of-arrays) layout in the inner loop for NEON auto-vectorisation
+//   - 8PSK: atan2 called explicitly with *(-ffast-math) for faster approximation
 //   - Compiled with -O3 -ffast-math on all platforms
 //   - Additional -mcpu=cortex-a9 -mfpu=neon flags applied on ARM (see costas_setup.py)
 
 #include <cmath>
 #include <complex>
 #include <vector>
-
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 
@@ -25,32 +31,40 @@ using f32 = float;
 #endif
 
 // ---------------------------------------------------------------------------
-// Sin/cos LUT  (1024 entries = 8 KB, fits in A9 32 KB L1 data cache)
+// Sin/cos LUT
+// 256 entries = 2 KB, comfortably within A9 32 KB L1 data cache.
+// 256 steps gives ~1.4 degree resolution which is sufficient for a Costas loop.
 // ---------------------------------------------------------------------------
+static constexpr int   LUT_SIZE  = 256;
+static constexpr f32   TWO_PI    = 2.0f * static_cast<f32>(M_PI);
+static constexpr f32   LUT_SCALE = LUT_SIZE / TWO_PI;  // precomputed: avoids divide in hot path
 
-static constexpr int LUT_SIZE = 1024;
 static f32 sin_lut[LUT_SIZE];
 static f32 cos_lut[LUT_SIZE];
 
 static void init_lut() {
     for (int i = 0; i < LUT_SIZE; ++i) {
-        f32 a = (2.0f * static_cast<f32>(M_PI) * i) / LUT_SIZE;
+        f32 a    = TWO_PI * i / LUT_SIZE;
         sin_lut[i] = std::sin(a);
         cos_lut[i] = std::cos(a);
     }
 }
 
-// Map a phase in [-π, π] to a LUT index
+// Map phase in [-π, π] to LUT index.
+// Multiply by precomputed LUT_SCALE instead of dividing by 2π each call.
 static inline int phase_to_idx(f32 phase) {
-    f32 norm = (phase + static_cast<f32>(M_PI)) / (2.0f * static_cast<f32>(M_PI));
-    return static_cast<int>(norm * LUT_SIZE) & (LUT_SIZE - 1);
+    return static_cast<int>((phase + static_cast<f32>(M_PI)) * LUT_SCALE)
+           & (LUT_SIZE - 1);
 }
 
-// Wrap phase to [-π, π]
+// Wrap phase to [-π, π].
+// Replaces fmod() (a libm call, ~20-40 cycles on A9) with two comparisons.
+// Safe as long as phase doesn't jump by more than 2π per symbol, which a
+// well-tuned Costas loop guarantees.
 static inline f32 wrap(f32 phase) {
-    return std::fmod(phase + static_cast<f32>(M_PI),
-                     2.0f * static_cast<f32>(M_PI))
-           - static_cast<f32>(M_PI);
+    if (phase >  static_cast<f32>(M_PI)) return phase - TWO_PI;
+    if (phase < -static_cast<f32>(M_PI)) return phase + TWO_PI;
+    return phase;
 }
 
 static inline f32 fsign(f32 x) { return (x > 0.0f) ? 1.0f : -1.0f; }
@@ -58,7 +72,6 @@ static inline f32 fsign(f32 x) { return (x > 0.0f) ? 1.0f : -1.0f; }
 // ---------------------------------------------------------------------------
 // Return type — unpackable as (corrected_symbols, phase_estimates)
 // ---------------------------------------------------------------------------
-
 struct LoopResult {
     py::array_t<c64> corrected_symbols;
     py::array_t<f32> phase_estimates;
@@ -67,7 +80,6 @@ struct LoopResult {
 // ---------------------------------------------------------------------------
 // BPSK  —  error = Im{y'} * sign(Re{y'})
 // ---------------------------------------------------------------------------
-
 LoopResult costas_loop_bpsk(
     py::array_t<c64, py::array::c_style | py::array::forcecast> symbols,
     f32 alpha, f32 beta,
@@ -77,37 +89,38 @@ LoopResult costas_loop_bpsk(
     auto in = symbols.unchecked<1>();
     int  n  = static_cast<int>(in.shape(0));
 
-    // SoA split — lets the compiler vectorise the correction multiply with NEON
-    std::vector<f32> re(n), im(n);
-    for (int i = 0; i < n; ++i) { re[i] = in(i).real(); im[i] = in(i).imag(); }
-
-    std::vector<f32> out_re(n), out_im(n);
+    // Allocate outputs once; write directly in the inner loop.
+    // Eliminates out_re/out_im vectors and the second pack pass.
+    auto out_syms  = py::array_t<c64>(n);
     auto out_phase = py::array_t<f32>(n);
+    auto syms_ptr  = out_syms.mutable_unchecked<1>();
     auto phase_ptr = out_phase.mutable_unchecked<1>();
 
     for (int i = 0; i < n; ++i) {
-        int idx = phase_to_idx(phase_estimate);
-        f32 cr  =  re[i] * cos_lut[idx] + im[i] * sin_lut[idx];
-        f32 ci  =  -re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
+        const f32 sr  = in(i).real();
+        const f32 si  = in(i).imag();
+        const int idx = phase_to_idx(phase_estimate);
+        const f32 c   = cos_lut[idx];
+        const f32 s   = sin_lut[idx];
 
-        f32 error       = ci * fsign(cr);
+        const f32 cr =  sr * c + si * s;
+        const f32 ci = -sr * s + si * c;
+
+        const f32 error = ci * fsign(cr);
         integrator     += beta  * error;
         phase_estimate += alpha * error + integrator;
         phase_estimate  = wrap(phase_estimate);
 
-        out_re[i] = cr; out_im[i] = ci; phase_ptr(i) = phase_estimate;
+        syms_ptr(i)  = c64(cr, ci);
+        phase_ptr(i) = phase_estimate;
     }
 
-    auto out_syms = py::array_t<c64>(n);
-    auto syms_ptr = out_syms.mutable_unchecked<1>();
-    for (int i = 0; i < n; ++i) syms_ptr(i) = c64(out_re[i], out_im[i]);
     return {std::move(out_syms), std::move(out_phase)};
 }
 
 // ---------------------------------------------------------------------------
 // QPSK  —  error = Im{y'}*sign(Re{y'}) - Re{y'}*sign(Im{y'})
 // ---------------------------------------------------------------------------
-
 LoopResult costas_loop_qpsk(
     py::array_t<c64, py::array::c_style | py::array::forcecast> symbols,
     f32 alpha, f32 beta,
@@ -117,40 +130,43 @@ LoopResult costas_loop_qpsk(
     auto in = symbols.unchecked<1>();
     int  n  = static_cast<int>(in.shape(0));
 
-    std::vector<f32> re(n), im(n);
-    for (int i = 0; i < n; ++i) { re[i] = in(i).real(); im[i] = in(i).imag(); }
-
-    std::vector<f32> out_re(n), out_im(n);
+    auto out_syms  = py::array_t<c64>(n);
     auto out_phase = py::array_t<f32>(n);
+    auto syms_ptr  = out_syms.mutable_unchecked<1>();
     auto phase_ptr = out_phase.mutable_unchecked<1>();
 
     for (int i = 0; i < n; ++i) {
-        int idx = phase_to_idx(phase_estimate);
-        f32 cr  =  re[i] * cos_lut[idx] + im[i] * sin_lut[idx];
-        f32 ci  = -re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
+        const f32 sr  = in(i).real();
+        const f32 si  = in(i).imag();
+        const int idx = phase_to_idx(phase_estimate);
+        const f32 c   = cos_lut[idx];
+        const f32 s   = sin_lut[idx];
 
-        f32 error       = ci * fsign(cr) - cr * fsign(ci);
+        const f32 cr =  sr * c + si * s;
+        const f32 ci = -sr * s + si * c;
+
+        const f32 error = ci * fsign(cr) - cr * fsign(ci);
         integrator     += beta  * error;
         phase_estimate += alpha * error + integrator;
         phase_estimate  = wrap(phase_estimate);
 
-        out_re[i] = cr; out_im[i] = ci; phase_ptr(i) = phase_estimate;
+        syms_ptr(i)  = c64(cr, ci);
+        phase_ptr(i) = phase_estimate;
     }
 
-    auto out_syms = py::array_t<c64>(n);
-    auto syms_ptr = out_syms.mutable_unchecked<1>();
-    for (int i = 0; i < n; ++i) syms_ptr(i) = c64(out_re[i], out_im[i]);
     return {std::move(out_syms), std::move(out_phase)};
 }
 
 // ---------------------------------------------------------------------------
-// 8PSK  —  Mth-power error detector,  error = angle(y'^8) / 8
+// 8PSK  —  Mth-power error detector,  error = atan2(Im{y^8}, Re{y^8}) / 8
 //
 // std::pow(y, 8) replaced with 3 complex multiplies:
 //   y^2 = y*y,  y^4 = y^2*y^2,  y^8 = y^4*y^4
-// This avoids the log/exp path inside std::pow, which is ~200 cycles on A9.
+// This avoids the log/exp path inside std::pow (~200 cycles on A9).
+//
+// std::arg replaced with explicit atan2 — with -ffast-math the compiler
+// may substitute a polynomial approximation, saving ~30-50 cycles vs libm.
 // ---------------------------------------------------------------------------
-
 LoopResult costas_loop_8psk(
     py::array_t<c64, py::array::c_style | py::array::forcecast> symbols,
     f32 alpha, f32 beta,
@@ -160,50 +176,61 @@ LoopResult costas_loop_8psk(
     auto in = symbols.unchecked<1>();
     int  n  = static_cast<int>(in.shape(0));
 
-    std::vector<f32> re(n), im(n);
-    for (int i = 0; i < n; ++i) { re[i] = in(i).real(); im[i] = in(i).imag(); }
-
-    std::vector<f32> out_re(n), out_im(n);
+    auto out_syms  = py::array_t<c64>(n);
     auto out_phase = py::array_t<f32>(n);
+    auto syms_ptr  = out_syms.mutable_unchecked<1>();
     auto phase_ptr = out_phase.mutable_unchecked<1>();
 
-    for (int i = 0; i < n; ++i) {
-        int idx = phase_to_idx(phase_estimate);
-        f32 cr  =  re[i] * cos_lut[idx] + im[i] * sin_lut[idx];
-        f32 ci  = -re[i] * sin_lut[idx] + im[i] * cos_lut[idx];
+    constexpr f32 INV8 = 1.0f / 8.0f;
 
-        c64 y(cr, ci);
-        c64 y2 = y  * y;
-        c64 y4 = y2 * y2;
-        c64 y8 = y4 * y4;
-        f32 error = std::arg(y8) / 8.0f;
+    for (int i = 0; i < n; ++i) {
+        const f32 sr  = in(i).real();
+        const f32 si  = in(i).imag();
+        const int idx = phase_to_idx(phase_estimate);
+        const f32 c   = cos_lut[idx];
+        const f32 s   = sin_lut[idx];
+
+        const f32 cr =  sr * c + si * s;
+        const f32 ci = -sr * s + si * c;
+
+        // y^8 via 3 multiplies — no log/exp
+        const c64 y(cr, ci);
+        const c64 y2 = y  * y;
+        const c64 y4 = y2 * y2;
+        const c64 y8 = y4 * y4;
+
+        // Explicit atan2 — -ffast-math may lower this to a polynomial approx
+        const f32 error = std::atan2(y8.imag(), y8.real()) * INV8;
 
         integrator     += beta  * error;
         phase_estimate += alpha * error + integrator;
         phase_estimate  = wrap(phase_estimate);
 
-        out_re[i] = cr; out_im[i] = ci; phase_ptr(i) = phase_estimate;
+        syms_ptr(i)  = c64(cr, ci);
+        phase_ptr(i) = phase_estimate;
     }
 
-    auto out_syms = py::array_t<c64>(n);
-    auto syms_ptr = out_syms.mutable_unchecked<1>();
-    for (int i = 0; i < n; ++i) syms_ptr(i) = c64(out_re[i], out_im[i]);
     return {std::move(out_syms), std::move(out_phase)};
 }
 
 // ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
-
 PYBIND11_MODULE(costas_ext, m) {
     m.doc() = R"pbdoc(
         Costas loop carrier phase recovery — optimised pybind11 C++ extension.
 
         Optimisations vs naive implementation:
-          - LUT sin/cos           — avoids libm on every symbol
-          - 8PSK y^8 via 3 muls  — no log/exp
-          - SoA layout            — enables NEON auto-vectorisation on ARM
-          - -O3 -ffast-math       — applied on all platforms (see costas_setup.py)
+          - LUT sin/cos (256 entries, 2 KB)  — avoids libm on every symbol
+          - LUT_SCALE precomputed            — replaces float divide per symbol
+          - wrap() via conditionals          — replaces fmod() libm call per symbol
+          - SoA removed                      — inner loop is sequential; SoA added
+                                               allocations with no vectorisation gain
+          - Direct output write              — eliminates second pack loop + 2 allocs
+          - 8PSK y^8 via 3 muls             — no log/exp
+          - explicit atan2 for 8PSK         — -ffast-math may lower to polynomial
+          - -O3 -ffast-math                  — applied on all platforms
+          - -mcpu=cortex-a9 -mfpu=neon      — applied on ARM (see costas_setup.py)
 
         Signature for all three functions:
             (symbols, alpha, beta, phase_estimate=0.0, integrator=0.0)
