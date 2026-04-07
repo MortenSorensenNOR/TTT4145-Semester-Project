@@ -37,7 +37,22 @@ import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
 from pluto.config import CENTER_FREQ, DAC_SCALE, configure_rx, configure_tx
-from pluto.sdr_stream import RxStream
+
+_SCALE = np.float32(2.0 / DAC_SCALE)
+
+
+def _read_buf(sdr: adi.Pluto) -> np.ndarray:
+    """Read one hardware buffer directly, blocking for the hardware fill time."""
+    if not sdr._rxbuf:
+        sdr._rx_init_channels()
+    sdr._rxbuf.refill()
+    raw = np.frombuffer(sdr._rxbuf.read(), dtype=np.int16)
+    arr = np.empty((len(raw) // 2, 2), dtype=np.float32)
+    arr[:, 0] = raw[0::2]
+    arr[:, 1] = raw[1::2]
+    out = arr.view(np.complex64).reshape(-1)
+    out *= _SCALE
+    return out
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -96,14 +111,16 @@ print(f"TX gain   : {args.gain} dB\n")
 # ---------------------------------------------------------------------------
 
 rx_results: list[dict] = []   # [{seq_num, valid, bit_errors}]
-rx_lock = threading.Lock()
-tx_done = threading.Event()
+rx_lock  = threading.Lock()
+tx_done  = threading.Event()
+rx_ready = threading.Event()   # set once RX has flushed stale DMA buffers
 
 # ---------------------------------------------------------------------------
 # TX thread
 # ---------------------------------------------------------------------------
 
 def tx_thread():
+    rx_ready.wait()   # don't transmit until RX has drained stale buffers
     interval_s = args.interval / 1000.0
     for seq in range(args.packets):
         payload_bits = rng.integers(0, 2, args.payload * 8, dtype=np.uint8)
@@ -134,31 +151,28 @@ def tx_thread():
 # RX thread
 # ---------------------------------------------------------------------------
 
-stream = RxStream(sdr)
-stream.start()
-
 def rx_thread():
-    stream.flush(5)
-    # Drain the DMA ring until get() actually blocks — that means we are
-    # at real-time and all pre-buffered stale samples have been discarded.
-    while True:
-        t = time.perf_counter()
-        stream.get()
-        if time.perf_counter() - t > 0.001:
-            break
+    # Drain the libiio kernel DMA ring (typically 4 buffers deep) plus a few
+    # extra to absorb USB scheduling jitter.  Fixed count is more reliable than
+    # a timing threshold because refill() always returns quickly when the
+    # consumer is slightly slower than hardware.
+    for _ in range(16):
+        _read_buf(sdr)
+
+    rx_ready.set()   # tell TX thread it is safe to start transmitting
 
     prev_buf = None
     while not tx_done.is_set() or not _rx_queue_drained():
-        t0 = time.perf_counter()
-        curr_buf = stream.get()
-        t1 = time.perf_counter()
+        # t0 = time.perf_counter()
+        curr_buf = _read_buf(sdr)
+        # t1 = time.perf_counter()
 
         raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
         prev_buf = curr_buf
 
         packets = rx_pipe.receive(raw)
-        t2 = time.perf_counter()
-        print(f"  [RX] get={t1-t0:.3f}s  receive={t2-t1:.3f}s  pkts={len(packets)}", flush=True)
+        # t2 = time.perf_counter()
+        # print(f"  [RX] get={t1-t0:.3f}s  receive={t2-t1:.3f}s  pkts={len(packets)}", flush=True)
 
         if not packets:
             continue
@@ -210,7 +224,6 @@ t_tx.start()
 t_tx.join()
 t_rx.join(timeout=args.packets * args.interval / 1000.0 + 5.0)
 
-stream.stop()
 sdr.tx_destroy_buffer()
 del sdr  # destroy IIO context explicitly while Python state is clean
 
