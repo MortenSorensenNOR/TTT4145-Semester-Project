@@ -25,6 +25,7 @@ Options:
 """
 
 import argparse
+import queue
 import sys
 import threading
 import time
@@ -84,7 +85,7 @@ PLUTO_IP = "ip:" + args.ip
 sdr = adi.Pluto(PLUTO_IP)
 
 configure_tx(sdr, freq=CENTER_FREQ, gain=args.gain, cyclic=False)
-configure_rx(sdr, freq=CENTER_FREQ, gain_mode="slow_attack")
+configure_rx(sdr, freq=CENTER_FREQ, gain_mode="fast_attack")
 
 # Size the RX buffer to hold ~1 full frame.  The RX loop keeps the previous
 # buffer and concatenates it with the current one (2-buffer sliding window) so
@@ -95,7 +96,7 @@ _probe_pkt  = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0,
                      length=args.payload, payload=_probe_bits)
 _probe_samples = tx_pipe.transmit(_probe_pkt)
 frame_len = len(_probe_samples)
-rx_buf_size = int(2 ** np.ceil(np.log2(frame_len)))
+rx_buf_size = 2 * int(2 ** np.ceil(np.log2(frame_len)))
 sdr.rx_buffer_size = rx_buf_size
 
 print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
@@ -123,12 +124,15 @@ def tx_thread():
     rx_ready.wait()   # don't transmit until RX has drained stale buffers
     interval_s = args.interval / 1000.0
     for seq in range(args.packets):
-        payload_bits = rng.integers(0, 2, args.payload * 8, dtype=np.uint8)
+        # convert to 8-bit binary array
+        sequence_bits = np.unpackbits(np.array([seq], dtype=np.uint8))
+        random_bits = rng.integers(0, 2, args.payload * 8 - 8, dtype=np.uint8)
+        payload_bits = np.concatenate([sequence_bits, random_bits])
         pkt = Packet(
             src_mac=0,
             dst_mac=1,
             type=0,
-            seq_num=seq,
+            seq_num=0,
             length=args.payload,
             payload=payload_bits,
         )
@@ -139,7 +143,7 @@ def tx_thread():
         samples = (samples * DAC_SCALE).astype(np.complex64)
 
         sdr.tx(samples)
-        time.sleep(frame_len / pipe_cfg.SAMPLE_RATE + 0.002)  # let frame clock out of DAC
+        time.sleep(frame_len / pipe_cfg.SAMPLE_RATE + 0.020)  # let frame clock out of DAC
         sdr.tx_destroy_buffer()  # flush kernel DMA ring before next packet
         print(f"  [TX] sent seq={seq}")
         time.sleep(interval_s)
@@ -151,36 +155,84 @@ def tx_thread():
 # RX thread
 # ---------------------------------------------------------------------------
 
+# Queue between the hardware-reader thread and the processing thread.
+# Sized large enough that even a ~400 ms processing spike won't overflow
+# (~128 × 3.4 ms ≈ 435 ms at the default buffer size).
+_buf_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=128)
+_hw_reader_done = threading.Event()
+
+
+def _hw_reader_thread():
+    """Read hardware buffers as fast as the SDR produces them.
+
+    This thread has no processing load so it always keeps up with the
+    hardware DMA rate.  It runs until TX is finished and the grace period
+    has elapsed, then signals _hw_reader_done so the processor knows to
+    drain the queue and exit.
+    """
+    while not tx_done.is_set() or not _rx_queue_drained():
+        buf = _read_buf(sdr)
+        _buf_queue.put(buf)  # blocks only if queue is full (≈ 435 ms of data)
+    _hw_reader_done.set()
+
+
 def rx_thread():
     # Drain the libiio kernel DMA ring (typically 4 buffers deep) plus a few
-    # extra to absorb USB scheduling jitter.  Fixed count is more reliable than
-    # a timing threshold because refill() always returns quickly when the
-    # consumer is slightly slower than hardware.
+    # extra to absorb USB scheduling jitter before signalling TX to start.
     for _ in range(16):
         _read_buf(sdr)
 
     rx_ready.set()   # tell TX thread it is safe to start transmitting
 
+    # Start the dedicated hardware reader now that stale buffers are gone.
+    threading.Thread(target=_hw_reader_thread, name="HWReader", daemon=True).start()
+
+    buf_duration_s = rx_buf_size / pipe_cfg.SAMPLE_RATE
+
     prev_buf = None
-    while not tx_done.is_set() or not _rx_queue_drained():
-        # t0 = time.perf_counter()
-        curr_buf = _read_buf(sdr)
-        # t1 = time.perf_counter()
+    # Tracks how far into the current concatenated window we have already
+    # decoded.  On the next iteration this becomes the search_from offset so
+    # we don't re-detect frames that are entirely within the previous buffer.
+    search_from = 0
+    while not _hw_reader_done.is_set() or not _buf_queue.empty():
+        try:
+            curr_buf = _buf_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+
+        t0 = time.perf_counter()
 
         raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
+        prev_len = len(prev_buf) if prev_buf is not None else 0
         prev_buf = curr_buf
 
-        packets = rx_pipe.receive(raw)
-        # t2 = time.perf_counter()
-        # print(f"  [RX] get={t1-t0:.3f}s  receive={t2-t1:.3f}s  pkts={len(packets)}", flush=True)
+        packets = rx_pipe.receive(raw, search_from=search_from)
+
+        elapsed = time.perf_counter() - t0
+        qd = _buf_queue.qsize()
+        if elapsed > buf_duration_s:
+            print(f"  [RX] slow processing: receive()={elapsed*1e3:.1f} ms  "
+                  f"(>{buf_duration_s*1e3:.1f} ms budget)  queue={qd}", flush=True)
+        elif qd > 8:
+            print(f"  [RX] queue building up: depth={qd}  (USB hiccup?)", flush=True)
+
+        if packets:
+            # Advance past the furthest decoded payload start so the next
+            # window [curr|next] doesn't re-detect the same frames.
+            last_ps = max(pkt.sample_start for pkt in packets)
+            search_from = max(0, last_ps - prev_len)
+        else:
+            search_from = 0
 
         if not packets:
             continue
 
         for pkt in packets:
-            entry = {"seq_num": pkt.seq_num if pkt.valid else -1, "valid": pkt.valid}
+            sequence_number_bits = pkt.payload[:8]
+            sequence_number = np.packbits(sequence_number_bits)[0]
+            entry = {"seq_num": sequence_number if pkt.valid else -1, "valid": pkt.valid}
             if pkt.valid:
-                print(f"  [RX] decoded seq={pkt.seq_num}, valid={pkt.valid}")
+                print(f"  [RX] decoded seq={sequence_number}, valid={pkt.valid}")
             else:
                 print(f"  [RX] frame found but header CRC failed")
             with rx_lock:

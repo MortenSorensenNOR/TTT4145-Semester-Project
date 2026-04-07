@@ -55,6 +55,7 @@ class Packet:
 
     valid: bool = False
     err_reason: str = ""
+    sample_start: int = -1   # payload_start within the buffer passed to receive()
 
 class TXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
@@ -139,26 +140,26 @@ class RXPipeline:
         self.long_ref_dec = decimate(self.long_ref, self.config.SPS)
         self.ref_f_dec = build_fine_ref(self.long_ref_dec, self.config.SYNC_CONFIG, 1)
 
-    def receive(self, buffer: np.ndarray) -> list[Packet]:
-        """Detect and decode all frames in buffer."""
+    def receive(self, buffer: np.ndarray, search_from: int = 0) -> list[Packet]:
+        """Detect and decode all frames in buffer.
+
+        search_from: sample offset into buffer where detection begins.  Samples
+        before this index are ignored, which prevents re-detecting frames that
+        were already decoded in a previous sliding-window iteration.
+        """
+        search_buf = buffer[search_from:]
         # Skip SW match-filter if hardware RRC already did it
-        filtered_buffer = buffer if self.config.hardware_rrc else match_filter(buffer, self.rrc_taps)
+        filtered_buffer = search_buf if self.config.hardware_rrc else match_filter(search_buf, self.rrc_taps)
         detections = self.detect(filtered_buffer)
         if not detections:
             return []
 
-        # for det in detections:
-        #     print(
-        #         f"Found: start {det.payload_start}, "
-        #         f"cfo: {det.cfo_estimate}, phase: {det.phase_estimate}"
-        #     )
-
         packets = []
         for det in detections:
             rx_syms = filtered_buffer[det.payload_start:]
-            # print("\ndetection at index:", det.payload_start)
             try:
                 decoded_packet = self.decode(rx_syms, det.cfo_estimate, det.phase_estimate)
+                decoded_packet.sample_start = search_from + det.payload_start
                 packets.append(decoded_packet)
             except Exception as e:
                 print("DECODE ERROR:", e)
