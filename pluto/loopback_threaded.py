@@ -122,6 +122,8 @@ rx_ready = threading.Event()   # set once RX has flushed stale DMA buffers
 
 def tx_thread():
     rx_ready.wait()   # don't transmit until RX has drained stale buffers
+
+    t0 = time.perf_counter()
     interval_s = args.interval / 1000.0
     for seq in range(args.packets):
         # convert to 8-bit binary array
@@ -147,6 +149,9 @@ def tx_thread():
         sdr.tx_destroy_buffer()  # flush kernel DMA ring before next packet
         print(f"  [TX] sent seq={seq}")
         time.sleep(interval_s)
+
+    t1 = time.perf_counter()
+    print(f"Took: {t1 - t0} seconds. Throughput: {args.packets * args.payload / (t1 - t0)} B/s")
 
     tx_done.set()
     print("  [TX] done")
@@ -210,11 +215,11 @@ def rx_thread():
 
         elapsed = time.perf_counter() - t0
         qd = _buf_queue.qsize()
-        if elapsed > buf_duration_s:
-            print(f"  [RX] slow processing: receive()={elapsed*1e3:.1f} ms  "
-                  f"(>{buf_duration_s*1e3:.1f} ms budget)  queue={qd}", flush=True)
-        elif qd > 8:
-            print(f"  [RX] queue building up: depth={qd}  (USB hiccup?)", flush=True)
+        # if elapsed > buf_duration_s:
+            # print(f"  [RX] slow processing: receive()={elapsed*1e3:.1f} ms  "
+            #       f"(>{buf_duration_s*1e3:.1f} ms budget)  queue={qd}", flush=True)
+        # elif qd > 8:
+            # print(f"  [RX] queue building up: depth={qd}  (USB hiccup?)", flush=True)
 
         if packets:
             # Advance past the furthest decoded payload start so the next
