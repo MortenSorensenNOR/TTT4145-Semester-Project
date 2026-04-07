@@ -36,6 +36,7 @@ from pluto.config import (
     configure_rx,
     configure_tx,
 )
+from pluto.sdr_stream import RxStream
 
 N_FLUSH  = 10   # RX flushes before capture to discard stale samples
 
@@ -87,9 +88,10 @@ tx_samples = (tx_samples * DAC_SCALE).astype(np.complex64)
 
 frame_len = len(tx_samples)
 
-# RX buffer must fit at least 2 full frames so the sync has room to find the
-# frame start regardless of cyclic phase. Round up to next power of 2.
-rx_buf_size = int(2 ** np.ceil(np.log2(max(2 * frame_len, 2**15))))
+# RX buffer holds ~1 frame.  The RX loop concatenates the previous buffer with
+# the current one (2-buffer sliding window) so frames that straddle a boundary
+# are still caught.  Round up to the next power of 2.
+rx_buf_size = int(2 ** np.ceil(np.log2(frame_len)))
 
 print(f"\nPipeline config : SPS={pipe_cfg.SPS}, RRC_alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
 print(f"Payload         : {args.payload} bytes  ({args.payload * 8} bits)")
@@ -110,9 +112,9 @@ sdr.rx_buffer_size = rx_buf_size  # override default from configure_rx
 # Start cyclic TX (continuously loops the frame)
 sdr.tx(tx_samples)
 
-# Flush stale RX buffers so AGC settles and old samples are discarded
-for _ in range(N_FLUSH):
-    sdr.rx()
+stream = RxStream(sdr)
+stream.start()
+stream.flush(N_FLUSH)
 
 # ---------------------------------------------------------------------------
 # RX trials
@@ -120,13 +122,15 @@ for _ in range(N_FLUSH):
 
 passed = 0
 failed = 0
+prev_buf = None
 
 for trial in range(args.trials):
-    rx_raw = sdr.rx().astype(np.complex64)
-    rx_raw = 2 * rx_raw / DAC_SCALE
+    curr_buf = stream.get()
+    rx_raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
+    prev_buf = curr_buf
 
     start = time.perf_counter()
-    packets = rx_pipe.receive(rx_raw.astype(np.complex64))
+    packets = rx_pipe.receive(rx_raw)
 
     end = time.perf_counter()
     time_rx = end - start
@@ -157,6 +161,7 @@ for trial in range(args.trials):
         print(f"[Trial {trial + 1}/{args.trials}] FAIL — {n_errors}/{len(payload_bits)} bit errors, BER = {ber:.4f}")
         failed += 1
 
+stream.stop()
 sdr.tx_destroy_buffer()
 
 print(f"\nResult: {passed}/{args.trials} passed")

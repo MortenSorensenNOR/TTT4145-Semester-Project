@@ -37,6 +37,7 @@ import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
 from pluto.config import CENTER_FREQ, DAC_SCALE, configure_rx, configure_tx
+from pluto.sdr_stream import RxStream
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -54,7 +55,7 @@ args = parser.parse_args()
 # Pipelines
 # ---------------------------------------------------------------------------
 
-pipe_cfg = PipelineConfig()
+pipe_cfg = PipelineConfig(hardware_rrc=True)
 tx_pipe  = TXPipeline(pipe_cfg)
 rx_pipe  = RXPipeline(pipe_cfg)
 
@@ -70,14 +71,16 @@ sdr = adi.Pluto(PLUTO_IP)
 configure_tx(sdr, freq=CENTER_FREQ, gain=args.gain, cyclic=False)
 configure_rx(sdr, freq=CENTER_FREQ, gain_mode="slow_attack")
 
-# Size the RX buffer to hold ~2 full frames so sync always has room.
+# Size the RX buffer to hold ~1 full frame.  The RX loop keeps the previous
+# buffer and concatenates it with the current one (2-buffer sliding window) so
+# frames straddling a buffer boundary are still decoded.
 # We need to transmit one dummy packet first to know the frame length.
 _probe_bits = rng.integers(0, 2, args.payload * 8, dtype=np.uint8)
 _probe_pkt  = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0,
                      length=args.payload, payload=_probe_bits)
 _probe_samples = tx_pipe.transmit(_probe_pkt)
 frame_len = len(_probe_samples)
-rx_buf_size = int(2 ** np.ceil(np.log2(max(2 * frame_len, 2**15))))
+rx_buf_size = int(2 ** np.ceil(np.log2(frame_len)))
 sdr.rx_buffer_size = rx_buf_size
 
 print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
@@ -119,6 +122,8 @@ def tx_thread():
         samples = (samples * DAC_SCALE).astype(np.complex64)
 
         sdr.tx(samples)
+        time.sleep(frame_len / pipe_cfg.SAMPLE_RATE + 0.002)  # let frame clock out of DAC
+        sdr.tx_destroy_buffer()  # flush kernel DMA ring before next packet
         print(f"  [TX] sent seq={seq}")
         time.sleep(interval_s)
 
@@ -129,16 +134,31 @@ def tx_thread():
 # RX thread
 # ---------------------------------------------------------------------------
 
-def rx_thread():
-    # Flush a few stale buffers before we start tracking
-    for _ in range(5):
-        sdr.rx()
+stream = RxStream(sdr)
+stream.start()
 
+def rx_thread():
+    stream.flush(5)
+
+    prev_buf = None
+    last_overruns = stream.overruns
     while not tx_done.is_set() or not _rx_queue_drained():
-        raw = sdr.rx().astype(np.complex64)
-        raw = 2.0 * raw / DAC_SCALE
+        t0 = time.perf_counter()
+        curr_buf = stream.get()
+        t1 = time.perf_counter()
+
+        cur_overruns = stream.overruns
+        if cur_overruns != last_overruns:
+            prev_buf = None  # gap in the stream — don't concatenate stale data
+        last_overruns = cur_overruns
+
+        raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
+        prev_buf = curr_buf
 
         packets = rx_pipe.receive(raw)
+        t2 = time.perf_counter()
+        print(f"  [RX] get={t1-t0:.3f}s  receive={t2-t1:.3f}s  pkts={len(packets)}  overruns={cur_overruns}", flush=True)
+
         if not packets:
             continue
 
@@ -189,7 +209,9 @@ t_tx.start()
 t_tx.join()
 t_rx.join(timeout=args.packets * args.interval / 1000.0 + 5.0)
 
+stream.stop()
 sdr.tx_destroy_buffer()
+del sdr  # destroy IIO context explicitly while Python state is clean
 
 # ---------------------------------------------------------------------------
 # Report
