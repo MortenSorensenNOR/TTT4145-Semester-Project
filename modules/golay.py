@@ -31,7 +31,7 @@ class Golay:
         )
 
         self.parity = self.matrix[:, 12:]
-        self.h_matrix = np.hstack([self.parity.T, np.eye(12, dtype=np.int32)])
+        self.h_matrix = np.hstack([self.parity.T, np.eye(12, dtype=int)])
 
     def encode(self, message: np.ndarray) -> np.ndarray:
         """Encode a binary message using Golay (24,12) code."""
