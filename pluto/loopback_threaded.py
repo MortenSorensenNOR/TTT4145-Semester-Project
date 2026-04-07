@@ -139,25 +139,26 @@ stream.start()
 
 def rx_thread():
     stream.flush(5)
+    # Drain the DMA ring until get() actually blocks — that means we are
+    # at real-time and all pre-buffered stale samples have been discarded.
+    while True:
+        t = time.perf_counter()
+        stream.get()
+        if time.perf_counter() - t > 0.001:
+            break
 
     prev_buf = None
-    last_overruns = stream.overruns
     while not tx_done.is_set() or not _rx_queue_drained():
         t0 = time.perf_counter()
         curr_buf = stream.get()
         t1 = time.perf_counter()
-
-        cur_overruns = stream.overruns
-        if cur_overruns != last_overruns:
-            prev_buf = None  # gap in the stream — don't concatenate stale data
-        last_overruns = cur_overruns
 
         raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
         prev_buf = curr_buf
 
         packets = rx_pipe.receive(raw)
         t2 = time.perf_counter()
-        print(f"  [RX] get={t1-t0:.3f}s  receive={t2-t1:.3f}s  pkts={len(packets)}  overruns={cur_overruns}", flush=True)
+        print(f"  [RX] get={t1-t0:.3f}s  receive={t2-t1:.3f}s  pkts={len(packets)}", flush=True)
 
         if not packets:
             continue
