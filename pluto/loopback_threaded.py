@@ -71,7 +71,7 @@ args = parser.parse_args()
 # Pipelines
 # ---------------------------------------------------------------------------
 
-pipe_cfg = PipelineConfig(hardware_rrc=True)
+pipe_cfg = PipelineConfig(hardware_rrc=False)
 tx_pipe  = TXPipeline(pipe_cfg)
 rx_pipe  = RXPipeline(pipe_cfg)
 
@@ -123,10 +123,10 @@ rx_ready = threading.Event()   # set once RX has flushed stale DMA buffers
 def tx_thread():
     rx_ready.wait()   # don't transmit until RX has drained stale buffers
 
-    t0 = time.perf_counter()
-    interval_s = args.interval / 1000.0
+    # Pre-build all packet sample arrays, then concatenate into one buffer
+    # so only a single sdr.tx() call is needed, eliminating per-packet USB overhead.
+    chunks = []
     for seq in range(args.packets):
-        # convert to 8-bit binary array
         sequence_bits = np.unpackbits(np.array([seq], dtype=np.uint8))
         random_bits = rng.integers(0, 2, args.payload * 8 - 8, dtype=np.uint8)
         payload_bits = np.concatenate([sequence_bits, random_bits])
@@ -142,15 +142,16 @@ def tx_thread():
         peak = np.max(np.abs(samples))
         if peak > 0:
             samples = samples / peak
-        samples = (samples * DAC_SCALE).astype(np.complex64)
+        chunks.append((samples * DAC_SCALE).astype(np.complex64))
 
-        sdr.tx(samples)
-        time.sleep(frame_len / pipe_cfg.SAMPLE_RATE + 0.020)  # let frame clock out of DAC
-        sdr.tx_destroy_buffer()  # flush kernel DMA ring before next packet
-        print(f"  [TX] sent seq={seq}")
-        time.sleep(interval_s)
+    all_samples = np.concatenate(chunks)
+    air_time_s = len(all_samples) / pipe_cfg.SAMPLE_RATE
 
+    t0 = time.perf_counter()
+    sdr.tx(all_samples)
+    time.sleep(air_time_s)   # wait for all samples to clock out of the DAC
     t1 = time.perf_counter()
+
     print(f"Took: {t1 - t0} seconds. Throughput: {args.packets * args.payload / (t1 - t0)} B/s")
 
     tx_done.set()
