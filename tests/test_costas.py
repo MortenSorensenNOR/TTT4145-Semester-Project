@@ -36,7 +36,7 @@ def test_costas(random_phase_offset, random_phase_drift):
 NUM_SYMBOLS          = 10000
 INITIAL_PHASE_OFFSET = np.pi / 8
 PHASE_DRIFT          = np.pi / 5   # total drift over all symbols
-BN                   = 0.05        # loop noise bandwidth
+BN                   = 0.07        # loop noise bandwidth
 
 impl = "C++ (pybind11)" if _ext else "Python (fallback)"
 print(f"Implementation : {impl}\n")
