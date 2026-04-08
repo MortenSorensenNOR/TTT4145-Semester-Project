@@ -60,7 +60,7 @@ class QPSK(Modulator):
         bits[:, 0] = symbols.real > 0
         bits[:, 1] = symbols.imag > 0
         return bits
-
+"""
 class PSK8(Modulator):
     def __init__(self) -> None:
         self.bits_per_symbol = 3
@@ -92,7 +92,67 @@ class PSK8(Modulator):
         bits[:, 1] = (indices >> 1) & 1
         bits[:, 2] = indices & 1
         return bits
+"""
 
+LUT_SIZE = 128  # 128x128 grid for moderate accuracy
+LUT_MAX = LUT_SIZE - 1
+LUT_SCALE = (LUT_SIZE - 1) / 3.0  # maps [-1.5,1.5] to [0,LUT_SIZE-1]
+
+class PSK8(Modulator):
+    def __init__(self) -> None:
+        self.bits_per_symbol = 3
+        self.qam_order = 8
+        self.symbol_mapping = np.array([-1 - 1j, -np.sqrt(2) + 0j, 0 + np.sqrt(2)*1j, -1 + 1j,
+                                        0 - np.sqrt(2)*1j, 1 - 1j, 1 + 1j, np.sqrt(2)+ 0j], dtype=np.complex64)/np.sqrt(2)
+        self._BIN_TO_IDX = np.array([7, 6, 2, 3, 1, 0, 4, 5], dtype=np.int8)
+        self._lut_size = 128
+        self._lut_max = self._lut_size - 1
+        self._scale = (self._lut_size - 1) / 3.0
+        self._lut = self._build_lut()
+
+    def _build_lut(self):
+        levels = np.linspace(-1.5, 1.5, self._lut_size, dtype=np.float32)
+        lut = np.empty((self._lut_size, self._lut_size), dtype=np.int8)
+
+        for i, re in enumerate(levels):
+            for j, im in enumerate(levels):
+                angle = np.arctan2(im, re)   # happens ONCE at init → OK
+                bin_ = int(np.round(angle / (np.pi / 4))) & 7
+                lut[i, j] = bin_
+
+        return lut
+
+    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
+        if bitstream.size == 0:
+            return EMPTY_COMPLEX
+        bitstream = bitstream.reshape(-1, 3)
+        indices = (bitstream[:, 0] << 2) | (bitstream[:, 1] << 1) | bitstream[:, 2]
+        return self.symbol_mapping[indices]
+
+    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+        if symbols.size == 0:
+            return EMPTY_INT
+
+        # Map I/Q → LUT indices
+        re = symbols.real
+        im = symbols.imag
+
+        i = np.clip(((re + 1.5) * self._scale).astype(np.int16), 0, self._lut_max)
+        q = np.clip(((im + 1.5) * self._scale).astype(np.int16), 0, self._lut_max)
+
+        # LUT gives angular bin (0..7)
+        bins = self._lut[i, q]
+
+        # Match your original mapping exactly
+        indices = self._BIN_TO_IDX[bins]
+
+        # Convert to bits
+        bits = np.empty((len(symbols), 3), dtype=np.int8)
+        bits[:, 0] = (indices >> 2) & 1
+        bits[:, 1] = (indices >> 1) & 1
+        bits[:, 2] = indices & 1
+
+        return bits
 
 def fast_angle(re, im):
     # Approximate atan2(im, re) scaled to [-pi, pi] Maybe faster on pluto
@@ -107,3 +167,4 @@ def fast_angle(re, im):
                      3*np.pi/4 - (np.pi/4) * r)
 
     return np.where(im < 0, -angle, angle)
+#"""

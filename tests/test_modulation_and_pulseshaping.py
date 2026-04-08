@@ -10,7 +10,9 @@ if __name__ == "__main__":
     # setup
     bpsk = BPSK()
     qpsk = QPSK()
+    start=time.perf_counter()
     psk8 = PSK8()
+    print(time.perf_counter()-start)
 
     sps, alpha, ntaps = 8, 0.25, 101
     rrc_taps = rrc_filter(sps, alpha, ntaps)
