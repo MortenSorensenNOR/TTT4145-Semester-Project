@@ -4,7 +4,7 @@ import time
 
 from utils.plotting import plot_iq, plot_constellation, plot_modulation_schemes_ideal_constallations
 from modules.modulators import BPSK, PSK8, QPSK
-from modules.pulse_shaping import rrc_filter, upsample, downsample
+from modules.pulse_shaping.pulse_shaping import rrc_filter, upsample, downsample
 
 if __name__ == "__main__":
     # setup

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from math import ceil
 import numpy as np
 
-from modules.pulse_shaping import *
+from modules.pulse_shaping.pulse_shaping import *
 from modules.modulators import *
 from modules.frame_constructor.frame_constructor import *
 from modules.golay import *
@@ -21,10 +21,10 @@ class PipelineConfig:
     SPS: int = 4
     SPAN: int = 8
     RRC_ALPHA: np.float32 = 0.25
-    MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
+    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
     CODING_RATE: CodeRates = CodeRates.NONE
     PRE_HEADER_GUARD_BITS: int = 0
-    GUARD_SYMS_LENGTH: int = 500
+    GUARD_SYMS_LENGTH: int = 200
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
@@ -228,7 +228,7 @@ class RXPipeline:
             valid=header.crc_passed,
         )
 
-    def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32]:
+    def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32, np.float32]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
         header_end = (self.config.use_golay+1) * self.frame_constructor.header_config.header_total_size + self.config.PRE_HEADER_GUARD_BITS
 
@@ -257,7 +257,7 @@ class RXPipeline:
         header_bits = self.bpsk.symbols2bits(header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
         header = self.frame_constructor.decode_header(header_bits)
 
-        return header, header_end, phase_est[-1], timing_est[-1]
+        return header, header_end, np.float32(phase_est[-1]), np.float32(timing_est[-1])
 
     def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32, current_timing_estimate: np.float32) -> np.ndarray:
         payload_end = payload_start + ceil((header.length*8 + self.frame_constructor.PAYLOAD_CRC_BITS)/(header.mod_scheme.value+1)) # header.mod_scheme.value+1 is same as bits per symbol of modulator

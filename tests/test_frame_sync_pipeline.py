@@ -25,7 +25,7 @@ from modules.frame_sync.frame_sync import (
 )
 from modules.channel import ChannelConfig, ChannelModel
 from modules.modulators import BPSK, QPSK
-from modules.pulse_shaping import match_filter, rrc_filter, upsample
+from modules.pulse_shaping.pulse_shaping import match_filter, rrc_filter, upsample
 from pluto.config import RRC_ALPHA, SAMPLE_RATE, SPAN, SPS
 
 SYNC_CFG = SynchronizerConfig()

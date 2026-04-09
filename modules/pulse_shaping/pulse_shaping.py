@@ -9,7 +9,7 @@ from modules.gardner_ted.gardner import apply_gardner_ted
 logger = logging.getLogger(__name__)
 
 try:
-    from modules import pulse_shaping_ext as _ps_ext
+    from modules.pulse_shaping import pulse_shaping_ext as _ps_ext
     logger.info("Loaded pulse_shaping_ext pybind11 C++ extension.")
 except ImportError:
     _ps_ext = None

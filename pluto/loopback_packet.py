@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 import adi
 
 from utils.plotting import *
-from modules.pulse_shaping import *
+from modules.pulse_shaping.pulse_shaping import *
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
 from pluto.config import (

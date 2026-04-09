@@ -29,7 +29,7 @@ from modules.frame_sync.frame_sync import (
     fine_timing,
     generate_preamble,
 )
-from modules.pulse_shaping import decimate, match_filter, rrc_filter, upsample
+from modules.pulse_shaping.pulse_shaping import decimate, match_filter, rrc_filter, upsample
 from modules.modulators import BPSK, QPSK, PSK8
 from modules.frame_constructor.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
 from modules.costas_loop.costas import CostasConfig, apply_costas_loop
@@ -39,7 +39,7 @@ from modules.costas_loop.costas import CostasConfig, apply_costas_loop
 # ---------------------------------------------------------------------------
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--payload",      type=int,  default=1500, help="Payload bytes (default: 1500)")
+parser.add_argument("--payload",      type=int,  default=4095, help="Payload bytes (default: 1500)")
 parser.add_argument("--hardware-rrc", action="store_true",     help="Skip software RRC (matches hardware_rrc=True loopback)")
 args = parser.parse_args()
 
@@ -79,7 +79,7 @@ header_bits, payload_bits = fc.encode(header, payload_input_bits)
 bpsk = BPSK()
 qpsk = QPSK()
 
-guard_syms    = np.zeros(200, dtype=np.complex64)
+guard_syms    = np.zeros(cfg.GUARD_SYMS_LENGTH, dtype=np.complex64)
 preamble_syms = generate_preamble(sync_cfg)
 header_syms   = bpsk.bits2symbols(header_bits)
 payload_syms  = qpsk.bits2symbols(payload_bits)

@@ -216,11 +216,17 @@ def rx_thread():
     # decoded.  On the next iteration this becomes the search_from offset so
     # we don't re-detect frames that are entirely within the previous buffer.
     search_from = 0
+
+    # t0 = time.perf_counter()
     while not _hw_reader_done.is_set() or not _buf_queue.empty():
         try:
-            curr_buf = _buf_queue.get(timeout=0.5)
+            curr_buf = _buf_queue.get(timeout=0.05)
         except queue.Empty:
             continue
+        
+        # t1 = time.perf_counter()
+        # print(f"Time for new buffer: {(t1 - t0) * 1000.0} ms")
+        # t0 = t1
 
         raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
         prev_len = len(prev_buf) if prev_buf is not None else 0
@@ -253,6 +259,8 @@ def rx_thread():
                     _decoded_seqs.add(sequence_number)
                     if len(_decoded_seqs) >= args.packets:
                         _all_decoded.set()
+        
+        # t0 = time.perf_counter()
 
     print("  [RX] done")
 
