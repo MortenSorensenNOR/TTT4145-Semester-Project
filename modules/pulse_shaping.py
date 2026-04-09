@@ -1,9 +1,22 @@
 """Root-raised-cosine pulse shaping: filter design, upsampling and downsampling."""
 
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 
 from modules.gardner_ted.gardner import apply_gardner_ted
+
+logger = logging.getLogger(__name__)
+
+try:
+    from modules import pulse_shaping_ext as _ps_ext
+    logger.info("Loaded pulse_shaping_ext pybind11 C++ extension.")
+except ImportError:
+    _ps_ext = None
+    logger.warning(
+        "pulse_shaping_ext not found — falling back to pure-Python implementation. "
+        "Build it with: uv run python setup.py build_ext --inplace"
+    )
 
 def rrc_filter(sps: int, alpha: np.float32, num_taps: int) -> np.ndarray:
     """Design a root-raised-cosine filter with unit energy."""
@@ -44,6 +57,8 @@ def upsample(symbols: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray:
     """Zero-insert at sps rate and convolve with RRC taps."""
     if len(symbols) == 0:
         return np.ndarray([], dtype=np.complex64)
+    if _ps_ext is not None:
+        return _ps_ext.upsample(symbols.astype(np.complex64), sps, rrc_taps.astype(np.float32))
     upsampled = np.zeros(len(symbols) * sps, dtype=np.complex64)
     upsampled[::sps] = symbols.astype(np.complex64)
     filtered = np.convolve(upsampled, rrc_taps, mode="full")
@@ -69,6 +84,8 @@ def downsample(signal: np.ndarray, sps: int, rrc_taps: np.ndarray) -> np.ndarray
     return filtered[delay : delay + n_symbols * sps : sps]
 
 def match_filter(signal: np.ndarray, rrc_taps: np.ndarray) -> np.ndarray:
+    if _ps_ext is not None:
+        return _ps_ext.match_filter(signal.astype(np.complex64), rrc_taps.astype(np.float32))
     filtered_full = np.convolve(signal.astype(np.complex64), rrc_taps, mode="full")
     delay = len(rrc_taps) - 1
     return filtered_full[delay:]

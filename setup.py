@@ -51,6 +51,7 @@ _EXTENSIONS = [
     ("modules.gardner_ted.gardner_ext", "modules/gardner_ted/gardner_ext.cpp"),
     ("modules.frame_sync.frame_sync_ext", "modules/frame_sync/frame_sync_ext.cpp"),
     ("modules.frame_constructor.frame_constructor_ext", "modules/frame_constructor/frame_constructor_pybind11.cpp"),
+    ("modules.pulse_shaping_ext", "modules/pulse_shaping_ext.cpp"),
 ]
 
 setup(

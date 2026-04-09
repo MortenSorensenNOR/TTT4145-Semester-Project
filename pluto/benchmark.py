@@ -50,7 +50,7 @@ HARDWARE_RRC  = args.hardware_rrc
 # Benchmark parameters
 # ---------------------------------------------------------------------------
 
-N_REPS = 10   # repetitions per stage (increase for more stable results)
+N_REPS = 100   # repetitions per stage (increase for more stable results)
 
 # ---------------------------------------------------------------------------
 # Build shared fixtures once (not included in timing)
@@ -234,6 +234,19 @@ results.append(bench(
 results.append(bench(
     "RX: receive() end-to-end (2-buf window)",
     lambda: rx_pipe.receive(window),
+))
+
+# 12. match_filter on the FULL 2-buffer window (realistic receive size)
+results.append(bench(
+    "RX: match_filter (full 2-buf window)",
+    lambda: match_filter(window, rrc_taps),
+))
+
+# 13. detect() on a pre-filtered full window
+_filtered_window = match_filter(window, rrc_taps)
+results.append(bench(
+    "RX: detect() on full window (post match_filter)",
+    lambda: rx_pipe.detect(_filtered_window),
 ))
 
 # ---------------------------------------------------------------------------
