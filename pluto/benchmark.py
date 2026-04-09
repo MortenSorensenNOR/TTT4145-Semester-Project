@@ -31,7 +31,7 @@ from modules.frame_sync.frame_sync import (
 )
 from modules.pulse_shaping import decimate, match_filter, rrc_filter, upsample
 from modules.modulators import BPSK, QPSK, PSK8
-from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
+from modules.frame_constructor.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
 from modules.costas_loop.costas import CostasConfig, apply_costas_loop
 
 # ---------------------------------------------------------------------------

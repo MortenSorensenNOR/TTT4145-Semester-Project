@@ -317,7 +317,7 @@ private:
 // pybind11 module
 // ---------------------------------------------------------------------------
 
-PYBIND11_MODULE(frame_constructor, m) {
+PYBIND11_MODULE(frame_constructor_ext, m) {
     m.doc() = "C++ frame constructor with pybind11 bindings";
 
     // --- ModulationSchemes ---

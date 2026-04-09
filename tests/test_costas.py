@@ -13,7 +13,7 @@ import numpy as np
 
 from modules.costas_loop.costas import CostasConfig, apply_costas_loop, _ext
 from modules.modulators import BPSK, QPSK, PSK8, Modulator
-from modules.frame_constructor import ModulationSchemes
+from modules.frame_constructor.frame_constructor import ModulationSchemes
 
 @composite
 def random_phase_offset(draw):

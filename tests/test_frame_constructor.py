@@ -2,7 +2,7 @@ import pytest
 from hypothesis import given, settings, HealthCheck, strategies as st
 from hypothesis.strategies import composite
 
-from modules.frame_constructor import *
+from modules.frame_constructor.frame_constructor import *
 
 MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
 

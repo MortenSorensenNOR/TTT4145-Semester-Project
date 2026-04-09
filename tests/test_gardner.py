@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from modules.gardner_ted.gardner import apply_gardner_ted, GardnerConfig
 from modules.modulators import BPSK, QPSK, PSK8, Modulator
-from modules.frame_constructor import ModulationSchemes
+from modules.frame_constructor.frame_constructor import ModulationSchemes
 from modules.pulse_shaping import decimate, rrc_filter
 from modules.pipeline import TXPipeline, PipelineConfig
 from modules.costas_loop.costas import CostasConfig, apply_costas_loop

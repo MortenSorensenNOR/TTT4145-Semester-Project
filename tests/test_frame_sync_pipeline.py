@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from modules.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
+from modules.frame_constructor.frame_constructor import FrameConstructor, FrameHeader, ModulationSchemes
 from modules.frame_sync.frame_sync import (
     SynchronizerConfig,
     build_long_ref,

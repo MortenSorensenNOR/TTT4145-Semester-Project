@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from modules.pipeline import *
-from modules.frame_constructor import ModulationSchemes
+from modules.frame_constructor.frame_constructor import ModulationSchemes
 from modules.channel import *
 
 MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK]

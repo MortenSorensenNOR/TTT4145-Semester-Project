@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from modules.frame_constructor import ModulationSchemes
+from modules.frame_constructor.frame_constructor import ModulationSchemes
 
 logger = logging.getLogger(__name__)
 

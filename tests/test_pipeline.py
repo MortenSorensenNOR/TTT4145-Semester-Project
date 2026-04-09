@@ -5,7 +5,7 @@ from hypothesis import given, settings, HealthCheck, strategies as st
 from hypothesis.strategies import composite
 
 from modules.pipeline import *
-from modules.frame_constructor import ModulationSchemes
+from modules.frame_constructor.frame_constructor import ModulationSchemes
 from modules.channel import *
 
 MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
