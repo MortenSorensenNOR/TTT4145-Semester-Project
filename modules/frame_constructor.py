@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
+from _pytest.fixtures import _eval_scope_callable
 import numpy as np
 
 from modules.golay import Golay
@@ -43,6 +44,8 @@ class FrameHeaderConfig:
     reserved_bits: int = 4
     crc_bits: int = 8
     header_total_size: int = field(init=False)
+
+    use_golay: bool = False
 
     def __post_init__(self) -> None:
         """Compute the total header size from all field widths."""
@@ -115,6 +118,7 @@ class FrameHeaderConstructor:
 
     def decode(self, header: np.ndarray) -> FrameHeader:
         """Decode frame header."""
+        header = header.reshape(-1)
         offset = 0
         field_widths = [
             self.length_bits,
@@ -225,8 +229,10 @@ class FrameConstructor:
         """Encode data into a frame."""
         payload = payload.ravel()
         header_bits = self.frame_header_constructor.encode(header)
-        header_encoded = self.golay.encode(header_bits)
-
+        if self.header_config.use_golay:
+            header_encoded = self.golay.encode(header_bits)
+        else:
+            header_encoded = header_bits
         crc = self._crc16(payload)
         crc_bits = np.array(int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
         payload_with_crc = np.concatenate([payload, crc_bits])
@@ -238,7 +244,10 @@ class FrameConstructor:
     def decode_header(self, header_encoded: np.ndarray) -> FrameHeader:
         """Decode a Golay-encoded header and verify CRC."""
         header_hard = header_encoded.astype(int)
-        header_bits = self.golay.decode(header_hard)
+        if self.header_config.use_golay:
+            header_bits = self.golay.decode(header_hard)
+        else:
+            header_bits = header_hard
         header = self.frame_header_constructor.decode(header_bits)
         if not header.crc_passed:
             msg = "Header did not yield valid crc"

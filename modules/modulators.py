@@ -60,7 +60,7 @@ class QPSK(Modulator):
         bits[:, 0] = symbols.real > 0
         bits[:, 1] = symbols.imag > 0
         return bits
-"""
+
 class PSK8(Modulator):
     def __init__(self) -> None:
         self.bits_per_symbol = 3
@@ -167,4 +167,4 @@ def fast_angle(re, im):
                      3*np.pi/4 - (np.pi/4) * r)
 
     return np.where(im < 0, -angle, angle)
-#"""
+"""

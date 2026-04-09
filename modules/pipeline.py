@@ -24,6 +24,7 @@ class PipelineConfig:
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
     CODING_RATE: CodeRates = CodeRates.NONE
     PRE_HEADER_GUARD_BITS: int = 0
+    GUARD_SYMS_LENGTH: int = 500
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
@@ -36,6 +37,7 @@ class PipelineConfig:
     channnel_coding: bool = False
     interleaving: bool = False
     cfo_correction: bool = True
+    use_golay: bool = False
     # When True: TX skips software RRC convolution (just zero-inserts),
     # RX skips software match-filter — both assume the Pluto FPGA's
     # hardware RRC filter is active between the AD9363 and DMA.
@@ -58,6 +60,7 @@ class TXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
         self.frame_constructor = FrameConstructor()
+        self.frame_constructor.header_config.use_golay = config.use_golay
 
         self.bpsk = BPSK()
         match (self.config.MOD_SCHEME):
@@ -71,7 +74,7 @@ class TXPipeline:
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
 
-        self.guard_syms = np.zeros(500, dtype=np.complex64)
+        self.guard_syms = np.zeros(config.GUARD_SYMS_LENGTH, dtype=np.complex64)
         # sync
         self.sync_syms = generate_preamble(self.config.SYNC_CONFIG)
 
@@ -120,6 +123,7 @@ class RXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
         self.frame_constructor = FrameConstructor()
+        self.frame_constructor.header_config.use_golay = config.use_golay
 
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
@@ -157,7 +161,7 @@ class RXPipeline:
                 decoded_packet = self.decode(rx_syms, det.cfo_estimate, det.phase_estimate)
                 packets.append(decoded_packet)
             except Exception as e:
-                # print("DECODE ERROR:", e)
+                print("DECODE ERROR:", e)
                 pass
 
         return packets
@@ -225,7 +229,7 @@ class RXPipeline:
 
     def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
-        header_end = 2 * self.frame_constructor.header_config.header_total_size + self.config.PRE_HEADER_GUARD_BITS
+        header_end = 1 * self.frame_constructor.header_config.header_total_size + self.config.PRE_HEADER_GUARD_BITS
 
         if header_end*self.config.SPS > len(buffer):
             msg = "header end is outside of buffer"
