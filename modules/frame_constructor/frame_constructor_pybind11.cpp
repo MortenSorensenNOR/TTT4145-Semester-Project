@@ -2,24 +2,64 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <cmath>
-#include <sstream>
-#include <iomanip>
 
 namespace py = pybind11;
+
+// ---------------------------------------------------------------------------
+// CRC lookup tables — built once at static-init time
+// ---------------------------------------------------------------------------
+
+static const std::array<uint8_t, 256> CRC8_TABLE = []() {
+    std::array<uint8_t, 256> t{};
+    for (int i = 0; i < 256; ++i) {
+        uint8_t crc = (uint8_t)i;
+        for (int _ = 0; _ < 8; ++_)
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
+        t[i] = crc;
+    }
+    return t;
+}();
+
+static const std::array<uint16_t, 256> CRC16_TABLE = []() {
+    std::array<uint16_t, 256> t{};
+    for (int i = 0; i < 256; ++i) {
+        uint16_t crc = (uint16_t)(i << 8);
+        for (int _ = 0; _ < 8; ++_)
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+        t[i] = crc;
+    }
+    return t;
+}();
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+static inline int write_bits(int n, int length, int* out, int offset) {
+    for (int i = 0; i < length; ++i)
+        out[offset + i] = (n >> (length - 1 - i)) & 1;
+    return offset + length;
+}
+
+static inline int read_bits(const int* in, int& offset, int length) {
+    int v = 0;
+    for (int i = 0; i < length; ++i)
+        v = (v << 1) | (in[offset + i] & 1);
+    offset += length;
+    return v;
+}
+
 static std::vector<int> int_to_bits(int n, int length) {
     std::vector<int> bits(length);
-    for (int i = 0; i < length; ++i)
-        bits[i] = (n >> (length - 1 - i)) & 1;
+    write_bits(n, length, bits.data(), 0);
     return bits;
 }
 
@@ -34,33 +74,29 @@ static int bits_to_int(const std::vector<int>& bits) {
 // Enums / structs
 // ---------------------------------------------------------------------------
 
-enum class ModulationSchemes : int {
-    BPSK  = 0,
-    QPSK  = 1,
-    PSK8  = 2,
-};
+enum class ModulationSchemes : int { BPSK = 0, QPSK = 1, PSK8 = 2 };
 
 struct FrameHeader {
-    int               length;           // payload length in bytes
-    int               src;
-    int               dst;
-    int               frame_type;
-    ModulationSchemes mod_scheme;
-    int               sequence_number;
-    int               crc         = 0;
-    bool              crc_passed  = true;
+    int               length = 0;
+    int               src = 0;
+    int               dst = 0;
+    int               frame_type = 0;
+    ModulationSchemes mod_scheme = ModulationSchemes::BPSK;
+    int               sequence_number = 0;
+    int               crc = 0;
+    bool              crc_passed = true;
 };
 
 struct FrameHeaderConfig {
-    int  payload_length_bits   = 12;
-    int  src_bits              = 2;
-    int  dst_bits              = 2;
-    int  frame_type_bits       = 2;
-    int  mod_scheme_bits       = 2;
-    int  sequence_number_bits  = 4;
-    int  reserved_bits         = 4;
-    int  crc_bits              = 8;
-    bool use_golay             = false;
+    int  payload_length_bits  = 12;
+    int  src_bits             = 2;
+    int  dst_bits             = 2;
+    int  frame_type_bits      = 2;
+    int  mod_scheme_bits      = 2;
+    int  sequence_number_bits = 4;
+    int  reserved_bits        = 4;
+    int  crc_bits             = 8;
+    bool use_golay            = false;
 
     int header_total_size() const {
         return payload_length_bits + src_bits + dst_bits + frame_type_bits
@@ -74,58 +110,50 @@ struct FrameHeaderConfig {
 
 class FrameHeaderConstructor {
 public:
-    explicit FrameHeaderConstructor(const FrameHeaderConfig& cfg)
-        : cfg_(cfg)
-    {
+    explicit FrameHeaderConstructor(const FrameHeaderConfig& cfg) : cfg_(cfg) {
         int raw = cfg.header_total_size();
-        // round up to next even number
         header_length_ = 2 * (int)std::ceil(raw / 2.0);
+        data_field_bits_ = cfg.payload_length_bits + cfg.src_bits + cfg.dst_bits
+                         + cfg.frame_type_bits + cfg.mod_scheme_bits
+                         + cfg.sequence_number_bits;
     }
 
     int header_length() const { return header_length_; }
 
-    // Returns a flat vector<int> of bits
-    std::vector<int> encode(const FrameHeader& hdr) const {
-        auto bits = build_data_bits(hdr);
-        uint8_t crc = crc_calc(bits);
-        auto crc_bits = int_to_bits(crc, cfg_.crc_bits);
-        bits.insert(bits.end(), crc_bits.begin(), crc_bits.end());
-        return bits;
+    int encode_into(const FrameHeader& hdr, int* out) const {
+        int off = 0;
+        off = write_bits(hdr.length,                       cfg_.payload_length_bits,  out, off);
+        off = write_bits(hdr.src,                          cfg_.src_bits,             out, off);
+        off = write_bits(hdr.dst,                          cfg_.dst_bits,             out, off);
+        off = write_bits(hdr.frame_type,                   cfg_.frame_type_bits,      out, off);
+        off = write_bits(static_cast<int>(hdr.mod_scheme), cfg_.mod_scheme_bits,      out, off);
+        off = write_bits(hdr.sequence_number,              cfg_.sequence_number_bits, out, off);
+        for (int i = 0; i < cfg_.reserved_bits; ++i) out[off++] = 0;
+        uint8_t crc = crc8_from_bits(out, data_field_bits_ + cfg_.reserved_bits);
+        off = write_bits(crc, cfg_.crc_bits, out, off);
+        return off;
     }
 
-    FrameHeader decode(const std::vector<int>& raw) const {
-        int offset = 0;
+    std::vector<int> encode(const FrameHeader& hdr) const {
+        std::vector<int> out(header_length_);
+        encode_into(hdr, out.data());
+        return out;
+    }
 
-        auto take = [&](int n) {
-            std::vector<int> v(raw.begin() + offset, raw.begin() + offset + n);
-            offset += n;
-            return v;
-        };
+    FrameHeader decode(const int* raw, int /*len*/) const {
+        int off = 0;
+        int length          = read_bits(raw, off, cfg_.payload_length_bits);
+        int src             = read_bits(raw, off, cfg_.src_bits);
+        int dst             = read_bits(raw, off, cfg_.dst_bits);
+        int frame_type      = read_bits(raw, off, cfg_.frame_type_bits);
+        int mod_val         = read_bits(raw, off, cfg_.mod_scheme_bits);
+        int sequence_number = read_bits(raw, off, cfg_.sequence_number_bits);
 
-        auto length_bits          = take(cfg_.payload_length_bits);
-        auto src_bits             = take(cfg_.src_bits);
-        auto dst_bits             = take(cfg_.dst_bits);
-        auto frame_type_bits      = take(cfg_.frame_type_bits);
-        auto mod_scheme_bits      = take(cfg_.mod_scheme_bits);
-        auto sequence_number_bits = take(cfg_.sequence_number_bits);
+        int data_end = off;
+        off += cfg_.reserved_bits;
+        int crc = read_bits(raw, off, cfg_.crc_bits);
 
-        offset += cfg_.reserved_bits;   // skip reserved
-        auto crc_field = take(cfg_.crc_bits);
-
-        int length          = bits_to_int(length_bits);
-        int src             = bits_to_int(src_bits);
-        int dst             = bits_to_int(dst_bits);
-        int frame_type      = bits_to_int(frame_type_bits);
-        int mod_val         = bits_to_int(mod_scheme_bits);
-        int sequence_number = bits_to_int(sequence_number_bits);
-        int crc             = bits_to_int(crc_field);
-
-        // Recompute CRC over the data portion (no reserved, no crc field)
-        auto data_bits = build_data_bits_from_fields(
-            length_bits, src_bits, dst_bits,
-            frame_type_bits, mod_scheme_bits, sequence_number_bits);
-        uint8_t expected_crc = crc_calc(data_bits);
-        auto expected_bits   = int_to_bits(expected_crc, cfg_.crc_bits);
+        uint8_t expected_crc = crc8_from_bits(raw, data_end + cfg_.reserved_bits);
 
         FrameHeader h;
         h.length          = length;
@@ -135,60 +163,30 @@ public:
         h.mod_scheme      = static_cast<ModulationSchemes>(mod_val);
         h.sequence_number = sequence_number;
         h.crc             = crc;
-        h.crc_passed      = (crc_field == expected_bits);
+        h.crc_passed      = (crc == (int)expected_crc);
         return h;
+    }
+
+    FrameHeader decode(const std::vector<int>& raw) const {
+        return decode(raw.data(), (int)raw.size());
     }
 
 private:
     FrameHeaderConfig cfg_;
     int               header_length_;
+    int               data_field_bits_;
 
-    // Builds the data bits (everything except CRC)
-    std::vector<int> build_data_bits(const FrameHeader& hdr) const {
-        auto lb  = int_to_bits(hdr.length,                       cfg_.payload_length_bits);
-        auto sb  = int_to_bits(hdr.src,                          cfg_.src_bits);
-        auto db  = int_to_bits(hdr.dst,                          cfg_.dst_bits);
-        auto ftb = int_to_bits(hdr.frame_type,                   cfg_.frame_type_bits);
-        auto msb = int_to_bits(static_cast<int>(hdr.mod_scheme), cfg_.mod_scheme_bits);
-        auto snb = int_to_bits(hdr.sequence_number,              cfg_.sequence_number_bits);
-        return build_data_bits_from_fields(lb, sb, db, ftb, msb, snb);
-    }
-
-    std::vector<int> build_data_bits_from_fields(
-        const std::vector<int>& lb,
-        const std::vector<int>& sb,
-        const std::vector<int>& db,
-        const std::vector<int>& ftb,
-        const std::vector<int>& msb,
-        const std::vector<int>& snb) const
-    {
-        std::vector<int> out;
-        auto app = [&](const std::vector<int>& v){ out.insert(out.end(), v.begin(), v.end()); };
-        app(lb); app(sb); app(db); app(ftb); app(msb); app(snb);
-        out.insert(out.end(), cfg_.reserved_bits, 0);
-        return out;
-    }
-
-    // CRC-8 (poly 0x07)
-    uint8_t crc_calc(const std::vector<int>& data_bits) const {
-        // Pad to multiple of 8
-        int total = (int)data_bits.size();
-        int padded_len = ((total + 7) / 8) * 8;
-        std::vector<int> padded(padded_len - total, 0);
-        padded.insert(padded.end(), data_bits.begin(), data_bits.end());
-
+    uint8_t crc8_from_bits(const int* bits, int n_bits) const {
+        int total_bytes = (n_bits + 7) / 8;
+        int pad         = total_bytes * 8 - n_bits;
         uint8_t crc = 0x00;
-        for (int i = 0; i < padded_len; i += 8) {
+        int bi = 0;
+        for (int byte_idx = 0; byte_idx < total_bytes; ++byte_idx) {
             uint8_t byte = 0;
-            for (int b = 0; b < 8; ++b)
-                byte = (byte << 1) | padded[i + b];
-            crc ^= byte;
-            for (int _ = 0; _ < 8; ++_) {
-                if (crc & 0x80)
-                    crc = (uint8_t)((crc << 1) ^ 0x07);
-                else
-                    crc = (uint8_t)(crc << 1);
-            }
+            int start = (byte_idx == 0 && pad > 0) ? pad : 0;
+            for (int b = start; b < 8; ++b)
+                byte = (byte << 1) | (bits[bi++] & 1);
+            crc = CRC8_TABLE[crc ^ byte];
         }
         return crc;
     }
@@ -200,80 +198,88 @@ private:
 
 class FrameConstructor {
 public:
-    static constexpr int PAYLOAD_CRC_BITS    = 16;
+    static constexpr int PAYLOAD_CRC_BITS     = 16;
     static constexpr int PAYLOAD_PAD_MULTIPLE = 12;
 
     explicit FrameConstructor(const FrameHeaderConfig& cfg = FrameHeaderConfig{})
         : hdr_cfg_(cfg), hdr_ctor_(cfg) {}
 
-    int header_encoded_n_bits() const {
-        // Without Golay, 1:1 ratio
-        return hdr_ctor_.header_length();
-    }
+    int header_encoded_n_bits() const { return hdr_ctor_.header_length(); }
 
     int payload_coded_n_bits(const FrameHeader& hdr) const {
         int raw = hdr.length * 8 + PAYLOAD_CRC_BITS;
-        return raw + ((-raw) % PAYLOAD_PAD_MULTIPLE + PAYLOAD_PAD_MULTIPLE) % PAYLOAD_PAD_MULTIPLE;
+        return raw + ((-raw % PAYLOAD_PAD_MULTIPLE + PAYLOAD_PAD_MULTIPLE) % PAYLOAD_PAD_MULTIPLE);
     }
 
-    // Returns (header_encoded, payload_encoded) as numpy int arrays
     std::pair<py::array_t<int>, py::array_t<int>>
-    encode(const FrameHeader& hdr, py::array_t<int> payload_np) const {
-        auto buf = payload_np.request();
-        std::vector<int> payload(static_cast<int*>(buf.ptr),
-                                 static_cast<int*>(buf.ptr) + buf.size);
+    encode(const FrameHeader& hdr,
+           py::array_t<int, py::array::c_style | py::array::forcecast> payload_np) const {
+        auto       buf = payload_np.request();
+        const int* src = static_cast<const int*>(buf.ptr);
+        int        psz = (int)buf.size;
 
-        // Header
-        std::vector<int> header_bits = hdr_ctor_.encode(hdr);
+        // Header — write directly into output array
+        py::array_t<int> header_arr(hdr_ctor_.header_length());
+        hdr_ctor_.encode_into(hdr, static_cast<int*>(header_arr.request().ptr));
 
-        // CRC-16 over payload
-        uint16_t crc = crc16(payload);
-        auto crc_bits = int_to_bits(crc, PAYLOAD_CRC_BITS);
-
-        std::vector<int> payload_with_crc = payload;
-        payload_with_crc.insert(payload_with_crc.end(), crc_bits.begin(), crc_bits.end());
-
+        // Payload + CRC + padding — single allocation, no intermediate copy
         int n = payload_coded_n_bits(hdr);
-        payload_with_crc.resize(n, 0);
+        py::array_t<int> payload_arr(n);
+        int* dst = static_cast<int*>(payload_arr.request().ptr);
 
-        return { vec_to_array(header_bits), vec_to_array(payload_with_crc) };
+        std::copy(src, src + psz, dst);
+        uint16_t crc = crc16_from_bits(src, psz);
+        write_bits(crc, PAYLOAD_CRC_BITS, dst, psz);
+        std::fill(dst + psz + PAYLOAD_CRC_BITS, dst + n, 0);
+
+        return { std::move(header_arr), std::move(payload_arr) };
     }
 
-    FrameHeader decode_header(py::array_t<int> header_encoded_np) const {
-        auto buf = header_encoded_np.request();
-        std::vector<int> bits(static_cast<int*>(buf.ptr),
-                              static_cast<int*>(buf.ptr) + buf.size);
-
-        FrameHeader hdr = hdr_ctor_.decode(bits);
+    FrameHeader decode_header(
+        py::array_t<int, py::array::c_style | py::array::forcecast> header_np) const {
+        auto buf = header_np.request();
+        FrameHeader hdr = hdr_ctor_.decode(static_cast<const int*>(buf.ptr), (int)buf.size);
         if (!hdr.crc_passed)
             throw std::runtime_error("Header did not yield valid crc");
         return hdr;
     }
 
-    py::array_t<int> decode_payload(const FrameHeader& hdr,
-                                    py::array_t<double> payload_encoded_np,
-                                    bool soft = false) const {
-        auto buf = payload_encoded_np.request();
-        auto* ptr = static_cast<double*>(buf.ptr);
-        int sz = (int)buf.size;
+    py::array_t<int> decode_payload(
+        const FrameHeader& hdr,
+        py::array_t<double, py::array::c_style | py::array::forcecast> payload_np,
+        bool soft = false) const
+    {
+        auto          buf   = payload_np.request();
+        const double* ptr   = static_cast<const double*>(buf.ptr);
+        int           sz    = (int)buf.size;
+        int           dlen  = hdr.length * 8;
+        int           crc_end = dlen + PAYLOAD_CRC_BITS;
 
-        std::vector<int> payload_bits(sz);
-        if (soft) {
-            for (int i = 0; i < sz; ++i)
-                payload_bits[i] = (ptr[i] < 0.0) ? 1 : 0;
-        } else {
-            for (int i = 0; i < sz; ++i)
-                payload_bits[i] = (int)ptr[i];
+        if (sz < crc_end)
+            throw std::runtime_error("Payload buffer too short");
+
+        py::array_t<int> out(dlen);
+        int* out_ptr = static_cast<int*>(out.request().ptr);
+
+        // Decode bits and compute CRC-16 in a single pass — no intermediate vector
+        uint32_t reg = 0xFFFFu;
+        constexpr uint32_t mask = 0xFFFFu;
+        constexpr uint32_t msb  = 0x8000u;
+
+        for (int i = 0; i < dlen; ++i) {
+            int bit = soft ? (ptr[i] < 0.0 ? 1 : 0) : (int)ptr[i];
+            out_ptr[i] = bit;
+            reg ^= (uint32_t)(bit & 1) << 15;
+            reg = (reg & msb) ? ((reg << 1) ^ 0x1021u) & mask : (reg << 1) & mask;
         }
+        uint16_t expected_crc = (uint16_t)reg;
 
-        int data_len   = hdr.length * 8;
-        int crc_end    = data_len + PAYLOAD_CRC_BITS;
-
-        std::vector<int> data_bits(payload_bits.begin(), payload_bits.begin() + data_len);
-        std::vector<int> crc_bits (payload_bits.begin() + data_len, payload_bits.begin() + crc_end);
-
-        uint16_t received_crc = (uint16_t)bits_to_int(crc_bits);
-        uint16_t expected_crc = crc16(data_bits);
+        // Decode CRC field directly from the buffer
+        uint16_t received_crc = 0;
+        for (int i = dlen; i < crc_end; ++i) {
+            int bit = soft ? (ptr[i] < 0.0 ? 1 : 0) : (int)ptr[i];
+            received_crc = (uint16_t)((received_crc << 1) | (bit & 1));
+        }
 
         if (received_crc != expected_crc) {
             std::ostringstream oss;
@@ -282,34 +288,31 @@ public:
                 << ", expected 0x" << std::setw(4) << expected_crc;
             throw std::runtime_error(oss.str());
         }
-        return vec_to_array(data_bits);
+        return out;
     }
 
 private:
-    FrameHeaderConfig    hdr_cfg_;
+    FrameHeaderConfig      hdr_cfg_;
     FrameHeaderConstructor hdr_ctor_;
 
-    // CRC-16-CCITT (poly 0x1021, init 0xFFFF)
-    static uint16_t crc16(const std::vector<int>& bits) {
-        constexpr int    n    = PAYLOAD_CRC_BITS;
-        constexpr uint32_t mask = (1u << n) - 1;
-        constexpr uint32_t msb  = 1u << (n - 1);
-        uint32_t reg = mask;
-        for (int bit : bits) {
-            reg ^= (uint32_t)(bit & 1) << (n - 1);
-            if (reg & msb)
-                reg = ((reg << 1) ^ 0x1021u) & mask;
-            else
-                reg = (reg << 1) & mask;
+    static uint16_t crc16_from_bits(const int* bits, int n_bits) {
+        uint16_t crc = 0xFFFFu;
+        int i = 0;
+        int whole_bytes = n_bits / 8;
+        for (int b = 0; b < whole_bytes; ++b) {
+            uint8_t byte = 0;
+            for (int k = 0; k < 8; ++k)
+                byte = (byte << 1) | (bits[i++] & 1);
+            crc = (uint16_t)((crc << 8) ^ CRC16_TABLE[((crc >> 8) ^ byte) & 0xFF]);
         }
-        return (uint16_t)reg;
-    }
-
-    static py::array_t<int> vec_to_array(const std::vector<int>& v) {
-        py::array_t<int> arr(v.size());
-        auto buf = arr.request();
-        std::copy(v.begin(), v.end(), static_cast<int*>(buf.ptr));
-        return arr;
+        // Remaining bits
+        int rem = n_bits % 8;
+        for (int k = 0; k < rem; ++k) {
+            int bit = bits[i++] & 1;
+            crc ^= (uint16_t)(bit << 15);
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021u) : (uint16_t)(crc << 1);
+        }
+        return crc;
     }
 };
 
@@ -318,16 +321,14 @@ private:
 // ---------------------------------------------------------------------------
 
 PYBIND11_MODULE(frame_constructor_ext, m) {
-    m.doc() = "C++ frame constructor with pybind11 bindings";
+    m.doc() = "C++ frame constructor with pybind11 bindings (optimized)";
 
-    // --- ModulationSchemes ---
     py::enum_<ModulationSchemes>(m, "ModulationSchemes")
         .value("BPSK", ModulationSchemes::BPSK)
         .value("QPSK", ModulationSchemes::QPSK)
         .value("PSK8", ModulationSchemes::PSK8)
         .export_values();
 
-    // --- FrameHeader ---
     py::class_<FrameHeader>(m, "FrameHeader")
         .def(py::init<>())
         .def(py::init([](int length, int src, int dst, int frame_type,
@@ -355,7 +356,6 @@ PYBIND11_MODULE(frame_constructor_ext, m) {
                  + " dst=" + std::to_string(h.dst) + ">";
         });
 
-    // --- FrameHeaderConfig ---
     py::class_<FrameHeaderConfig>(m, "FrameHeaderConfig")
         .def(py::init<>())
         .def_readwrite("payload_length_bits",  &FrameHeaderConfig::payload_length_bits)
@@ -369,7 +369,6 @@ PYBIND11_MODULE(frame_constructor_ext, m) {
         .def_readwrite("use_golay",            &FrameHeaderConfig::use_golay)
         .def("header_total_size",              &FrameHeaderConfig::header_total_size);
 
-    // --- FrameHeaderConstructor ---
     py::class_<FrameHeaderConstructor>(m, "FrameHeaderConstructor")
         .def(py::init<const FrameHeaderConfig&>(), py::arg("config"))
         .def("header_length", &FrameHeaderConstructor::header_length)
@@ -379,28 +378,25 @@ PYBIND11_MODULE(frame_constructor_ext, m) {
             std::copy(bits.begin(), bits.end(), static_cast<int*>(arr.request().ptr));
             return arr;
         }, py::arg("header"))
-        .def("decode", [](const FrameHeaderConstructor& self, py::array_t<int> arr) {
+        .def("decode", [](const FrameHeaderConstructor& self,
+                          py::array_t<int, py::array::c_style | py::array::forcecast> arr) {
             auto buf = arr.request();
-            std::vector<int> bits(static_cast<int*>(buf.ptr),
-                                  static_cast<int*>(buf.ptr) + buf.size);
-            return self.decode(bits);
+            return self.decode(static_cast<const int*>(buf.ptr), (int)buf.size);
         }, py::arg("header"));
 
-    // --- FrameConstructor ---
     py::class_<FrameConstructor>(m, "FrameConstructor")
         .def(py::init<const FrameHeaderConfig&>(),
              py::arg("header_config") = FrameHeaderConfig{})
         .def("header_encoded_n_bits", &FrameConstructor::header_encoded_n_bits)
         .def("payload_coded_n_bits",  &FrameConstructor::payload_coded_n_bits,
              py::arg("header"))
-        .def("encode", &FrameConstructor::encode,
+        .def("encode",         &FrameConstructor::encode,
              py::arg("header"), py::arg("payload"))
-        .def("decode_header", &FrameConstructor::decode_header,
+        .def("decode_header",  &FrameConstructor::decode_header,
              py::arg("header_encoded"))
         .def("decode_payload", &FrameConstructor::decode_payload,
              py::arg("header"), py::arg("payload_encoded"), py::arg("soft") = false);
 
-    // --- Free helpers (mirror the Python module-level functions) ---
     m.def("int_to_bits", &int_to_bits, py::arg("n"), py::arg("length"));
     m.def("bits_to_int", &bits_to_int, py::arg("bits"));
 }
