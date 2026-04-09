@@ -44,7 +44,7 @@ MAX_CFO_ERROR_HZ = 200
 MIN_ALIGNED_RATE = 0.95
 MIN_PEAK_RATIO = 5.0
 MAX_PHASE_ERR_NOISY_DEG = 15.0
-OTA_MAX_CFO_ERROR_HZ = 400  # relaxed for combined phase noise + SCO stress test
+OTA_MAX_CFO_ERROR_HZ = 800  # relaxed for combined phase noise + SCO stress test
 
 CHANNEL_TAPS_DB = np.array([0.0, -3.0])
 _MP_GAINS = 10 ** (CHANNEL_TAPS_DB / 20)

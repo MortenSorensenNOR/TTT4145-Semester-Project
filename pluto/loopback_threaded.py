@@ -71,7 +71,7 @@ args = parser.parse_args()
 # Pipelines
 # ---------------------------------------------------------------------------
 
-pipe_cfg = PipelineConfig(hardware_rrc=True)
+pipe_cfg = PipelineConfig(hardware_rrc=False)
 tx_pipe  = TXPipeline(pipe_cfg)
 rx_pipe  = RXPipeline(pipe_cfg)
 
@@ -115,6 +115,8 @@ rx_results: list[dict] = []   # [{seq_num, valid, bit_errors}]
 rx_lock  = threading.Lock()
 tx_done  = threading.Event()
 rx_ready = threading.Event()   # set once RX has flushed stale DMA buffers
+_decoded_seqs: set[int] = set()   # unique valid seq nums decoded so far
+_all_decoded  = threading.Event() # set when len(_decoded_seqs) >= args.packets
 
 # ---------------------------------------------------------------------------
 # TX thread
@@ -182,14 +184,19 @@ def _hw_reader_thread():
     """
     n_total = 0
     n_after_tx = 0
-    while not tx_done.is_set() or not _rx_queue_drained():
+    t_tx_done_wall = None
+    while not _all_decoded.is_set() and (not tx_done.is_set() or n_after_tx < _BUFS_AFTER_TX):
         buf = _read_buf(sdr)
         _buf_queue.put(buf)  # blocks only if queue is full (≈ 435 ms of data)
         n_total += 1
         if tx_done.is_set():
+            if t_tx_done_wall is None:
+                t_tx_done_wall = time.perf_counter()
             n_after_tx += 1
+    wall_grace = (time.perf_counter() - t_tx_done_wall) * 1000 if t_tx_done_wall else 0
     print(f"  [HWR] done: {n_total} bufs total, {n_after_tx} after tx_done "
-          f"({n_after_tx * rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.0f} ms grace captured)")
+          f"({n_after_tx * rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.0f} ms buf-time, "
+          f"{wall_grace:.0f} ms wall-time after tx_done)")
     _hw_reader_done.set()
 
 
@@ -204,8 +211,6 @@ def rx_thread():
     # Start the dedicated hardware reader now that stale buffers are gone.
     threading.Thread(target=_hw_reader_thread, name="HWReader", daemon=True).start()
 
-    buf_duration_s = rx_buf_size / pipe_cfg.SAMPLE_RATE
-
     prev_buf = None
     # Tracks how far into the current concatenated window we have already
     # decoded.  On the next iteration this becomes the search_from offset so
@@ -217,21 +222,11 @@ def rx_thread():
         except queue.Empty:
             continue
 
-        t0 = time.perf_counter()
-
         raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
         prev_len = len(prev_buf) if prev_buf is not None else 0
         prev_buf = curr_buf
 
         packets = rx_pipe.receive(raw, search_from=search_from)
-
-        elapsed = time.perf_counter() - t0
-        qd = _buf_queue.qsize()
-        # if elapsed > buf_duration_s:
-            # print(f"  [RX] slow processing: receive()={elapsed*1e3:.1f} ms  "
-            #       f"(>{buf_duration_s*1e3:.1f} ms budget)  queue={qd}", flush=True)
-        # elif qd > 8:
-            # print(f"  [RX] queue building up: depth={qd}  (USB hiccup?)", flush=True)
 
         if packets:
             # Advance past the furthest decoded payload start so the next
@@ -254,46 +249,29 @@ def rx_thread():
                 print(f"  [RX] frame found but header CRC failed")
             with rx_lock:
                 rx_results.append(entry)
+                if pkt.valid:
+                    _decoded_seqs.add(sequence_number)
+                    if len(_decoded_seqs) >= args.packets:
+                        _all_decoded.set()
 
     print("  [RX] done")
 
 
-def _rx_queue_drained() -> bool:
-    """Keep draining for a short window after TX finishes so we don't miss
-    packets that are still in flight through the SDR pipeline."""
-    return getattr(_rx_queue_drained, "_deadline_passed", False)
-
-
-# Give the RX thread a grace-period window after TX finishes.
+# How many data-buffers HWR must read after tx_done before it may stop.
 #
-# Worst-case timing: the PlutoSDR DMA may buffer all samples before starting
-# transmission.  In that case sdr.tx() returns (and tx_done fires) as soon as
-# the USB push completes, which can happen up to air_time_s *before* the last
-# sample physically leaves the DAC.  The grace period must cover that entire
-# remaining air time plus a few RX buffer durations for pipeline latency.
-#
-#   _GRACE_MS = (full air time) + (N buffer durations)
-#             = _air_time_ms + N * _buf_ms
+# The PlutoSDR buffers the entire TX waveform before starting playback
+# (sdr.tx() returns ≈ when the hardware starts transmitting).  So at
+# tx_done, the hardware is just beginning to play back the signal and will
+# continue for another full air_time.  We therefore need to keep reading
+# for at least ceil(air_time / buf_duration) more buffers — measured in
+# DATA buffers, not wall-clock time, because RX read rate slows under GIL
+# pressure when the decoder is active.
 _air_time_ms = int(frame_len * args.packets / pipe_cfg.SAMPLE_RATE * 1000)
 _buf_ms       = int(rx_buf_size / pipe_cfg.SAMPLE_RATE * 1000)
-_GRACE_MS     = _air_time_ms + 5 * _buf_ms   # covers buffered-DMA + pipeline latency
+_BUFS_AFTER_TX = int(np.ceil(_air_time_ms / _buf_ms)) + 8  # data-bufs needed post-tx_done
 
-print(f"Grace     : {_GRACE_MS} ms  (air={_air_time_ms} ms + 5×buf={5*_buf_ms} ms)\n")
-
-def _start_grace_timer():
-    def _mark():
-        print(f"  [GRACE] sleeping {_GRACE_MS} ms after tx_done …")
-        time.sleep(_GRACE_MS / 1000.0)
-        print(f"  [GRACE] deadline passed — stopping hw_reader")
-        _rx_queue_drained._deadline_passed = True  # type: ignore[attr-defined]
-    tx_done_watcher = threading.Thread(
-        target=lambda: (tx_done.wait(), _mark()),
-        daemon=True,
-        name="GraceTimer",
-    )
-    tx_done_watcher.start()
-
-_start_grace_timer()
+print(f"Post-TX   : {_BUFS_AFTER_TX} bufs needed after tx_done  "
+      f"(air={_air_time_ms} ms / buf={_buf_ms} ms + 8 margin)\n")
 
 # ---------------------------------------------------------------------------
 # Run
@@ -306,7 +284,7 @@ t_rx.start()
 t_tx.start()
 
 t_tx.join()
-t_rx.join(timeout=args.packets * args.interval / 1000.0 + 5.0)
+t_rx.join(timeout=args.packets * args.interval / 1000.0 + _air_time_ms * 4 / 1000.0 + 15.0)
 
 sdr.tx_destroy_buffer()
 del sdr  # destroy IIO context explicitly while Python state is clean

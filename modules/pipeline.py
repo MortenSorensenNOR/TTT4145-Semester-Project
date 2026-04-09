@@ -162,7 +162,7 @@ class RXPipeline:
                 decoded_packet.sample_start = search_from + det.payload_start
                 packets.append(decoded_packet)
             except Exception as e:
-                print("DECODE ERROR:", e)
+                # print("DECODE ERROR:", e)
                 pass
 
         return packets

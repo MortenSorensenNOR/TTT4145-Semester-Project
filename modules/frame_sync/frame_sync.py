@@ -45,12 +45,13 @@ def _is_prime(n: int) -> bool:
 class SynchronizerConfig:
     """Configuration for the synchronizer."""
 
-    zc_root: int = 7
+    zc_root_short: int = 7
+    zc_root_long: int = 13
 
-    short_preamble_nsym: int = 37
-    short_preamble_nreps: int = 8
+    short_preamble_nsym: int = 23
+    short_preamble_nreps: int = 6
 
-    long_preamble_nsym: int = 113
+    long_preamble_nsym: int = 23
     long_margin_nsym: int = 15
 
     energy_floor: np.float32 = np.finfo(np.float32).tiny
@@ -99,8 +100,8 @@ def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
 
 def generate_preamble(config: SynchronizerConfig) -> np.ndarray:
     """Build the full preamble: repeated short ZC followed by long ZC."""
-    zc_short = generate_zadoff_chu(config.zc_root, config.short_preamble_nsym)
-    zc_long = generate_zadoff_chu(config.zc_root, config.long_preamble_nsym)
+    zc_short = generate_zadoff_chu(config.zc_root_short, config.short_preamble_nsym)
+    zc_long = generate_zadoff_chu(config.zc_root_long, config.long_preamble_nsym)
     short_rep = np.tile(zc_short, config.short_preamble_nreps)
     return np.concatenate([short_rep, zc_long])
 
@@ -112,7 +113,7 @@ def build_long_ref(cfg: SynchronizerConfig, sps: int, rrc_taps: np.ndarray) -> n
     what the preamble looks like in the matched-filtered receive stream.
     Output length is unchanged: long_preamble_nsym * sps samples.
     """
-    zc = generate_zadoff_chu(cfg.zc_root, cfg.long_preamble_nsym)
+    zc = generate_zadoff_chu(cfg.zc_root_long, cfg.long_preamble_nsym)
     up = np.zeros(len(zc) * sps, dtype=np.complex64)
     up[::sps] = zc
     tx_filtered = np.convolve(up, rrc_taps, mode="same")
