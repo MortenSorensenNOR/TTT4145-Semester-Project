@@ -50,6 +50,7 @@ _EXTENSIONS = [
     ("modules.costas_loop.costas_ext", "modules/costas_loop/costas_pybind11.cpp"),
     ("modules.gardner_ted.gardner_ext", "modules/gardner_ted/gardner_ext.cpp"),
     ("modules.frame_sync.frame_sync_ext", "modules/frame_sync/frame_sync_ext.cpp"),
+    ("modules.frame_constructor.frame_constructor_ext", "modules/frame_constructor/frame_constructor_pybind11.cpp"),
 ]
 
 setup(

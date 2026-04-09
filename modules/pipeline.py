@@ -4,7 +4,7 @@ import numpy as np
 
 from modules.pulse_shaping import *
 from modules.modulators import *
-from modules.frame_constructor import *
+from modules.frame_constructor.frame_constructor import *
 from modules.golay import *
 from modules.frame_sync.frame_sync import *
 from modules.costas_loop.costas import *
@@ -230,7 +230,7 @@ class RXPipeline:
 
     def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
-        header_end = 1 * self.frame_constructor.header_config.header_total_size + self.config.PRE_HEADER_GUARD_BITS
+        header_end = (self.config.use_golay+1) * self.frame_constructor.header_config.header_total_size + self.config.PRE_HEADER_GUARD_BITS
 
         if header_end*self.config.SPS > len(buffer):
             msg = "header end is outside of buffer"
@@ -245,7 +245,7 @@ class RXPipeline:
         if self.config.costas_loop:
             header_syms_corr, phase_est = apply_costas_loop(header_syms[:header_end], self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
         else:
-            header_syms_corr, phase_est = header_syms[:header_end], [current_phase_estimate]
+            header_syms_corr, phase_est = header_syms[:header_end]*np.exp(-1j*current_phase_estimate), [current_phase_estimate]
         
         # checks known pre header bits and flips syms and rotates phase estimate
         if self.config.PRE_HEADER_GUARD_BITS > 0:
@@ -275,7 +275,7 @@ class RXPipeline:
         if self.config.costas_loop:
             rx_syms, phase_est = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
         else:
-            rx_syms = rx_syms[:payload_end-payload_start]
+            rx_syms = rx_syms[:payload_end-payload_start]*np.exp(-1j*current_phase_estimate)
 
         # demodulate
         match (header.mod_scheme):
