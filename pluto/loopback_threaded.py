@@ -340,7 +340,7 @@ print(f"Decoded OK  : {n_unique} unique valid packets")
 print(f"Dropped     : {n_dropped} packets")
 print(f"Drop rate   : {drop_rate * 100:.1f}%")
 print(f"RX duration : {rx_duration:.3f} s")
-print(f"RX throughput: {rx_throughput:.0f} B/s")
+print(f"RX throughput: {rx_throughput*8 / 1_000_000:.2f} mbps")
 if missing_seqs:
     print(f"Missing seq : {missing_seqs}")
 else:
