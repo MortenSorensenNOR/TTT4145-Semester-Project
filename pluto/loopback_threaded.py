@@ -71,7 +71,7 @@ args = parser.parse_args()
 # Pipelines
 # ---------------------------------------------------------------------------
 
-pipe_cfg = PipelineConfig(hardware_rrc=False)
+pipe_cfg = PipelineConfig(hardware_rrc=True)
 tx_pipe  = TXPipeline(pipe_cfg)
 rx_pipe  = RXPipeline(pipe_cfg)
 
@@ -149,7 +149,11 @@ def tx_thread():
 
     t0 = time.perf_counter()
     sdr.tx(all_samples)
-    time.sleep(air_time_s)   # wait for all samples to clock out of the DAC
+    # Sleep only for the remaining air time — the hardware was already clocking
+    # out samples during the USB push, so we subtract the push duration.
+    remaining = air_time_s - (time.perf_counter() - t0)
+    if remaining > 0:
+        time.sleep(remaining)
     t1 = time.perf_counter()
 
     print(f"Took: {t1 - t0} seconds. Throughput: {args.packets * args.payload / (t1 - t0)} B/s")
@@ -176,9 +180,16 @@ def _hw_reader_thread():
     has elapsed, then signals _hw_reader_done so the processor knows to
     drain the queue and exit.
     """
+    n_total = 0
+    n_after_tx = 0
     while not tx_done.is_set() or not _rx_queue_drained():
         buf = _read_buf(sdr)
         _buf_queue.put(buf)  # blocks only if queue is full (≈ 435 ms of data)
+        n_total += 1
+        if tx_done.is_set():
+            n_after_tx += 1
+    print(f"  [HWR] done: {n_total} bufs total, {n_after_tx} after tx_done "
+          f"({n_after_tx * rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.0f} ms grace captured)")
     _hw_reader_done.set()
 
 
@@ -236,7 +247,7 @@ def rx_thread():
         for pkt in packets:
             sequence_number_bits = pkt.payload[:8]
             sequence_number = np.packbits(sequence_number_bits)[0]
-            entry = {"seq_num": sequence_number if pkt.valid else -1, "valid": pkt.valid}
+            entry = {"seq_num": sequence_number if pkt.valid else -1, "valid": pkt.valid, "time": time.perf_counter()}
             if pkt.valid:
                 print(f"  [RX] decoded seq={sequence_number}, valid={pkt.valid}")
             else:
@@ -253,17 +264,32 @@ def _rx_queue_drained() -> bool:
     return getattr(_rx_queue_drained, "_deadline_passed", False)
 
 
-# Give the RX thread a grace-period window after TX finishes
-_GRACE_MS = 500
+# Give the RX thread a grace-period window after TX finishes.
+#
+# Worst-case timing: the PlutoSDR DMA may buffer all samples before starting
+# transmission.  In that case sdr.tx() returns (and tx_done fires) as soon as
+# the USB push completes, which can happen up to air_time_s *before* the last
+# sample physically leaves the DAC.  The grace period must cover that entire
+# remaining air time plus a few RX buffer durations for pipeline latency.
+#
+#   _GRACE_MS = (full air time) + (N buffer durations)
+#             = _air_time_ms + N * _buf_ms
+_air_time_ms = int(frame_len * args.packets / pipe_cfg.SAMPLE_RATE * 1000)
+_buf_ms       = int(rx_buf_size / pipe_cfg.SAMPLE_RATE * 1000)
+_GRACE_MS     = _air_time_ms + 5 * _buf_ms   # covers buffered-DMA + pipeline latency
+
+print(f"Grace     : {_GRACE_MS} ms  (air={_air_time_ms} ms + 5×buf={5*_buf_ms} ms)\n")
 
 def _start_grace_timer():
     def _mark():
+        print(f"  [GRACE] sleeping {_GRACE_MS} ms after tx_done …")
         time.sleep(_GRACE_MS / 1000.0)
+        print(f"  [GRACE] deadline passed — stopping hw_reader")
         _rx_queue_drained._deadline_passed = True  # type: ignore[attr-defined]
-    t = threading.Thread(target=_mark, daemon=True)
     tx_done_watcher = threading.Thread(
         target=lambda: (tx_done.wait(), _mark()),
         daemon=True,
+        name="GraceTimer",
     )
     tx_done_watcher.start()
 
@@ -315,11 +341,20 @@ received_seqs  = sorted(seen_seqs)
 expected_seqs  = set(range(n_tx))
 missing_seqs   = sorted(expected_seqs - seen_seqs)
 
+if len(unique_valid) >= 2:
+    rx_duration = unique_valid[-1]["time"] - unique_valid[0]["time"]
+    rx_throughput = n_unique * args.payload / rx_duration if rx_duration > 0 else float("nan")
+else:
+    rx_duration = float("nan")
+    rx_throughput = float("nan")
+
 print(f"Transmitted : {n_tx} packets")
 print(f"RX captures : {n_rx}  (raw, incl. duplicates)")
 print(f"Decoded OK  : {n_unique} unique valid packets")
 print(f"Dropped     : {n_dropped} packets")
 print(f"Drop rate   : {drop_rate * 100:.1f}%")
+print(f"RX duration : {rx_duration:.3f} s")
+print(f"RX throughput: {rx_throughput:.0f} B/s")
 if missing_seqs:
     print(f"Missing seq : {missing_seqs}")
 else:
