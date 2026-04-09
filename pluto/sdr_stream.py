@@ -1,29 +1,37 @@
-"""Threaded SDR RX stream for PlutoSDR.
+"""TX and RX stream helpers for PlutoSDR.
 
-Decouples hardware buffer collection from processing so the DMA ring never
-stalls while the pipeline is running.  The producer thread calls buf.refill()
-+ buf.read() continuously, bypassing iiod's chan.read() deinterleave overhead
-and keeping a buffer ready for the consumer at all times.
+RxStream — continuous hardware buffer drain
+    Decouples buffer collection from processing so the DMA ring never stalls.
+    Supports a lossless mode (blocks instead of dropping) for capture tests.
 
-Typical usage::
+    Typical usage::
 
-    sdr = adi.Pluto("ip:192.168.2.1")
-    configure_rx(sdr)
+        stream = RxStream(sdr)
+        stream.start(flush=10)   # drain stale DMA, let AGC settle
+        while True:
+            samples = stream.get()   # complex64, normalised
+            packets = rx_pipe.receive(samples)
+        stream.stop()
 
-    stream = RxStream(sdr)
-    stream.start()
-    stream.flush()          # let AGC settle
+TxStream — chunked non-cyclic transmit
+    Accepts one packet's samples at a time and sends them in fixed-size
+    chunks.  Because the USB push completes in less than one chunk's air
+    time, the hardware receives the next chunk before finishing the current
+    one, giving gapless transmission without a single giant buffer.
 
-    while True:
-        samples = stream.get()   # complex64, normalised — replaces sdr.rx()
-        packets = rx_pipe.receive(samples)
-        ...
+    Typical usage::
 
-    stream.stop()
+        stream = TxStream(sdr, sample_rate=pipe_cfg.SAMPLE_RATE, chunk_packets=8)
+        for pkt in packets:
+            samples = tx_pipe.transmit(pkt)
+            samples /= np.max(np.abs(samples))   # normalise to [-1, 1]
+            stream.send(samples)
+        stream.close()   # flush remainder + wait for last chunk to finish
 """
 
 import queue
 import threading
+import time
 
 import numpy as np
 import adi
@@ -38,22 +46,41 @@ class RxStream:
 
     get() returns the next buffer as normalised complex64, with typically
     1-3 ms of wait vs ~18 ms for a bare sdr.rx() call.
+
+    Two modes:
+      - lossless=False (default): drops the oldest buffer when the queue is
+        full so the producer never stalls.  Best for real-time processing
+        where latency matters more than completeness.
+      - lossless=True: blocks when the queue is full.  Use a large maxsize
+        to avoid stalling the hardware reader.  Best for capture scenarios
+        where every buffer must be processed (e.g. loopback tests).
     """
 
-    def __init__(self, sdr: adi.Pluto, maxsize: int = 2):
+    def __init__(self, sdr: adi.Pluto, maxsize: int = 2, lossless: bool = False):
         """
         Args:
-            sdr:     configured adi.Pluto instance (rx_buffer_size already set)
-            maxsize: number of prefetched buffers to keep in flight
+            sdr:      configured adi.Pluto instance (rx_buffer_size already set)
+            maxsize:  number of prefetched buffers to keep in flight
+            lossless: block when the queue is full instead of dropping the
+                      oldest buffer; use a large maxsize to avoid stalling
         """
         self._sdr = sdr
+        self._lossless = lossless
         self._q: queue.Queue = queue.Queue(maxsize=maxsize)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._producer, daemon=True)
         self._overruns = 0
 
-    def start(self) -> None:
-        """Start the background producer thread."""
+    def start(self, flush: int = 0) -> None:
+        """Start the background producer thread.
+
+        Args:
+            flush: number of hardware buffers to read synchronously (and
+                   discard) before the background thread is started — drains
+                   stale DMA data and lets the AGC settle.
+        """
+        for _ in range(flush):
+            self._rx()
         self._stop.clear()
         self._thread.start()
 
@@ -71,7 +98,7 @@ class RxStream:
         return self._q.get(timeout=timeout)
 
     def flush(self, n: int = 10) -> None:
-        """Discard n buffers so the AGC can settle before processing begins."""
+        """Discard n buffers (requires the thread to already be started)."""
         for _ in range(n):
             self.get()
 
@@ -85,16 +112,25 @@ class RxStream:
     def _producer(self) -> None:
         while not self._stop.is_set():
             buf = self._rx()
-            try:
-                self._q.put_nowait(buf)
-            except queue.Full:
-                # Consumer is behind — drop oldest, keep newest
+            if self._lossless:
+                # Block until the consumer drains the queue, but still honour stop().
+                while not self._stop.is_set():
+                    try:
+                        self._q.put(buf, timeout=0.1)
+                        break
+                    except queue.Full:
+                        pass
+            else:
                 try:
-                    self._q.get_nowait()
-                except queue.Empty:
-                    pass
-                self._q.put_nowait(buf)
-                self._overruns += 1
+                    self._q.put_nowait(buf)
+                except queue.Full:
+                    # Consumer is behind — drop oldest, keep newest
+                    try:
+                        self._q.get_nowait()
+                    except queue.Empty:
+                        pass
+                    self._q.put_nowait(buf)
+                    self._overruns += 1
 
     def _rx(self) -> np.ndarray:
         """Read one buffer directly from libiio, bypassing chan.read().
