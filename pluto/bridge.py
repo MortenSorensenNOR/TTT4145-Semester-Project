@@ -28,8 +28,7 @@ import adi
 import numpy as np
 
 from modules.pipeline import TXPipeline, RXPipeline, PipelineConfig, Packet
-from modules.util import bytes_to_bits
-from pluto.receive import run_receiver
+from pluto.config import *
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +104,11 @@ def configure_tun(name: str, ip_addr: str, peer_addr: str, mtu: int) -> None:
     sock.close()
     logger.info("TUN %s: %s/24 (peer %s, MTU %d)", name, ip_addr, peer_addr, mtu)
 
-def tx_thread(tun_fd: int, sdr: adi.Pluto, mtu: int, tx_buffer_len: int) -> None:
+def tx_thread(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto, mtu: int) -> None:
     """Read IP packets from TUN and transmit over PlutoSDR."""
-    max_bits = 1500*8
+    max_bits = mtu*8
     logger.info("TX thread started (max payload %d bytes)", max_bits // 8)
-    tx = TXPipeline(PipelineConfig())
+    tx = TXPipeline(config)
     while True:
         try:
             packet_tun = os.read(tun_fd, mtu)
@@ -121,7 +120,7 @@ def tx_thread(tun_fd: int, sdr: adi.Pluto, mtu: int, tx_buffer_len: int) -> None
 
         payload_bits = bytes_to_bits(packet_tun)
         if len(payload_bits) > max_bits:
-            logger.warning("TX: dropping oversized packet (%d bytes > %d max)", len(packet), max_bits // 8)
+            logger.warning("TX: dropping oversized packet (%d bytes > %d max)", len(packet_tun), max_bits // 8)
             continue
 
         packet_tx = Packet(0, 0, 0, 0, len(packet_tun), payload_bits)
@@ -133,13 +132,16 @@ def tx_thread(tun_fd: int, sdr: adi.Pluto, mtu: int, tx_buffer_len: int) -> None
         except Exception:
             logger.exception("TX: failed to transmit packet")
 
-
-def rx_thread_bridge(tun_fd: int, sdr: adi.Pluto) -> None:
+def rx_thread(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto) -> None:
     """Receive frames from PlutoSDR and write decoded IP packets to TUN."""
-    rx = RXPipeline(PipelineConfig())
+    rx = RXPipeline(config)
 
-    def on_frame(result: FrameResult) -> None:
-        data = result.payload_bytes
+    logger.info("RX thread started")
+    
+    sdr.rx()  # PlutoSDR returns stale DMA data on first read; discard it
+
+    def on_packet(packet: Packet) -> None:
+        data = packet.payload
         # Validate minimum IP packet: 20+ bytes, version nibble is 4 (IPv4) or 6 (IPv6)
         if len(data) < MIN_IP_PACKET_SIZE:
             logger.debug("RX: dropping short frame (%d bytes)", len(data))
@@ -150,13 +152,33 @@ def rx_thread_bridge(tun_fd: int, sdr: adi.Pluto) -> None:
             return
         try:
             os.write(tun_fd, data)
-            logger.info("RX: %d bytes (CFO=%+.0f Hz)", len(data), result.cfo_hz)
+            logger.info("RX: %d bytes", len(data))
         except OSError:
             logger.exception("RX: TUN write failed")
 
-    logger.info("RX thread started")
-    run_receiver(sdr, decoder, on_frame)  # type: ignore[arg-type]
+    while True:
+        try:
+            buffer = np.array(sdr.rx())
+        except OSError:
+            logger.exception("RX: SDR read failed — stopping receiver")
+            break
 
+        while True:
+            packets = rx.receive(buffer)
+
+            for p in packets:
+                on_packet(p)
+
+def bytes_to_bits(data: bytes) -> np.ndarray:
+    """Convert raw bytes to a bit array."""
+    return np.unpackbits(np.frombuffer(data, dtype=np.uint8))
+
+def bits_to_bytes(bits: np.ndarray) -> bytes:
+    """Convert a bit array back to raw bytes."""
+    remainder = len(bits) % 8
+    if remainder:
+        bits = np.concatenate([bits, np.zeros(8 - remainder, dtype=int)])
+    return np.packbits(bits.astype(np.uint8)).tobytes()
 
 def main() -> None:
     """Entry point for the TUN/TAP bridge."""
@@ -173,28 +195,22 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
     node = NODE_CONFIGS[args.node]
-    max_bytes = max_payload_bits(CODING_RATE) // 8
-    tun_mtu = max_bytes
+    tun_mtu = MAX_PACKET_SIZE_BYTES
 
     # ── TUN setup ─────────────────────────────────────────────────────
     tun_fd = open_tun(args.tun)
     configure_tun(args.tun, node.ip_addr, node.peer_addr, tun_mtu)
 
-    # ── SDR setup ─────────────────────────────────────────────────────
-    sdr = create_pluto(f"ip:{args.pluto_ip}")
-    configure_tx(sdr, freq=node.tx_freq, gain=args.tx_gain)
+    # ── Pipeline Config ───────────────────────────────────────────────
+    config = PIPELINE
 
-    # Compute TX buffer size from max-size frame (PlutoSDR requires constant buffer size)
-    frame_constructor = FrameConstructor()
-    max_bits = max_payload_bits(CODING_RATE)
-    max_signal = build_tx_signal_from_bits(np.zeros(max_bits, dtype=np.uint8), frame_constructor, MOD_SCHEME, CODING_RATE)
-    tx_buffer_len = len(max_signal)
-    sdr.tx_buffer_size = tx_buffer_len
+    # ── SDR setup ─────────────────────────────────────────────────────
+    sdr = adi.Pluto(f"ip:{args.pluto_ip}")
+    configure_tx(sdr, freq=node.tx_freq, gain=args.tx_gain, sample_rate=config.SAMPLE_RATE, buffer_size=TX_BUFFER_SIZE)
 
     rx_freq = node.rx_freq + args.rx_cfo_offset
-    configure_rx(sdr, freq=rx_freq)
+    configure_rx(sdr, freq=rx_freq, sample_rate=config.SAMPLE_RATE, buffer_size=RX_BUFFER_SIZE)
 
-    sdr.rx()  # flush stale DMA buffer
 
     logger.info(
         "Node %s: TX %.0f MHz (%.0f dB) -> RX %.0f Hz (CFO offset %+d Hz)",
@@ -207,8 +223,8 @@ def main() -> None:
 
     # ── Launch TX and RX threads ──────────────────────────────────────
     # TX and RX use separate DMA channels in libiio, safe to use from different threads.
-    t_tx = threading.Thread(target=tx_thread, args=(tun_fd, sdr, tun_mtu, tx_buffer_len), daemon=True, name="tx")
-    t_rx = threading.Thread(target=rx_thread_bridge, args=(tun_fd, sdr), daemon=True, name="rx")
+    t_tx = threading.Thread(target=tx_thread, args=(config, tun_fd, sdr, tun_mtu), daemon=True, name="tx")
+    t_rx = threading.Thread(target=rx_thread, args=(config, tun_fd, sdr), daemon=True, name="rx")
     t_tx.start()
     t_rx.start()
 
