@@ -11,11 +11,11 @@ logger = logging.getLogger(__name__)
 try:
     from modules.frame_constructor import frame_constructor_ext as _ext
     _USE_EXT = True
-    logger.warning("Loaded frame_sync_ext pybind11 C++ extension.")
+    logger.info("Loaded frame_constructor_ext pybind11 C++ extension.")
 except ImportError:
     _USE_EXT = False
     logger.warning(
-        "frame_sync_ext not found — falling back to pure-Python implementation. "
+        "frame_constructor_ext not found — falling back to pure-Python implementation. "
         "Build it with: uv run python setup.py build_ext --inplace"
     )
 
