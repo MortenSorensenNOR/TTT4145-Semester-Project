@@ -94,13 +94,12 @@ struct FrameHeaderConfig {
     int  frame_type_bits      = 2;
     int  mod_scheme_bits      = 2;
     int  sequence_number_bits = 4;
-    int  reserved_bits        = 4;
     int  crc_bits             = 8;
     bool use_golay            = false;
 
     int header_total_size() const {
         return payload_length_bits + src_bits + dst_bits + frame_type_bits
-             + mod_scheme_bits + sequence_number_bits + reserved_bits + crc_bits;
+             + mod_scheme_bits + sequence_number_bits + crc_bits;
     }
 };
 
@@ -128,8 +127,7 @@ public:
         off = write_bits(hdr.frame_type,                   cfg_.frame_type_bits,      out, off);
         off = write_bits(static_cast<int>(hdr.mod_scheme), cfg_.mod_scheme_bits,      out, off);
         off = write_bits(hdr.sequence_number,              cfg_.sequence_number_bits, out, off);
-        for (int i = 0; i < cfg_.reserved_bits; ++i) out[off++] = 0;
-        uint8_t crc = crc8_from_bits(out, data_field_bits_ + cfg_.reserved_bits);
+        uint8_t crc = crc8_from_bits(out, data_field_bits_);
         off = write_bits(crc, cfg_.crc_bits, out, off);
         return off;
     }
@@ -150,10 +148,9 @@ public:
         int sequence_number = read_bits(raw, off, cfg_.sequence_number_bits);
 
         int data_end = off;
-        off += cfg_.reserved_bits;
         int crc = read_bits(raw, off, cfg_.crc_bits);
 
-        uint8_t expected_crc = crc8_from_bits(raw, data_end + cfg_.reserved_bits);
+        uint8_t expected_crc = crc8_from_bits(raw, data_end);
 
         FrameHeader h;
         h.length          = length;
@@ -364,7 +361,6 @@ PYBIND11_MODULE(frame_constructor_ext, m) {
         .def_readwrite("frame_type_bits",      &FrameHeaderConfig::frame_type_bits)
         .def_readwrite("mod_scheme_bits",      &FrameHeaderConfig::mod_scheme_bits)
         .def_readwrite("sequence_number_bits", &FrameHeaderConfig::sequence_number_bits)
-        .def_readwrite("reserved_bits",        &FrameHeaderConfig::reserved_bits)
         .def_readwrite("crc_bits",             &FrameHeaderConfig::crc_bits)
         .def_readwrite("use_golay",            &FrameHeaderConfig::use_golay)
         .def("header_total_size",              &FrameHeaderConfig::header_total_size);

@@ -90,7 +90,6 @@ class FrameHeaderConfig:
     frame_type_bits: int = 2
     mod_scheme_bits: int = 2
     sequence_number_bits: int = 4
-    reserved_bits: int = 4
     crc_bits: int = 8
     header_total_size: int = field(init=False)
 
@@ -105,7 +104,6 @@ class FrameHeaderConfig:
             + self.frame_type_bits
             + self.mod_scheme_bits
             + self.sequence_number_bits
-            + self.reserved_bits
             + self.crc_bits
         )
 
@@ -118,7 +116,6 @@ class FrameHeaderConfig:
         cfg.frame_type_bits       = self.frame_type_bits
         cfg.mod_scheme_bits       = self.mod_scheme_bits
         cfg.sequence_number_bits  = self.sequence_number_bits
-        cfg.reserved_bits         = self.reserved_bits
         cfg.crc_bits              = self.crc_bits
         cfg.use_golay             = self.use_golay
         return cfg
@@ -142,7 +139,6 @@ class FrameHeaderConstructor:
         self.frame_type_bits      = config.frame_type_bits
         self.mod_scheme_bits      = config.mod_scheme_bits
         self.sequence_number_bits = config.sequence_number_bits
-        self.reserved_bits        = config.reserved_bits
         self.crc_bits             = config.crc_bits
 
         raw_length = config.header_total_size
@@ -178,7 +174,6 @@ class FrameHeaderConstructor:
             + frame_type_bits
             + mod_scheme_bits
             + sequence_number_bits
-            + [0] * self.reserved_bits
         )
         crc = self._crc_calc("".join(str(b) for b in data_bits))
         data_bits += int_to_bits(crc, self.crc_bits)
@@ -208,7 +203,6 @@ class FrameHeaderConstructor:
 
         (length_bits, src_bits, dst_bits, frame_type_bits, mod_scheme_bits, sequence_number_bits) = fields
 
-        offset += self.reserved_bits
         crc_field = header[offset : offset + self.crc_bits]
         crc_bits = crc_field.tolist() if isinstance(crc_field, np.ndarray) else crc_field
 
@@ -229,7 +223,6 @@ class FrameHeaderConstructor:
                 + frame_type_bits
                 + mod_scheme_bits
                 + sequence_number_bits
-                + [0] * self.reserved_bits
             )
         )
         expected_crc_bits = int_to_bits(self._crc_calc(data_str), self.crc_bits)
