@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from modules.pipeline import *
 
 NUM_PACKETS  = 100
-PAYLOAD_SIZE = 1500
+PAYLOAD_SIZE = 150
 RX_DECODE_RUNS = 20
 
 config  = PipelineConfig()

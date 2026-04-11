@@ -165,7 +165,7 @@ class RXPipeline:
                 decoded_packet.sample_start = search_from + det.payload_start
                 packets.append(decoded_packet)
             except Exception as e:
-                logger.warning(f"DECODE ERROR: {e}")
+                logger.info(f"DECODE ERROR: {e}")
                 pass
 
         return packets
@@ -186,7 +186,7 @@ class RXPipeline:
         try:
             coarse = coarse_sync(decimated, fs_sym, 1, cfg)
         except Exception as e:
-            logger.warning(e)
+            logger.info(e)
             return []
 
         if coarse.m_peaks.size == 0:
@@ -199,7 +199,7 @@ class RXPipeline:
             fine = fine_timing(filtered_buffer, self.long_ref, d_hats_samples, coarse.cfo_hats,
                                self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
         except Exception as e:
-            logger.warning(e)
+            logger.info(e)
             return []
 
         payload_starts = fine.sample_idxs + len(self.long_ref)
