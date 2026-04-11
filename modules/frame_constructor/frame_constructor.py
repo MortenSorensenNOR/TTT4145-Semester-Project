@@ -85,8 +85,8 @@ class FrameHeader:
 class FrameHeaderConfig:
     """Bit-width configuration for frame header fields."""
     payload_length_bits: int = 12
-    src_bits: int = 2
-    dst_bits: int = 2
+    src_bits: int = 1
+    dst_bits: int = 1
     frame_type_bits: int = 2
     mod_scheme_bits: int = 2
     sequence_number_bits: int = 4
