@@ -24,7 +24,7 @@ class PipelineConfig:
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
     CODING_RATE: CodeRates = CodeRates.NONE
     PRE_HEADER_GUARD_BITS: int = 0
-    GUARD_SYMS_LENGTH: int = 200
+    GUARD_SYMS_LENGTH: int = 24
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more

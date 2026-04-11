@@ -49,17 +49,17 @@ class SynchronizerConfig:
     zc_root_long: int = 13
 
     short_preamble_nsym: int = 23
-    short_preamble_nreps: int = 6
+    short_preamble_nreps: int = 2
 
     long_preamble_nsym: int = 23
-    long_margin_nsym: int = 15
+    long_margin_nsym: int = 8
 
     energy_floor: np.float32 = np.finfo(np.float32).tiny
     detection_threshold: np.float32 = np.float32(0.5)
     # Minimum r_d as a fraction of the peak r_d in the buffer.
     # Filters low-energy regions (noise floor) where M(d)≈1 spuriously.
     # Set to 0.0 to disable (default for backward compat with simulation).
-    energy_gate_fraction: np.float32 = np.float32(0.01)
+    energy_gate_fraction: np.float32 = np.float32(0.05)
 
 
 @dataclass
