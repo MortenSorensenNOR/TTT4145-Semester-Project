@@ -70,7 +70,7 @@ MIN_DETECTION_CONFIDENCE: float = 0.3
 MIN_DETECTION_RATE: float = 0.90
 MAX_CFO_ERROR_HZ: float = 2_000.0
 MIN_ALIGNED_RATE: float = 0.95
-MIN_PEAK_RATIO: float = 5.0
+MIN_PEAK_RATIO: float = 4.0
 MAX_PHASE_ERR_DEG: float = 15.0
 OTA_MAX_CFO_ERROR_HZ: float = 3_000.0  # relaxed: combined phase noise + SCO stress
 

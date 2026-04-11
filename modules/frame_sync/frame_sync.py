@@ -48,7 +48,7 @@ class SynchronizerConfig:
     zc_root_short: int = 7
     zc_root_long: int = 13
 
-    short_preamble_nsym: int = 23
+    short_preamble_nsym: int = 17
     short_preamble_nreps: int = 2
 
     long_preamble_nsym: int = 23
