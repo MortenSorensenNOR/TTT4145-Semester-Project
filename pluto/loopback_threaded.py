@@ -17,11 +17,12 @@ Usage:
     python pluto/loopback_threaded.py [options]
 
 Options:
-    --gain       TX hardware gain in dB   (default: -30)
-    --payload    Payload size in bytes    (default: 10)
-    --packets    Number of packets to TX  (default: 20)
-    --interval   Inter-packet gap in ms   (default: 200)
-    --ip         PlutoSDR IP address      (default: 192.168.2.1)
+    --gain         TX hardware gain in dB            (default: -30)
+    --payload      Payload size in bytes             (default: 10)
+    --packets      Number of packets to TX           (default: 20)
+    --interval     Inter-packet gap in ms            (default: 200)
+    --ip           PlutoSDR IP address               (default: 192.168.2.1)
+    --hardware-rrc Use FPGA RRC filter (custom bitstream required)
 """
 
 import argparse
@@ -45,18 +46,19 @@ from pluto.sdr_stream import RxStream
 # ---------------------------------------------------------------------------
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--gain",     type=float, default=-30,           help="TX gain in dB (default: -30)")
-parser.add_argument("--payload",  type=int,   default=10,            help="Payload bytes (default: 10)")
-parser.add_argument("--packets",  type=int,   default=20,            help="Number of packets to transmit (default: 20)")
-parser.add_argument("--interval", type=float, default=200,           help="Inter-packet gap in ms (default: 200)")
-parser.add_argument("--ip",       type=str,   default="192.168.2.1", help="PlutoSDR IP (default: 192.168.2.1)")
+parser.add_argument("--gain",         type=float, default=-30,           help="TX gain in dB (default: -30)")
+parser.add_argument("--payload",      type=int,   default=10,            help="Payload bytes (default: 10)")
+parser.add_argument("--packets",      type=int,   default=20,            help="Number of packets to transmit (default: 20)")
+parser.add_argument("--interval",     type=float, default=200,           help="Inter-packet gap in ms (default: 200)")
+parser.add_argument("--ip",           type=str,   default="192.168.2.1", help="PlutoSDR IP (default: 192.168.2.1)")
+# parser.add_argument("--hardware-rrc", type=bool,  default=False,         help="Skip software RRC; use FPGA hardware RRC filter (requires custom bitstream)")
 args = parser.parse_args()
 
 # ---------------------------------------------------------------------------
 # Pipelines
 # ---------------------------------------------------------------------------
 
-pipe_cfg = PipelineConfig(hardware_rrc=False)
+pipe_cfg = PipelineConfig(hardware_rrc=True)
 tx_pipe  = TXPipeline(pipe_cfg)
 rx_pipe  = RXPipeline(pipe_cfg)
 
@@ -84,7 +86,7 @@ configure_rx(sdr, freq=pipe_cfg.CENTER_FREQ, gain_mode="fast_attack", sample_rat
 # decoder is busy.  128 × ~3.4 ms ≈ 435 ms of buffering at the default size.
 stream = RxStream(sdr, maxsize=128, lossless=True)
 
-print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
+print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}, hw_rrc={pipe_cfg.hardware_rrc}")
 print(f"Payload   : {args.payload} bytes  ({args.payload * 8} bits)")
 print(f"Frame len : {frame_len} samples  ({frame_len / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
 print(f"RX buf    : {rx_buf_size} samples  ({rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
