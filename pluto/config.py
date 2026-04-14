@@ -47,7 +47,7 @@ def configure_tx(
     freq: int,
     gain: float,
     sample_rate: int,
-    buffer_size: int,
+    # buffer_size: int,
     cyclic: bool = False,
 ) -> None:
     """Apply standard TX settings to an SDR."""
@@ -56,4 +56,4 @@ def configure_tx(
     sdr.tx_lo = int(freq)
     sdr.tx_hardwaregain_chan0 = gain
     sdr.tx_cyclic_buffer = cyclic
-    sdr.tx_buffer_size = buffer_size
+    # sdr.tx_buffer_size = buffer_size

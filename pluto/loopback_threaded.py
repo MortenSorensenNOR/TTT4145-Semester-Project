@@ -37,7 +37,7 @@ import numpy as np
 import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
-from pluto.config import CENTER_FREQ, DAC_SCALE, configure_rx, configure_tx
+from pluto.config import DAC_SCALE, configure_rx, configure_tx
 from pluto.sdr_stream import RxStream
 
 # ---------------------------------------------------------------------------
@@ -62,14 +62,6 @@ rx_pipe  = RXPipeline(pipe_cfg)
 
 rng = np.random.default_rng(0)
 
-# ---------------------------------------------------------------------------
-# SDR setup — shared device (PlutoSDR supports simultaneous TX + RX)
-# ---------------------------------------------------------------------------
-
-sdr = adi.Pluto("ip:" + args.ip)
-configure_tx(sdr, freq=CENTER_FREQ, gain=args.gain, cyclic=False)
-configure_rx(sdr, freq=CENTER_FREQ, gain_mode="fast_attack")
-
 # Size the RX buffer to hold ~1 full frame.  The RX loop keeps the previous
 # buffer and concatenates it with the current one (2-buffer sliding window) so
 # frames straddling a buffer boundary are still decoded.
@@ -78,7 +70,15 @@ _probe_pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.pay
 _probe_samples = tx_pipe.transmit(_probe_pkt)
 frame_len      = len(_probe_samples)
 rx_buf_size    = 2 * int(2 ** np.ceil(np.log2(frame_len)))
-sdr.rx_buffer_size = rx_buf_size
+
+# ---------------------------------------------------------------------------
+# SDR setup — shared device (PlutoSDR supports simultaneous TX + RX)
+# ---------------------------------------------------------------------------
+
+sdr = adi.Pluto("ip:" + args.ip)
+configure_tx(sdr, freq=pipe_cfg.CENTER_FREQ, gain=args.gain, cyclic=False, sample_rate=pipe_cfg.SAMPLE_RATE)
+configure_rx(sdr, freq=pipe_cfg.CENTER_FREQ, gain_mode="fast_attack", sample_rate=pipe_cfg.SAMPLE_RATE, buffer_size=rx_buf_size)
+
 
 # Lossless stream: large queue so the hardware reader never stalls while the
 # decoder is busy.  128 × ~3.4 ms ≈ 435 ms of buffering at the default size.
@@ -147,7 +147,7 @@ def tx_thread():
         time.sleep(remaining)
     t1 = time.perf_counter()
 
-    print(f"Took: {t1 - t0} seconds. Throughput: {args.packets * args.payload / (t1 - t0)} B/s")
+    print(f"Took: {t1 - t0} seconds. Throughput: {args.packets * args.payload / (t1 - t0) * 8 / 1_000.0} kb/s")
     tx_done.set()
     print("  [TX] done")
 
@@ -157,7 +157,7 @@ def tx_thread():
 
 def rx_thread():
     # Flush 16 stale DMA buffers synchronously before signalling TX to start.
-    stream.start(flush=16)
+    stream.start(flush=8)
     rx_ready.set()
 
     prev_buf    = None
