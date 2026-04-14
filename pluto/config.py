@@ -23,6 +23,7 @@ MAX_PACKET_SIZE_BYTES = 1500
 # FDD frequency pair for bidirectional bridge mode
 FREQ_A_TO_B = 2_400_000_000
 FREQ_B_TO_A = 2_450_000_000
+CENTER_FREQ = 2_400_000_000
 
 PIPELINE = PipelineConfig()
 
@@ -30,8 +31,8 @@ def configure_rx(
     sdr: adi.Pluto,
     *,
     freq: int,
-    sample_rate: int,
-    buffer_size: int,
+    sample_rate: int = PIPELINE.SAMPLE_RATE,
+    buffer_size: int = RX_BUFFER_SIZE,
     gain_mode: str = "slow_attack",
 ) -> None:
     """Apply standard RX settings to an SDR."""
@@ -46,7 +47,7 @@ def configure_tx(
     *,
     freq: int,
     gain: float,
-    sample_rate: int,
+    sample_rate: int = PIPELINE.SAMPLE_RATE,
     # buffer_size: int,
     cyclic: bool = False,
 ) -> None:
