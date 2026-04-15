@@ -58,7 +58,7 @@ args = parser.parse_args()
 # Pipelines
 # ---------------------------------------------------------------------------
 
-pipe_cfg = PipelineConfig(hardware_rrc=True)
+pipe_cfg = PipelineConfig(hardware_rrc=False)
 tx_pipe  = TXPipeline(pipe_cfg)
 rx_pipe  = RXPipeline(pipe_cfg)
 
