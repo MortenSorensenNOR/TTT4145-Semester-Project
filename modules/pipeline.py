@@ -20,7 +20,7 @@ from utils.plotting import *
 @dataclass
 class PipelineConfig:
     SAMPLE_RATE: int = 4_000_000
-    CENTER_FREQ: int = 2_450_000_000
+    CENTER_FREQ: int = 2_400_000_000
     SPS: int = 4
     SPAN: int = 8
     RRC_ALPHA: np.float32 = 0.25
@@ -192,16 +192,17 @@ class RXPipeline:
         if coarse.m_peaks.size == 0:
             return []
 
-        # Fine timing on decimated (symbol-rate) buffer — d_hats already in symbol domain
+        # Convert symbol-domain d_hats to sample-domain for full-rate fine timing
+        d_hats_samples = coarse.d_hats * sps
+
         try:
-            fine = fine_timing(decimated, self.long_ref_dec, coarse.d_hats, coarse.cfo_hats,
-                               fs_sym, 1, cfg, self.ref_f_dec)
+            fine = fine_timing(filtered_buffer, self.long_ref, d_hats_samples, coarse.cfo_hats,
+                               self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
         except Exception as e:
             logger.info(e)
             return []
 
-        # Convert symbol-domain result back to sample-domain for decode()
-        payload_starts = (fine.sample_idxs + len(self.long_ref_dec)) * sps
+        payload_starts = fine.sample_idxs + len(self.long_ref)
         return [
             DetectionResult(
                 payload_start=int(payload_starts[i]),

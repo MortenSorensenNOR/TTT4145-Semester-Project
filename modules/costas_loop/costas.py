@@ -177,7 +177,7 @@ def apply_costas_loop(
         )
 
     return func(
-        -np.asarray(symbols, dtype=np.complex64),
+        np.asarray(symbols, dtype=np.complex64),
         float(config.alpha),
         float(config.beta),
         float(current_phase_estimate),

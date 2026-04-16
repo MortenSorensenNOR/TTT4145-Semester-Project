@@ -52,9 +52,9 @@ static void init_lut() {
 
 // Map phase in [-π, π] to LUT index.
 // Multiply by precomputed LUT_SCALE instead of dividing by 2π each call.
+// Adding LUT_SIZE before masking handles negative phases correctly.
 static inline int phase_to_idx(f32 phase) {
-    return static_cast<int>((phase + static_cast<f32>(M_PI)) * LUT_SCALE)
-           & (LUT_SIZE - 1);
+    return (static_cast<int>(phase * LUT_SCALE) + LUT_SIZE) & (LUT_SIZE - 1);
 }
 
 // Wrap phase to [-π, π].
