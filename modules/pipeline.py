@@ -2,9 +2,6 @@ from dataclasses import dataclass
 from math import ceil
 import numpy as np
 
-import logging
-logger = logging.getLogger(__name__)
-
 from modules.pulse_shaping.pulse_shaping import *
 from modules.modulators import *
 from modules.frame_constructor.frame_constructor import *
@@ -17,10 +14,13 @@ from modules.gardner_ted.gardner import *
 
 from utils.plotting import *
 
+import logging
+logger = logging.getLogger(__name__)
+
 @dataclass
 class PipelineConfig:
     SAMPLE_RATE: int = 4_000_000
-    CENTER_FREQ: int = 2_440_000_000
+    CENTER_FREQ: int = 2_401_000_000
     SPS: int = 4
     SPAN: int = 8
     RRC_ALPHA: np.float32 = 0.25
