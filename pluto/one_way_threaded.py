@@ -161,8 +161,8 @@ def run_tx():
                 current = np.concatenate([current,
                     np.zeros(chunk_len - len(current), dtype=np.complex64)])
 
-            sdr.tx(current)
             t_tx_start = time.perf_counter()
+            sdr.tx(current)
 
             # Overlap: build next batch while hardware is on air.
             if i + 1 < len(offsets):

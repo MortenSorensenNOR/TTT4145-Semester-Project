@@ -141,38 +141,35 @@ def tx_thread():
     rx_ready.wait()   # don't transmit until RX has drained stale buffers
 
     batch_starts = list(range(0, args.packets, args.batch_size))
-    air_time     = None   # set on first push (chunk_len / sample_rate)
-    chunk_len    = None   # locked on first push; later batches are zero-padded
 
-    # Lookahead: build batch N+1 *during* the transmission sleep of batch N,
-    # so the only dead air between windows is the DMA push time, not the build.
-    current = _build_batch(0)
+    # Pre-build all batches before transmission starts.  sdr.tx() blocks until
+    # the hardware has finished transmitting the buffer, so any build work done
+    # *after* a sdr.tx() call creates dead air equal to the build time.
+    # Building upfront eliminates that gap entirely.
+    batches   = [_build_batch(bs) for bs in batch_starts]
+    chunk_len = len(batches[0])
+    air_time  = chunk_len / pipe_cfg.SAMPLE_RATE
+    # Pad tail batch (may be shorter) to the same length as the rest.
+    batches = [
+        b if len(b) == chunk_len
+        else np.concatenate([b, np.zeros(chunk_len - len(b), dtype=np.complex64)])
+        for b in batches
+    ]
 
     t0 = time.perf_counter()
-    for i, bs in enumerate(batch_starts):
-        # Lock buffer length on the first batch; pad shorter tail batches.
-        if chunk_len is None:
-            chunk_len = len(current)
-            air_time  = chunk_len / pipe_cfg.SAMPLE_RATE
-        if len(current) < chunk_len:
-            current = np.concatenate([current, np.zeros(chunk_len - len(current), dtype=np.complex64)])
+    for i, batch in enumerate(batches):
+        t_tx_start = time.perf_counter()
+        sdr.tx(batch)
 
-        # Push to hardware; transmission starts when sdr.tx() returns.
-        sdr.tx(current)
-        t_tx_start = time.perf_counter()   # hardware is now transmitting
-
-        # Overlap: build next batch while the hardware is on air.
-        if i + 1 < len(batch_starts):
-            current = _build_batch(batch_starts[i + 1])
-
-        # Sleep for whatever air time remains after the build.
+        # If sdr.tx() returned early (non-blocking DMA), sleep out the rest of
+        # the air window so we don't call sdr.tx() before the hardware is done.
         elapsed   = time.perf_counter() - t_tx_start
         remaining = air_time - elapsed
         if remaining > 0:
             time.sleep(remaining)
 
         # Optional dead-air gap between windows (e.g. to simulate ACK wait).
-        if args.interval > 0 and i < len(batch_starts) - 1:
+        if args.interval > 0 and i < len(batches) - 1:
             time.sleep(args.interval / 1000.0)
 
     t1 = time.perf_counter()
