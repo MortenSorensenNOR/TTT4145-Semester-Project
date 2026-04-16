@@ -40,7 +40,7 @@ import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
 from pluto.config import DAC_SCALE, configure_rx, configure_tx
-from pluto.sdr_stream import RxStream, TxStream
+from pluto.sdr_stream import RxStream
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -121,16 +121,10 @@ print(f"Post-TX   : {_BUFS_AFTER_TX} bufs needed after tx_done  "
 # TX thread
 # ---------------------------------------------------------------------------
 
-def tx_thread():
-    rx_ready.wait()   # don't transmit until RX has drained stale buffers
-
-    # Send packets in windows of batch_size.  TxStream accumulates samples for
-    # a full window then pushes them as one DMA transfer, mimicking a real
-    # ARQ/sliding-window transmitter (send window → wait ACKs → next window).
-    tx_stream = TxStream(sdr, sample_rate=pipe_cfg.SAMPLE_RATE, chunk_packets=args.batch_size)
-
-    t0 = time.perf_counter()
-    for seq in range(args.packets):
+def _build_batch(batch_start: int) -> np.ndarray:
+    """Build and return one batch of samples (not yet DAC-scaled)."""
+    chunks = []
+    for seq in range(batch_start, min(batch_start + args.batch_size, args.packets)):
         sequence_bits = np.unpackbits(np.array([seq], dtype=np.uint8))
         random_bits   = rng.integers(0, 2, args.payload * 8 - 8, dtype=np.uint8)
         payload_bits  = np.concatenate([sequence_bits, random_bits])
@@ -139,17 +133,49 @@ def tx_thread():
         peak    = np.max(np.abs(samples))
         if peak > 0:
             samples = samples / peak
-        # send() scales to DAC range; flushes to hardware every batch_size packets
-        tx_stream.send(samples)
+        chunks.append((samples * DAC_SCALE).astype(np.complex64))
+    return np.concatenate(chunks)
 
-        # Optional inter-batch gap (fires on the last packet of each batch, i.e.
-        # after the flush, so the sleep represents dead air between windows).
-        if args.interval > 0 and (seq + 1) % args.batch_size == 0 and (seq + 1) < args.packets:
+
+def tx_thread():
+    rx_ready.wait()   # don't transmit until RX has drained stale buffers
+
+    batch_starts = list(range(0, args.packets, args.batch_size))
+    air_time     = None   # set on first push (chunk_len / sample_rate)
+    chunk_len    = None   # locked on first push; later batches are zero-padded
+
+    # Lookahead: build batch N+1 *during* the transmission sleep of batch N,
+    # so the only dead air between windows is the DMA push time, not the build.
+    current = _build_batch(0)
+
+    t0 = time.perf_counter()
+    for i, bs in enumerate(batch_starts):
+        # Lock buffer length on the first batch; pad shorter tail batches.
+        if chunk_len is None:
+            chunk_len = len(current)
+            air_time  = chunk_len / pipe_cfg.SAMPLE_RATE
+        if len(current) < chunk_len:
+            current = np.concatenate([current, np.zeros(chunk_len - len(current), dtype=np.complex64)])
+
+        # Push to hardware; transmission starts when sdr.tx() returns.
+        sdr.tx(current)
+        t_tx_start = time.perf_counter()   # hardware is now transmitting
+
+        # Overlap: build next batch while the hardware is on air.
+        if i + 1 < len(batch_starts):
+            current = _build_batch(batch_starts[i + 1])
+
+        # Sleep for whatever air time remains after the build.
+        elapsed   = time.perf_counter() - t_tx_start
+        remaining = air_time - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+
+        # Optional dead-air gap between windows (e.g. to simulate ACK wait).
+        if args.interval > 0 and i < len(batch_starts) - 1:
             time.sleep(args.interval / 1000.0)
 
-    tx_stream.close()   # flush any partial final batch
     t1 = time.perf_counter()
-
     print(f"Took: {t1 - t0:.3f} s. Throughput: {args.packets * args.payload / (t1 - t0) * 8 / 1_000.0:.1f} kb/s")
     tx_done.set()
     print("  [TX] done")
