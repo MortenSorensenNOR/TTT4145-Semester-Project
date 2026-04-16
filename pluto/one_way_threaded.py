@@ -17,12 +17,13 @@ Usage:
     python pluto/loopback_threaded.py [options]
 
 Options:
-    --gain       TX hardware gain in dB   (default: -30)
-    --payload    Payload size in bytes    (default: 10)
-    --packets    Number of packets to TX  (default: 20)
-    --interval   Inter-packet gap in ms   (default: 200)
-    --ip         PlutoSDR IP address      (default: 192.168.2.1)
-    --mode       Operation mode: 'tx', 'rx', or 'both' (default: 'both')
+    --gain        TX hardware gain in dB        (default: -30)
+    --payload     Payload size in bytes         (default: 10)
+    --packets     Number of packets to TX       (default: 20)
+    --batch-size  Packets per TX window         (default: 8)
+    --interval    Inter-burst gap in ms         (default: 200)
+    --ip          PlutoSDR IP address           (default: 192.168.2.1)
+    --mode        Operation mode: 'tx', 'rx', or 'both' (default: 'both')
 """
 
 import argparse
@@ -51,6 +52,7 @@ parser.add_argument("--payload",  type=int,   default=10,            help="Paylo
 parser.add_argument("--packets",  type=int,   default=20,            help="Number of packets per TX burst (default: 20)")
 parser.add_argument("--interval", type=float, default=200,           help="Inter-burst gap in ms (default: 200)")
 parser.add_argument("--ip",       type=str,   default="192.168.2.1", help="PlutoSDR IP (default: 192.168.2.1)")
+parser.add_argument("--batch-size",type=int,   default=8,             help="Packets per TX batch/window (default: 8)")
 parser.add_argument("--mode",     type=str,   default="both",        help="Mode: 'tx', 'rx', or 'both' (default: both)")
 args = parser.parse_args()
 
@@ -104,47 +106,80 @@ print(f"Packets   : {args.packets} per burst")
 print(f"TX gain   : {args.gain} dB\n")
 
 # ---------------------------------------------------------------------------
-# TX mode — loop forever: build burst, send, wait, repeat
+# TX helpers
+# ---------------------------------------------------------------------------
+
+def _build_batch(seq_start: int, count: int) -> np.ndarray:
+    """Build `count` packets starting at seq_start; return DAC-scaled samples."""
+    chunks = []
+    for i in range(count):
+        seq       = (seq_start + i) % (2**32)
+        seq_bytes = np.array([(seq >> 24) & 0xFF, (seq >> 16) & 0xFF,
+                               (seq >>  8) & 0xFF,  seq        & 0xFF], dtype=np.uint8)
+        sequence_bits = np.unpackbits(seq_bytes)
+        random_bits   = rng.integers(0, 2, args.payload * 8 - 32, dtype=np.uint8)
+        payload_bits  = np.concatenate([sequence_bits, random_bits])
+        pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=payload_bits)
+        samples = tx_pipe.transmit(pkt)
+        peak    = np.max(np.abs(samples))
+        if peak > 0:
+            samples = samples / peak
+        chunks.append((samples * DAC_SCALE).astype(np.complex64))
+    return np.concatenate(chunks)
+
+# ---------------------------------------------------------------------------
+# TX mode — loop forever: send burst in batches, wait, repeat
 # ---------------------------------------------------------------------------
 
 def run_tx():
-    burst_num = 0
+    burst_num  = 0
     global_seq = 0
 
     while True:
-        burst_num += 1
-        chunks = []
-        for i in range(args.packets):
-            seq = global_seq % (2**32)  # fits in four bytes
-            seq_bytes     = np.array([(seq >> 24) & 0xFF, (seq >> 16) & 0xFF,
-                                      (seq >>  8) & 0xFF,  seq        & 0xFF], dtype=np.uint8)
-            sequence_bits = np.unpackbits(seq_bytes)
-            random_bits   = rng.integers(0, 2, args.payload * 8 - 32, dtype=np.uint8)
-            payload_bits  = np.concatenate([sequence_bits, random_bits])
-            pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=payload_bits)
-            samples = tx_pipe.transmit(pkt)
-            peak = np.max(np.abs(samples))
-            if peak > 0:
-                samples = samples / peak
-            chunks.append((samples * DAC_SCALE).astype(np.complex64))
-            global_seq += 1
+        burst_num   += 1
+        burst_start  = global_seq
+        n            = args.packets
+        batch_size   = args.batch_size
+        offsets      = list(range(0, n, batch_size))
+        chunk_len    = None
+        air_time     = None
 
-        all_samples  = np.concatenate(chunks)
-        air_time_s   = len(all_samples) / pipe_cfg.SAMPLE_RATE
+        # Lookahead: build first batch before entering the send loop.
+        current = _build_batch(burst_start, min(batch_size, n))
 
-        print(f"  [TX] burst {burst_num}: sending {args.packets} packets "
-              f"(seq {global_seq - args.packets}–{global_seq - 1}), "
-              f"air_time={air_time_s * 1e3:.1f} ms")
+        print(f"  [TX] burst {burst_num}: {n} packets "
+              f"(seq {burst_start}–{burst_start + n - 1}), "
+              f"{len(offsets)} batch(es) of {batch_size}")
 
         t0 = time.perf_counter()
-        sdr.tx(all_samples)
-        remaining = air_time_s - (time.perf_counter() - t0)
-        if remaining > 0:
-            time.sleep(remaining)
+        for i, offset in enumerate(offsets):
+            # Lock buffer length to first batch; zero-pad shorter tail batches.
+            if chunk_len is None:
+                chunk_len = len(current)
+                air_time  = chunk_len / pipe_cfg.SAMPLE_RATE
+            if len(current) < chunk_len:
+                current = np.concatenate([current,
+                    np.zeros(chunk_len - len(current), dtype=np.complex64)])
+
+            sdr.tx(current)
+            t_tx_start = time.perf_counter()
+
+            # Overlap: build next batch while hardware is on air.
+            if i + 1 < len(offsets):
+                next_offset = offsets[i + 1]
+                current = _build_batch(burst_start + next_offset,
+                                       min(batch_size, n - next_offset))
+
+            elapsed   = time.perf_counter() - t_tx_start
+            remaining = air_time - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
+        global_seq += n
         t1 = time.perf_counter()
 
         print(f"  [TX] burst {burst_num} done: {t1 - t0:.3f} s  "
-              f"({args.packets * args.payload / (t1 - t0):.0f} B/s)")
+              f"({n * args.payload / (t1 - t0):.0f} B/s)")
 
         time.sleep(args.interval / 1000.0)
 
