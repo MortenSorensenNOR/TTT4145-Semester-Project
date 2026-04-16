@@ -149,3 +149,84 @@ class RxStream:
         out = arr.view(np.complex64).reshape(-1)
         out *= _SCALE
         return out
+
+
+class TxStream:
+    """Chunked non-cyclic transmit for PlutoSDR.
+
+    Buffers ``chunk_packets`` packets' worth of samples and pushes them to the
+    hardware in one DMA call, eliminating per-packet USB overhead while
+    modelling a real windowed/ARQ transmitter (send window → wait for ACKs →
+    next window).
+
+    Each chunk is timed so the next push does not start until the hardware has
+    finished transmitting the current one, preventing DMA buffer corruption.
+
+    Typical usage::
+
+        stream = TxStream(sdr, sample_rate=pipe_cfg.SAMPLE_RATE, chunk_packets=8)
+        for pkt in packets:
+            samples = tx_pipe.transmit(pkt)
+            samples /= np.max(np.abs(samples))   # normalise to [-1, 1]
+            stream.send(samples)
+        stream.close()   # flush remainder + wait for last chunk to finish
+    """
+
+    def __init__(self, sdr: adi.Pluto, sample_rate: int, chunk_packets: int = 8):
+        """
+        Args:
+            sdr:           configured adi.Pluto instance (tx_cyclic_buffer=False)
+            sample_rate:   SDR sample rate in Hz — used to compute air time
+            chunk_packets: number of packets to accumulate before each push
+        """
+        self._sdr           = sdr
+        self._sample_rate   = sample_rate
+        self._chunk_packets = chunk_packets
+        self._pending: list[np.ndarray] = []
+        self._n_pending     = 0
+        self._chunk_len: int | None = None  # fixed on first flush; used to pad later batches
+
+    def send(self, samples: np.ndarray) -> None:
+        """Buffer one packet's normalised samples (range [-1, 1]).
+
+        Scales to the DAC range internally.  Flushes to hardware automatically
+        once ``chunk_packets`` packets have been accumulated.
+
+        Args:
+            samples: complex64 (or float-compatible) array, peak amplitude ≤ 1.
+        """
+        self._pending.append((samples * DAC_SCALE).astype(np.complex64))
+        self._n_pending += 1
+        if self._n_pending >= self._chunk_packets:
+            self._flush()
+
+    def close(self) -> None:
+        """Flush any remaining buffered samples and wait for transmission to end."""
+        self._flush()
+
+    # ------------------------------------------------------------------
+
+    def _flush(self) -> None:
+        if not self._pending:
+            return
+        chunk = np.concatenate(self._pending)
+
+        # pyadi-iio creates the TX DMA buffer on the first sdr.tx() call and
+        # rejects any subsequent push with a different length.  Lock in the
+        # full-batch length on the first flush, then zero-pad partial batches
+        # (e.g. the final window when packets % chunk_packets != 0).
+        if self._chunk_len is None:
+            self._chunk_len = len(chunk)
+        elif len(chunk) < self._chunk_len:
+            chunk = np.concatenate([chunk, np.zeros(self._chunk_len - len(chunk), dtype=np.complex64)])
+
+        # On PlutoSDR over USB, sdr.tx() returns after the DMA push completes
+        # and the hardware begins transmitting from the start of that point.
+        # Sleep for the full air time so the next push does not start before
+        # the hardware has finished reading the current buffer.
+        air_time = self._chunk_len / self._sample_rate
+        self._sdr.tx(chunk)
+        time.sleep(air_time)
+
+        self._pending.clear()
+        self._n_pending = 0

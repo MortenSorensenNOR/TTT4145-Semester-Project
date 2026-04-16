@@ -20,7 +20,8 @@ Options:
     --gain         TX hardware gain in dB            (default: -30)
     --payload      Payload size in bytes             (default: 10)
     --packets      Number of packets to TX           (default: 20)
-    --interval     Inter-packet gap in ms            (default: 200)
+    --batch-size   Packets per TX window             (default: 8)
+    --interval     Inter-batch gap in ms             (default: 200)
     --ip           PlutoSDR IP address               (default: 192.168.2.1)
     --hardware-rrc Use FPGA RRC filter (custom bitstream required)
 """
@@ -39,7 +40,7 @@ import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
 from pluto.config import DAC_SCALE, configure_rx, configure_tx
-from pluto.sdr_stream import RxStream
+from pluto.sdr_stream import RxStream, TxStream
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -49,7 +50,8 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.R
 parser.add_argument("--gain",         type=float, default=-30,           help="TX gain in dB (default: -30)")
 parser.add_argument("--payload",      type=int,   default=10,            help="Payload bytes (default: 10)")
 parser.add_argument("--packets",      type=int,   default=20,            help="Number of packets to transmit (default: 20)")
-parser.add_argument("--interval",     type=float, default=200,           help="Inter-packet gap in ms (default: 200)")
+parser.add_argument("--interval",     type=float, default=200,           help="Inter-batch gap in ms (default: 200)")
+parser.add_argument("--batch-size",   type=int,   default=8,             help="Packets per TX batch/window (default: 8)")
 parser.add_argument("--ip",           type=str,   default="192.168.2.1", help="PlutoSDR IP (default: 192.168.2.1)")
 # parser.add_argument("--hardware-rrc", type=bool,  default=False,         help="Skip software RRC; use FPGA hardware RRC filter (requires custom bitstream)")
 args = parser.parse_args()
@@ -90,7 +92,7 @@ print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cf
 print(f"Payload   : {args.payload} bytes  ({args.payload * 8} bits)")
 print(f"Frame len : {frame_len} samples  ({frame_len / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
 print(f"RX buf    : {rx_buf_size} samples  ({rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
-print(f"Gap       : {args.interval} ms")
+print(f"Batch     : {args.batch_size} packets/window,  gap={args.interval} ms between windows")
 print(f"Packets   : {args.packets}")
 print(f"TX gain   : {args.gain} dB\n")
 
@@ -105,10 +107,9 @@ rx_ready      = threading.Event()   # set once RX has flushed stale DMA buffers
 _decoded_seqs: set[int] = set()
 _all_decoded  = threading.Event()   # set when all expected packets are decoded
 
-# How many data-buffers to read after tx_done before stopping.  The PlutoSDR
-# buffers the entire TX waveform before starting playback, so at tx_done the
-# hardware is just beginning to transmit — we must keep reading for at least
-# ceil(air_time / buf_duration) more buffers.
+# How many data-buffers to read after tx_done before stopping.  tx_done fires
+# once TxStream.close() returns (all batches fully transmitted), so this is
+# purely a tail margin to catch any frames still in the hardware pipeline.
 _air_time_ms   = int(frame_len * args.packets / pipe_cfg.SAMPLE_RATE * 1000)
 _buf_ms        = int(rx_buf_size / pipe_cfg.SAMPLE_RATE * 1000)
 _BUFS_AFTER_TX = int(np.ceil(_air_time_ms / _buf_ms)) + 8
@@ -123,33 +124,33 @@ print(f"Post-TX   : {_BUFS_AFTER_TX} bufs needed after tx_done  "
 def tx_thread():
     rx_ready.wait()   # don't transmit until RX has drained stale buffers
 
-    # Pre-build all packet sample arrays and concatenate into one buffer so
-    # only a single sdr.tx() call is needed, eliminating per-packet USB overhead.
-    chunks = []
+    # Send packets in windows of batch_size.  TxStream accumulates samples for
+    # a full window then pushes them as one DMA transfer, mimicking a real
+    # ARQ/sliding-window transmitter (send window → wait ACKs → next window).
+    tx_stream = TxStream(sdr, sample_rate=pipe_cfg.SAMPLE_RATE, chunk_packets=args.batch_size)
+
+    t0 = time.perf_counter()
     for seq in range(args.packets):
         sequence_bits = np.unpackbits(np.array([seq], dtype=np.uint8))
         random_bits   = rng.integers(0, 2, args.payload * 8 - 8, dtype=np.uint8)
         payload_bits  = np.concatenate([sequence_bits, random_bits])
-        pkt = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=payload_bits)
+        pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=seq, length=args.payload, payload=payload_bits)
         samples = tx_pipe.transmit(pkt)
-        peak = np.max(np.abs(samples))
+        peak    = np.max(np.abs(samples))
         if peak > 0:
             samples = samples / peak
-        chunks.append((samples * DAC_SCALE).astype(np.complex64))
+        # send() scales to DAC range; flushes to hardware every batch_size packets
+        tx_stream.send(samples)
 
-    all_samples = np.concatenate(chunks)
-    air_time_s  = len(all_samples) / pipe_cfg.SAMPLE_RATE
+        # Optional inter-batch gap (fires on the last packet of each batch, i.e.
+        # after the flush, so the sleep represents dead air between windows).
+        if args.interval > 0 and (seq + 1) % args.batch_size == 0 and (seq + 1) < args.packets:
+            time.sleep(args.interval / 1000.0)
 
-    t0 = time.perf_counter()
-    sdr.tx(all_samples)
-    # Sleep only for remaining air time — hardware was already transmitting
-    # during the USB push, so we subtract the push duration.
-    remaining = air_time_s - (time.perf_counter() - t0)
-    if remaining > 0:
-        time.sleep(remaining)
+    tx_stream.close()   # flush any partial final batch
     t1 = time.perf_counter()
 
-    print(f"Took: {t1 - t0} seconds. Throughput: {args.packets * args.payload / (t1 - t0) * 8 / 1_000.0} kb/s")
+    print(f"Took: {t1 - t0:.3f} s. Throughput: {args.packets * args.payload / (t1 - t0) * 8 / 1_000.0:.1f} kb/s")
     tx_done.set()
     print("  [TX] done")
 
