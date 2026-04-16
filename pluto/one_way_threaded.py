@@ -115,9 +115,11 @@ def run_tx():
         burst_num += 1
         chunks = []
         for i in range(args.packets):
-            seq = global_seq % 256      # fits in one byte
-            sequence_bits = np.unpackbits(np.array([seq], dtype=np.uint8))
-            random_bits   = rng.integers(0, 2, args.payload * 8 - 8, dtype=np.uint8)
+            seq = global_seq % (2**32)  # fits in four bytes
+            seq_bytes     = np.array([(seq >> 24) & 0xFF, (seq >> 16) & 0xFF,
+                                      (seq >>  8) & 0xFF,  seq        & 0xFF], dtype=np.uint8)
+            sequence_bits = np.unpackbits(seq_bytes)
+            random_bits   = rng.integers(0, 2, args.payload * 8 - 32, dtype=np.uint8)
             payload_bits  = np.concatenate([sequence_bits, random_bits])
             pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=payload_bits)
             samples = tx_pipe.transmit(pkt)
@@ -158,9 +160,11 @@ def run_rx():
 
     print("  [RX] listening …")
 
-    n_total   = 0
-    n_valid   = 0
-    prev_buf  = None
+    n_total     = 0
+    n_valid     = 0
+    n_dropped   = 0
+    last_seq    = None
+    prev_buf    = None
     search_from = 0
 
     try:
@@ -185,17 +189,27 @@ def run_rx():
             for pkt in packets:
                 n_total += 1
                 if pkt.valid:
-                    seq_bits = pkt.payload[:8]
-                    seq      = np.packbits(seq_bits)[0]
+                    seq_bits = pkt.payload[:32]
+                    b        = np.packbits(seq_bits)
+                    seq      = (int(b[0]) << 24) | (int(b[1]) << 16) | (int(b[2]) << 8) | int(b[3])
                     n_valid += 1
-                    print(f"  [RX] #{n_total}  seq={seq:3d}  valid=True   "
-                          f"(ok={n_valid}/{n_total})")
+
+                    gap = 0
+                    if last_seq is not None:
+                        gap = (seq - last_seq - 1) % (2**32)
+                        if gap > 0:
+                            n_dropped += gap
+                    last_seq = seq
+
+                    gap_str = f"  *** GAP: {gap} dropped ***" if gap > 0 else ""
+                    print(f"  [RX] #{n_total}  seq={seq:10d}  valid=True   "
+                          f"(ok={n_valid}, dropped≈{n_dropped}){gap_str}")
                 else:
                     print(f"  [RX] #{n_total}  header CRC failed  "
-                          f"(ok={n_valid}/{n_total})")
+                          f"(ok={n_valid}, dropped≈{n_dropped})")
 
     except KeyboardInterrupt:
-        print(f"\n  [RX] interrupted — decoded {n_valid} valid / {n_total} total frames")
+        print(f"\n  [RX] interrupted — decoded {n_valid} valid / {n_total} total frames, ~{n_dropped} dropped by seq gap")
     finally:
         stream.stop()
 
@@ -240,8 +254,10 @@ else:  # "both" — original threaded loopback behaviour
 
         chunks = []
         for seq in range(args.packets):
-            sequence_bits = np.unpackbits(np.array([seq], dtype=np.uint8))
-            random_bits   = rng.integers(0, 2, args.payload * 8 - 8, dtype=np.uint8)
+            seq_bytes     = np.array([(seq >> 24) & 0xFF, (seq >> 16) & 0xFF,
+                                      (seq >>  8) & 0xFF,  seq        & 0xFF], dtype=np.uint8)
+            sequence_bits = np.unpackbits(seq_bytes)
+            random_bits   = rng.integers(0, 2, args.payload * 8 - 32, dtype=np.uint8)
             payload_bits  = np.concatenate([sequence_bits, random_bits])
             pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=payload_bits)
             samples = tx_pipe.transmit(pkt)
@@ -301,11 +317,15 @@ else:  # "both" — original threaded loopback behaviour
                 search_from = 0
 
             for pkt in packets:
-                seq_bits = pkt.payload[:8]
-                seq      = np.packbits(seq_bits)[0]
-                entry    = {"seq_num": seq if pkt.valid else -1, "valid": pkt.valid, "time": time.perf_counter()}
                 if pkt.valid:
-                    print(f"  [RX] decoded seq={seq}, valid={pkt.valid}")
+                    seq_bits = pkt.payload[:32]
+                    b        = np.packbits(seq_bits)
+                    seq      = (int(b[0]) << 24) | (int(b[1]) << 16) | (int(b[2]) << 8) | int(b[3])
+                else:
+                    seq = -1
+                entry    = {"seq_num": seq, "valid": pkt.valid, "time": time.perf_counter()}
+                if pkt.valid:
+                    print(f"  [RX] decoded seq={seq:10d}, valid={pkt.valid}")
                 else:
                     print(f"  [RX] frame found but header CRC failed")
                 with rx_lock:
