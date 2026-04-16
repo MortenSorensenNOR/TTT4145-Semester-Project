@@ -1,0 +1,12 @@
+prefix=C:/Users/morte/TTT4145-Semester-Project/vendor/install
+exec_prefix=${prefix}
+libdir=C:/Users/morte/TTT4145-Semester-Project/vendor/install/lib
+includedir=C:/Users/morte/TTT4145-Semester-Project/vendor/install/include
+
+Name: libiio
+Description: Library for interfacing IIO devices
+Version: 0.25
+
+Requires:
+Libs: -L${libdir} -liio
+Cflags: -I${includedir}

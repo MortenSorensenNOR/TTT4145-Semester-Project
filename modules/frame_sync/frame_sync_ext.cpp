@@ -20,6 +20,11 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 
+#ifdef _MSC_VER
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
 namespace py = pybind11;
 using c64 = std::complex<float>;
 using f32 = float;

@@ -1,0 +1,13 @@
+prefix=C:/Users/morte/TTT4145-Semester-Project/vendor/install
+exec_prefix=C:/Users/morte/TTT4145-Semester-Project/vendor/install
+libdir=C:/Users/morte/TTT4145-Semester-Project/vendor/install/lib
+sharedlibdir=C:/Users/morte/TTT4145-Semester-Project/vendor/install/lib
+includedir=C:/Users/morte/TTT4145-Semester-Project/vendor/install/include
+
+Name: libad9361
+Description: Device specific library for AD936X transceivers
+Version: 0.2
+
+Requires:
+Libs: -L${libdir} -L${sharedlibdir} -lad9361
+Cflags: -I${includedir}

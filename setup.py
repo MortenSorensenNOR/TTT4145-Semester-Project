@@ -22,6 +22,11 @@ def _cpu_info() -> str:
 
 
 def _compile_flags() -> list[str]:
+    import sys
+    # MSVC doesn't understand GCC flags — return MSVC equivalents instead.
+    if sys.platform == "win32":
+        return ["/O2", "/fp:fast", "/GL"]
+
     cross = os.environ.get("CROSS_COMPILE", "").lower()
     machine = platform.machine().lower() if not cross else cross.split("-")[0]
     cpu = os.environ.get("TARGET_CPU", _cpu_info()).lower()
