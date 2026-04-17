@@ -13,6 +13,7 @@ References
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -542,3 +543,138 @@ def test_spurious_detection_rate(channel: SyncFixture) -> None:
           f"\nSNR={channel.snr_db}dB | "
           f"noise-only: {noise_spurious}/{N_FP_TRIALS} buffers | "
           f"two-frame guard: {guard_spurious}/{N_TRIALS} trials")
+
+# ---------------------------------------------------------------------------
+# 9. False-positive rejection on colored noise (LO-leakage model)
+#
+# Problem: the Schmidl-Cox metric M(d) can exceed the 0.5 threshold when
+# the input contains a narrowband tone (LO leakage from the carrier).  A
+# pure or near-pure tone makes P(d) ≈ R(d), so M(d) ≈ 1 for all d.  The
+# energy gate does not help because the tone has genuine energy.
+#
+# Fix: the fine-timing cross-correlation with the long ZC reference gives a
+# peak-to-mean ratio that is high (>4) for real preambles and low (1.5–2.3)
+# for tones/colored noise — adding a fine_peak_ratio_min gate in detect()
+# suppresses these false positives.
+#
+# This test validates that: even when coarse sync fires on a tone+noise
+# mixture, the fine peak_ratio is always below SYNC_CFG.fine_peak_ratio_min.
+# ---------------------------------------------------------------------------
+
+# LO tone excess over the broadband noise floor.  15 dB is aggressive enough
+# to reliably push M(d) above the 0.5 coarse threshold so the test actually
+# exercises the fine-timing gate (not just trivially passes because coarse
+# never fires).
+_LO_EXCESS_DB: float = 15.0
+
+# Typical Pluto LO leakage frequencies relative to the tuned centre: DC,
+# small crystal-error offset, and a moderate offset.
+_LO_OFFSETS_HZ = [
+    pytest.param(0,       id="DC"),
+    pytest.param(20_000,  id="20kHz"),
+    pytest.param(50_000,  id="50kHz"),
+    pytest.param(100_000, id="100kHz"),
+]
+
+
+@pytest.mark.parametrize("lo_hz", _LO_OFFSETS_HZ)
+def test_false_positive_colored_noise(lo_hz: int, channel: SyncFixture) -> None:
+    """Coarse sync may trigger on tone+noise; fine peak_ratio must stay below
+    the gate threshold for all such spurious candidates."""
+    noise_len = (
+        SAMPLE_OFFSET
+        + N_PAYLOAD_SYMBOLS * SPS
+        + len(channel.long_ref)
+    )
+    lo_amp = channel.noise_scale * 10 ** (_LO_EXCESS_DB / 20)
+    t = np.arange(noise_len, dtype=np.float32) / float(SAMPLE_RATE)
+
+    for seed in range(N_FP_TRIALS):
+        rng = np.random.default_rng(40_000 + seed)
+        base = channel.noise_scale * (
+            rng.standard_normal(noise_len) + 1j * rng.standard_normal(noise_len)
+        ).astype(np.complex64)
+        lo_tone = (lo_amp * np.exp(2j * np.pi * lo_hz * t)).astype(np.complex64)
+        colored = (base + lo_tone).astype(np.complex64)
+
+        filtered = match_filter(colored, channel.rrc_taps)
+        coarse   = coarse_sync(filtered, SAMPLE_RATE, SPS, SYNC_CFG)
+        if coarse.m_peaks.size == 0:
+            continue  # coarse didn't fire — trivially fine
+
+        # Coarse fired: every candidate must be rejected by fine
+        fine = fine_timing(
+            filtered, channel.long_ref,
+            coarse.d_hats, coarse.cfo_hats,
+            SAMPLE_RATE, SPS, SYNC_CFG,
+        )
+        assert all(float(r) < float(SYNC_CFG.fine_peak_ratio_min) for r in fine.peak_ratios), (
+            f"lo_hz={lo_hz} Hz, snr={channel.snr_db}dB, seed={seed}: "
+            f"fine peak_ratios {fine.peak_ratios} >= gate {SYNC_CFG.fine_peak_ratio_min} "
+            f"on colored noise (LO +{_LO_EXCESS_DB}dB)"
+        )
+
+# ---------------------------------------------------------------------------
+# 10. Full-pipeline false-positive rejection on hardware-matched noise
+#
+# The real PlutoSDR noise floor (TX muted, measured from hardware) has two
+# components:
+#   (a) broadband AWGN from the ADC thermal floor
+#   (b) a ~5 dB DC-band elevation from LO leakage into the ADC
+#
+# We model this synthetically as white noise + low-pass-filtered noise
+# (rectangular LPF, cutoff ~50 kHz / 4 MHz ≈ 1/80 of Nyquist) rather than
+# shipping a 17 MB hardware capture in the repo.  The test exercises the full
+# RXPipeline.receive() path (decimated coarse, full-rate fine, peak_ratio gate,
+# header decode) so a regression at any layer is caught.
+# ---------------------------------------------------------------------------
+
+# DC-band power excess above the broadband floor, matching the ~5 dB measured
+# on the Pluto.  Low-pass filter half-width in samples (≈50 kHz at 4 MHz).
+_DC_EXCESS_DB: float = 5.0
+_LPF_HALF_WIDTH: int = 40   # rectangular filter → cutoff at fs/(2*LPF_HALF_WIDTH) ≈ 50 kHz
+_HW_NOISE_TRIALS: int = 4   # short: this runs through the full decoder
+
+
+def _make_hw_noise(rng: np.random.Generator, n: int, noise_scale: float) -> np.ndarray:
+    """Broadband noise + low-frequency (LO-leakage) component.
+
+    Low-frequency component is a rectangular-LPF-filtered white noise stream
+    scaled to be _DC_EXCESS_DB above the broadband floor, matching the
+    measured Pluto hardware noise profile.
+    """
+    base = noise_scale * (
+        rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    ).astype(np.complex64)
+    # LPF via convolution with a normalised rectangular window
+    kernel   = np.ones(_LPF_HALF_WIDTH * 2 + 1, dtype=np.float32) / (_LPF_HALF_WIDTH * 2 + 1)
+    lo_raw   = noise_scale * (
+        rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    ).astype(np.complex64)
+    lo_filt  = np.convolve(lo_raw, kernel, mode="same").astype(np.complex64)
+    lo_scale = 10 ** (_DC_EXCESS_DB / 20)
+    return (base + lo_scale * lo_filt).astype(np.complex64)
+
+
+def test_false_positive_hw_matched_noise(channel: SyncFixture) -> None:
+    """Full pipeline must produce zero frames on hardware-matched colored noise.
+
+    Runs RXPipeline.receive() on a buffer whose length and noise power match
+    a ~10-packet RX window (the scenario that produced ~800 spurious
+    detections before the fine_peak_ratio gate was added).
+    """
+    from modules.pipeline import RXPipeline  # avoid heavy import at collection time
+
+    rx_pipe  = RXPipeline(PipelineConfig())
+    # ~10 frames worth of samples — mirrors the hardware capture length
+    noise_len = 10 * (_cfg.GUARD_SYMS_LENGTH * SPS + len(channel.long_ref) + N_PAYLOAD_SYMBOLS * SPS)
+    noise_len = int(2 ** np.ceil(np.log2(noise_len)))  # round to power-of-2
+
+    for seed in range(_HW_NOISE_TRIALS):
+        rng     = np.random.default_rng(50_000 + seed)
+        buf     = _make_hw_noise(rng, noise_len, channel.noise_scale)
+        packets = rx_pipe.receive(buf)
+        assert len(packets) == 0, (
+            f"snr={channel.snr_db}dB, seed={seed}: "
+            f"{len(packets)} false detection(s) on hardware-matched colored noise"
+        )

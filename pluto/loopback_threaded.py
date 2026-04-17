@@ -43,7 +43,7 @@ from pluto.config import DAC_SCALE, configure_rx, configure_tx
 from pluto.sdr_stream import RxStream
 
 import logging
-# logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -161,7 +161,7 @@ def tx_thread():
 
     t0 = time.perf_counter()
     for i, batch in enumerate(batches):
-        sdr.tx(batch)
+        # sdr.tx(batch)
         t_tx_start = time.perf_counter()
 
         # If sdr.tx() returned early (non-blocking DMA), sleep out the rest of
@@ -184,6 +184,8 @@ def tx_thread():
 # RX thread
 # ---------------------------------------------------------------------------
 
+buffers = []
+
 def rx_thread():
     # Flush 16 stale DMA buffers synchronously before signalling TX to start.
     stream.start(flush=8)
@@ -203,6 +205,8 @@ def rx_thread():
 
         if tx_done.is_set():
             n_after_tx += 1
+
+        buffers.append(curr_buf)
 
         raw      = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
         prev_len = len(prev_buf) if prev_buf is not None else 0
@@ -295,5 +299,14 @@ if missing_seqs:
 else:
     print("Missing seq : none")
 print("=" * 50)
+
+
+from utils.plotting import *
+buffers = np.array(buffers)
+buffers = buffers.flatten()
+np.save("raw_rx_buffer_just_noise.npy", buffers)
+
+plot_iq(buffers)
+plt.show()
 
 # sys.exit(0 if n_dropped == 0 else 1)

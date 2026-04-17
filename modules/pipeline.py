@@ -208,9 +208,10 @@ class RXPipeline:
                 payload_start=int(payload_starts[i]),
                 cfo_estimate=np.float32(coarse.cfo_hats[i]),
                 phase_estimate=np.float32(fine.phase_estimates[i]),
-                confidence=np.float32(coarse.m_peaks[i]),
+                confidence=np.float32(fine.peak_ratios[i]),
             )
             for i in range(len(payload_starts))
+            if cfg.fine_peak_ratio_min <= 0 or fine.peak_ratios[i] >= cfg.fine_peak_ratio_min
         ]
 
     def decode(self, buffer: np.ndarray, cfo: np.float32, phase_estimate: np.float32) -> Packet:

@@ -60,6 +60,11 @@ class SynchronizerConfig:
     # Filters low-energy regions (noise floor) where M(d)≈1 spuriously.
     # Set to 0.0 to disable (default for backward compat with simulation).
     energy_gate_fraction: np.float32 = np.float32(0.05)
+    # Minimum fine-timing cross-correlation peak-to-mean ratio required to
+    # accept a coarse detection as a real frame.  Real ZC preambles produce
+    # ratios > 4.0; LO leakage and colored noise sit at 1.5–2.3.  Set to 0.0
+    # to disable (reverts to coarse-only gating).
+    fine_peak_ratio_min: np.float32 = np.float32(3.0)
 
 
 @dataclass
