@@ -57,6 +57,7 @@ parser.add_argument("--interval", type=float, default=200,           help="Inter
 parser.add_argument("--ip",       type=str,   default="192.168.2.1", help="PlutoSDR IP (default: 192.168.2.1)")
 parser.add_argument("--batch-size",type=int,   default=8,             help="Packets per TX batch/window (default: 8)")
 parser.add_argument("--mode",     type=str,   default="both",        help="Mode: 'tx', 'rx', or 'both' (default: both)")
+parser.add_argument("--cfo-offset", type=int, default=15200, help="CFO offset of RX relative to TX")
 args = parser.parse_args()
 
 if args.mode not in ("tx", "rx", "both"):
@@ -80,7 +81,7 @@ rng = np.random.default_rng(0)
 sdr = adi.Pluto("ip:" + args.ip)
 
 if args.mode in ("tx", "both"):
-    configure_tx(sdr, freq=pipe_cfg.CENTER_FREQ, gain=args.gain, cyclic=False)
+    configure_tx(sdr, freq=pipe_cfg.CENTER_FREQ + args.cfo_offset, gain=args.gain, cyclic=False)
 
 if args.mode in ("rx", "both"):
     configure_rx(sdr, freq=pipe_cfg.CENTER_FREQ, gain_mode="fast_attack")
