@@ -42,6 +42,9 @@ from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
 from pluto.config import CENTER_FREQ, DAC_SCALE, configure_rx, configure_tx
 from pluto.sdr_stream import RxStream
 
+import logging
+# logging.basicConfig(level=logging.INFO)
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -134,6 +137,7 @@ def _build_batch(seq_start: int, count: int) -> np.ndarray:
 def run_tx():
     burst_num  = 0
     global_seq = 0
+    current    = None  # pre-built first batch handed over from previous burst
 
     while True:
         burst_num   += 1
@@ -144,14 +148,17 @@ def run_tx():
         chunk_len    = None
         air_time     = None
 
-        # Lookahead: build first batch before entering the send loop.
-        current = _build_batch(burst_start, min(batch_size, n))
+        # Lookahead: build first batch before entering the send loop,
+        # unless it was already pre-built during the previous burst's sleep.
+        if current is None:
+            current = _build_batch(burst_start, min(batch_size, n))
 
         print(f"  [TX] burst {burst_num}: {n} packets "
               f"(seq {burst_start}–{burst_start + n - 1}), "
               f"{len(offsets)} batch(es) of {batch_size}")
 
         t0 = time.perf_counter()
+        next_burst_first = None  # pre-built first batch of the *next* burst
         for i, offset in enumerate(offsets):
             # Lock buffer length to first batch; zero-pad shorter tail batches.
             if chunk_len is None:
@@ -169,6 +176,12 @@ def run_tx():
                 next_offset = offsets[i + 1]
                 current = _build_batch(burst_start + next_offset,
                                        min(batch_size, n - next_offset))
+            else:
+                # Last batch of this burst — pre-build the next burst's first
+                # batch so sdr.tx() fires immediately after the sleep with no
+                # extra build gap between bursts.
+                next_burst_first = _build_batch(burst_start + n,
+                                                min(batch_size, n))
 
             elapsed   = time.perf_counter() - t_tx_start
             remaining = air_time - elapsed
@@ -177,6 +190,10 @@ def run_tx():
 
         global_seq += n
         t1 = time.perf_counter()
+        # Hand the pre-built batch to the next iteration so the while-loop
+        # body skips the build step and goes straight to sdr.tx().
+        if next_burst_first is not None:
+            current = next_burst_first
 
         print(f"  [TX] burst {burst_num} done: {t1 - t0:.3f} s  "
               f"({n * args.payload / (t1 - t0):.0f} B/s)")
