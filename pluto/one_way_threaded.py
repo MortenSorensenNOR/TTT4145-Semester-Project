@@ -43,7 +43,7 @@ from pluto.config import CENTER_FREQ, DAC_SCALE, configure_rx, configure_tx
 from pluto.sdr_stream import RxStream
 
 import logging
-# logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -80,10 +80,10 @@ rng = np.random.default_rng(0)
 sdr = adi.Pluto("ip:" + args.ip)
 
 if args.mode in ("tx", "both"):
-    configure_tx(sdr, freq=CENTER_FREQ, gain=args.gain, cyclic=False)
+    configure_tx(sdr, freq=pipe_cfg.CENTER_FREQ, gain=args.gain, cyclic=False)
 
 if args.mode in ("rx", "both"):
-    configure_rx(sdr, freq=CENTER_FREQ, gain_mode="fast_attack")
+    configure_rx(sdr, freq=pipe_cfg.CENTER_FREQ, gain_mode="fast_attack")
 
 # ---------------------------------------------------------------------------
 # RX buffer sizing (needed for RX and both modes, and for the TX probe)

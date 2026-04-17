@@ -161,7 +161,7 @@ def tx_thread():
 
     t0 = time.perf_counter()
     for i, batch in enumerate(batches):
-        # sdr.tx(batch)
+        sdr.tx(batch)
         t_tx_start = time.perf_counter()
 
         # If sdr.tx() returned early (non-blocking DMA), sleep out the rest of
@@ -304,9 +304,10 @@ print("=" * 50)
 from utils.plotting import *
 buffers = np.array(buffers)
 buffers = buffers.flatten()
-np.save("raw_rx_buffer_just_noise.npy", buffers)
+# np.save("raw_rx_buffer_just_noise.npy", buffers)
+plot_spectrum(buffers, sample_rate=pipe_cfg.SAMPLE_RATE)
 
-plot_iq(buffers)
+# plot_iq(buffers)
 plt.show()
 
 # sys.exit(0 if n_dropped == 0 else 1)

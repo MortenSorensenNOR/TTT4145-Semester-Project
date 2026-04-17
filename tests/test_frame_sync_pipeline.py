@@ -52,6 +52,7 @@ NUM_TAPS: int = 2 * SPS * SPAN + 1
 COARSE_CFO_RANGE_HZ: float = float(SAMPLE_RATE) / (
     2 * SYNC_CFG.short_preamble_nsym * SPS
 )
+print(COARSE_CFO_RANGE_HZ)
 
 # ---------------------------------------------------------------------------
 # Test scenario constants

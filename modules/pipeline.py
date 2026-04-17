@@ -157,6 +157,8 @@ class RXPipeline:
         if not detections:
             return []
 
+        logger.info(f"Detected {len(detections)} packets\n\t Cfo's: {[float(det.cfo_estimate) for det in detections]}'")
+
         packets = []
         for det in detections:
             rx_syms = filtered_buffer[det.payload_start:]
@@ -165,7 +167,7 @@ class RXPipeline:
                 decoded_packet.sample_start = search_from + det.payload_start
                 packets.append(decoded_packet)
             except Exception as e:
-                logger.info(f"DECODE ERROR: {e}")
+                # logger.warning(f"DECODE ERROR: {e}")
                 pass
 
         return packets
