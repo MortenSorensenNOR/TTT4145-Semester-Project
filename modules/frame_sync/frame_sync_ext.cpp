@@ -113,7 +113,8 @@ CoarseResult coarse_sync_ext(
     int long_nsym,
     f32 energy_floor,
     f32 detection_threshold,
-    f32 energy_gate_fraction)
+    f32 energy_gate_fraction,
+    bool use_minn_park = false)
 {
     auto s   = samples_in.unchecked<1>();
     int  N   = static_cast<int>(s.shape(0));
@@ -168,7 +169,58 @@ CoarseResult coarse_sync_ext(
         if (above[i] - above[i - 1] > min_gap) splits.push_back(i);
     splits.push_back(static_cast<int>(above.size()));
 
-    int n_frames = static_cast<int>(splits.size()) - 1;
+    int n_frames_raw = static_cast<int>(splits.size()) - 1;
+
+    // Pre-allocate worst-case, then fill only valid frames.
+    std::vector<ssize_t> out_d_vec;
+    std::vector<f32>     out_cfo_vec;
+    std::vector<f32>     out_m_vec;
+    out_d_vec.reserve(n_frames_raw);
+    out_cfo_vec.reserve(n_frames_raw);
+    out_m_vec.reserve(n_frames_raw);
+
+    for (int ci = 0; ci < n_frames_raw; ++ci) {
+        int s0 = splits[ci], s1 = splits[ci + 1];
+        int  d_hat = above[s0];
+        f32  m_peak = 0.0f;
+        for (int j = s0; j < s1; ++j)
+            if (m_d[above[j]] > m_peak) m_peak = m_d[above[j]];
+
+        f32 cfo_hat;
+        if (use_minn_park) {
+            // Minn/Park sign-flip check (CFO-independent):
+            //   P(d₀)   ≈ +L·e^{jφ}  (rep1→rep2, same sign)
+            //   P(d₀+L) ≈ −L·e^{jφ}  (rep2→rep3, sign flip)
+            // ⇒ Re(P(d₀+L)·conj(P(d₀))) < 0 for preamble (any CFO).
+            // For any pure tone: P(d) identical at all d → product real-positive → rejected.
+            int mp_pos = std::min(d_hat + L, md_len - 1);
+            c64 check = p_d[mp_pos] * std::conj(p_d[d_hat]);
+            if (check.real() >= 0.0f)
+                continue;  // Minn/Park check failed — not a preamble
+
+            // CFO: P(d₀) − P(d₀+L) = 2L·e^{jφ}  (constructive combination)
+            c64 p_combined = p_d[d_hat] - p_d[mp_pos];
+            cfo_hat = std::atan2(p_combined.imag(), p_combined.real())
+                      * static_cast<f32>(fs)
+                      / (2.0f * f32(M_PI) * static_cast<f32>(L));
+        } else {
+            c64 psum(0.0f, 0.0f);
+            for (int j = s0; j < s1; ++j)
+                psum += p_d[above[j]];
+            int cnt = s1 - s0;
+            c64 pmean = psum / static_cast<f32>(cnt);
+            cfo_hat = std::atan2(pmean.imag(), pmean.real())
+                      * static_cast<f32>(fs)
+                      / (2.0f * f32(M_PI) * static_cast<f32>(L));
+        }
+
+        out_d_vec.push_back(static_cast<ssize_t>(d_hat));
+        out_cfo_vec.push_back(cfo_hat);
+        out_m_vec.push_back(m_peak);
+    }
+
+    int n_frames = static_cast<int>(out_d_vec.size());
+    if (n_frames == 0) return make_empty();
 
     auto out_d   = py::array_t<ssize_t>(n_frames);
     auto out_cfo = py::array_t<f32>(n_frames);
@@ -176,21 +228,10 @@ CoarseResult coarse_sync_ext(
     auto pd = out_d.mutable_unchecked<1>();
     auto pc = out_cfo.mutable_unchecked<1>();
     auto pm = out_m.mutable_unchecked<1>();
-
-    for (int ci = 0; ci < n_frames; ++ci) {
-        int s0 = splits[ci], s1 = splits[ci + 1];
-        pd(ci) = static_cast<ssize_t>(above[s0]);
-        c64 psum(0.0f, 0.0f);
-        f32 m_peak = 0.0f;
-        for (int j = s0; j < s1; ++j) {
-            int d = above[j];
-            psum += p_d[d];
-            if (m_d[d] > m_peak) m_peak = m_d[d];
-        }
-        pm(ci) = m_peak;
-        pc(ci) = std::atan2(psum.imag(), psum.real())
-                 * static_cast<f32>(fs)
-                 / (2.0f * f32(M_PI) * static_cast<f32>(L));
+    for (int i = 0; i < n_frames; ++i) {
+        pd(i) = out_d_vec[i];
+        pc(i) = out_cfo_vec[i];
+        pm(i) = out_m_vec[i];
     }
 
     return {out_d, out_cfo, out_m};
@@ -371,7 +412,10 @@ PYBIND11_MODULE(frame_sync_ext, m) {
         py::arg("short_nsym"), py::arg("short_nreps"), py::arg("long_nsym"),
         py::arg("energy_floor"), py::arg("detection_threshold"),
         py::arg("energy_gate_fraction"),
-        "Schmidl-Cox coarse timing + CFO (sliding window).");
+        py::arg("use_minn_park") = false,
+        "Schmidl-Cox coarse timing + CFO (sliding window). "
+        "use_minn_park=True adds a CFO-independent sign-flip check for "
+        "Minn/Park [+,+,-,-] preambles that rejects pure-tone LO leakage.");
 
     m.def("fine_timing", &fine_timing_ext,
         py::arg("samples"), py::arg("long_ref"),

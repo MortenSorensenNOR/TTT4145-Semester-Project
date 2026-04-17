@@ -48,11 +48,11 @@ class SynchronizerConfig:
     zc_root_short: int = 7
     zc_root_long: int = 13
 
-    short_preamble_nsym: int = 17
-    short_preamble_nreps: int = 2
+    short_preamble_nsym: int = 43   # prime; ≥43 for L > RRC filter length at full rate
+    short_preamble_nreps: int = 4   # 4 reps for Minn/Park [+,+,-,-] sign pattern
 
-    long_preamble_nsym: int = 23
-    long_margin_nsym: int = 8
+    long_preamble_nsym: int = 89    # prime; longer ZC → higher fine-timing peak-to-mean
+    long_margin_nsym: int = 20     # ≥ GUARD_SYMS_LENGTH/2 + RRC_SPAN to cover early d_hat
 
     energy_floor: np.float32 = np.finfo(np.float32).tiny
     detection_threshold: np.float32 = np.float32(0.5)
@@ -65,6 +65,12 @@ class SynchronizerConfig:
     # ratios > 4.0; LO leakage and colored noise sit at 1.5–2.3.  Set to 0.0
     # to disable (reverts to coarse-only gating).
     fine_peak_ratio_min: np.float32 = np.float32(3.0)
+    # Minn/Park sign pattern [+,+,-,-] on short repetitions.
+    # Adds a CFO-independent sign-flip check after Schmidl-Cox detection to
+    # suppress LO-leakage false positives: for any tone r[n]=A·e^{jω₀n},
+    # P(d+L)·conj(P(d)) is always positive-real; for the [+,+,-,-] preamble
+    # it is always negative-real regardless of CFO.  Requires nreps==4.
+    minn_park: bool = True
 
 
 @dataclass
@@ -104,10 +110,22 @@ def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
 
 
 def generate_preamble(config: SynchronizerConfig) -> np.ndarray:
-    """Build the full preamble: repeated short ZC followed by long ZC."""
+    """Build the full preamble: repeated short ZC followed by long ZC.
+
+    When ``config.minn_park`` is True and ``short_preamble_nreps == 4``, the
+    four short repetitions carry a Minn/Park sign pattern [+1, +1, -1, -1].
+    This makes the Schmidl-Cox cross-product P(d+L)·conj(P(d)) negative-real
+    at the preamble start for any CFO, while any pure tone yields a positive-
+    real product — enabling LO-leakage rejection at the coarse-sync stage.
+    """
     zc_short = generate_zadoff_chu(config.zc_root_short, config.short_preamble_nsym)
     zc_long = generate_zadoff_chu(config.zc_root_long, config.long_preamble_nsym)
-    short_rep = np.tile(zc_short, config.short_preamble_nreps)
+    if config.minn_park and config.short_preamble_nreps == 4:
+        signs = np.array([+1.0, +1.0, -1.0, -1.0], dtype=np.complex64)
+        sign_pattern = np.repeat(signs, len(zc_short))
+        short_rep = np.tile(zc_short, 4) * sign_pattern
+    else:
+        short_rep = np.tile(zc_short, config.short_preamble_nreps)
     return np.concatenate([short_rep, zc_long])
 
 
@@ -172,6 +190,7 @@ def coarse_sync(
             samples, fs, samples_per_symbol,
             cfg.short_preamble_nsym, cfg.short_preamble_nreps, cfg.long_preamble_nsym,
             float(cfg.energy_floor), float(cfg.detection_threshold), float(cfg.energy_gate_fraction),
+            bool(cfg.minn_park),
         )
         return CoarseResult(d_hats, cfo_hats, m_peaks)
 
@@ -206,9 +225,37 @@ def coarse_sync(
     splits = np.r_[0, np.flatnonzero(np.diff(above) > min_gap) + 1]
     d_hats = above[splits]
     m_peaks = np.maximum.reduceat(m_d[above], splits)
-    plateau_sum = np.add.reduceat(p_d[above], splits)
-    plateau_cnt = np.diff(np.r_[splits, above.size])
-    cfo_hats = np.angle(plateau_sum / plateau_cnt) * fs / (2 * np.pi * sample_cnt)
+
+    if cfg.minn_park:
+        # Minn/Park sign-flip check (CFO-independent).
+        #
+        # For preamble [+ZC, +ZC, -ZC, -ZC] with any CFO φ per lag:
+        #   P(d₀)   ≈ +L·e^{jφ}   (rep1→rep2, same sign)
+        #   P(d₀+L) ≈ −L·e^{jφ}   (rep2→rep3, sign flip)
+        # ⇒  P(d₀+L)·conj(P(d₀)) ≈ −L²   (real-negative, φ cancels)
+        #
+        # For any pure tone A·e^{jω₀n}:
+        #   P(d) = L|A|²·e^{jω₀L}  at EVERY d
+        # ⇒  P(d+L)·conj(P(d)) = L²|A|⁴ > 0  (always real-positive)
+        #
+        # The check Re(P(d+L)·conj(P(d))) < 0 therefore accepts preambles and
+        # rejects any single-frequency interferer regardless of CFO.
+        L = sample_cnt
+        mp_idx = np.minimum(d_hats + L, len(p_d) - 1)
+        valid_mp = np.real(p_d[mp_idx] * np.conj(p_d[d_hats])) < 0
+        d_hats = d_hats[valid_mp]
+        m_peaks = m_peaks[valid_mp]
+        if d_hats.size == 0:
+            return CoarseResult(np.empty(0, np.intp), np.empty(0), np.empty(0))
+        # CFO: combine P(d) and P(d+L) constructively.
+        # P(d₀) − P(d₀+L) = +L·e^{jφ} − (−L·e^{jφ}) = 2L·e^{jφ}  → 2× stronger.
+        mp_idx = np.minimum(d_hats + L, len(p_d) - 1)
+        p_combined = p_d[d_hats] - p_d[mp_idx]
+        cfo_hats = np.angle(p_combined) * fs / (2 * np.pi * sample_cnt)
+    else:
+        plateau_sum = np.add.reduceat(p_d[above], splits)
+        plateau_cnt = np.diff(np.r_[splits, above.size])
+        cfo_hats = np.angle(plateau_sum / plateau_cnt) * fs / (2 * np.pi * sample_cnt)
 
     return CoarseResult(d_hats, cfo_hats, m_peaks)
 

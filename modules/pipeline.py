@@ -27,7 +27,7 @@ class PipelineConfig:
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
     CODING_RATE: CodeRates = CodeRates.NONE
     PRE_HEADER_GUARD_BITS: int = 0
-    GUARD_SYMS_LENGTH: int = 16
+    GUARD_SYMS_LENGTH: int = 120
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
@@ -171,20 +171,17 @@ class RXPipeline:
         return packets
 
     def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:
-        """Detect frames in a match-filtered buffer. Both coarse and fine sync run post-RRC.
+        """Detect frames in a match-filtered buffer. Both coarse and fine sync run post-RRC
+        on the full-rate (undecimated) filtered buffer.
 
-        Coarse sync runs on a decimated (symbol-rate) copy for speed (~8x).
-        Fine timing runs on the full-rate filtered buffer to preserve sub-symbol
-        timing precision needed for correct decimation in decode().
-        d_hats from coarse (symbol indices) are converted to sample indices first.
+        Fine timing runs on the same full-rate buffer to preserve sub-symbol timing
+        precision needed for correct decimation in decode().
         """
         cfg = self.config.SYNC_CONFIG
         sps = self.config.SPS
-        fs_sym = self.config.SAMPLE_RATE // sps  # symbol rate
 
-        decimated = decimate(filtered_buffer, sps)
         try:
-            coarse = coarse_sync(decimated, fs_sym, 1, cfg)
+            coarse = coarse_sync(filtered_buffer, self.config.SAMPLE_RATE, sps, cfg)
         except Exception as e:
             logger.info(e)
             return []
@@ -192,11 +189,8 @@ class RXPipeline:
         if coarse.m_peaks.size == 0:
             return []
 
-        # Convert symbol-domain d_hats to sample-domain for full-rate fine timing
-        d_hats_samples = coarse.d_hats * sps
-
         try:
-            fine = fine_timing(filtered_buffer, self.long_ref, d_hats_samples, coarse.cfo_hats,
+            fine = fine_timing(filtered_buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
                                self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
         except Exception as e:
             logger.info(e)
