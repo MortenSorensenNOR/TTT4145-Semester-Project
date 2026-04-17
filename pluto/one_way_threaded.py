@@ -39,7 +39,7 @@ import numpy as np
 import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
-from pluto.config import CENTER_FREQ, DAC_SCALE, configure_rx, configure_tx
+from pluto.config import DAC_SCALE, configure_rx, configure_tx
 from pluto.sdr_stream import RxStream
 
 import logging
