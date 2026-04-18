@@ -6,6 +6,8 @@ dist/
 wheels/
 *.egg-info
 *.so
+*.pyd
+
 # Local machine overrides (e.g. piwheels on Pi)
 uv.toml
 .python-version
