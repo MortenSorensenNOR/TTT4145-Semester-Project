@@ -119,7 +119,7 @@ CoarseResult coarse_sync_ext(
     auto s   = samples_in.unchecked<1>();
     int  N   = static_cast<int>(s.shape(0));
     int  L   = short_nsym * sps;
-    int  min_gap = short_nsym * sps * short_nreps + long_nsym * sps;
+    int  min_gap = (short_nreps - 1) * L;  // Minn/Park plateau width = (nreps-1)*L
 
     auto make_empty = [&]() -> CoarseResult {
         return {py::array_t<ssize_t>(0), py::array_t<f32>(0), py::array_t<f32>(0)};
@@ -181,38 +181,76 @@ CoarseResult coarse_sync_ext(
 
     for (int ci = 0; ci < n_frames_raw; ++ci) {
         int s0 = splits[ci], s1 = splits[ci + 1];
-        int  d_hat = above[s0];
-        f32  m_peak = 0.0f;
+
+        // Build ordered candidate list: start of cluster + position after each large gap.
+        // Also track the last position BEFORE each gap for the energy-ratio check —
+        // that sample reflects whether the pre-gap region is genuine signal or near-silent
+        // tail/guard (a long payload doesn't fool it; we check at the gap edge, not cluster[0]).
+        //
+        // Try candidates in order; accept the first that passes energy-ratio AND Minn/Park.
+        // Handles:
+        //   - Spurious near-silence triggers at packet boundaries (low energy ratio)
+        //   - Payload data that accidentally triggered above threshold (Minn/Park fails)
+        //   - AGC-attenuated real preambles (ratio ~42% > 25%, Minn/Park passes) — kept
+        int large_gap_thr = (3 * L) / 2;  // 1.5 * L
+        std::vector<int> candidates, pre_gap_pos;
+        candidates.push_back(above[s0]);
+        for (int j = s0 + 1; j < s1; ++j) {
+            if (above[j] - above[j - 1] > large_gap_thr) {
+                candidates.push_back(above[j]);
+                pre_gap_pos.push_back(above[j - 1]);  // last position before the gap
+            }
+        }
+
+        int  d_hat   = -1;
+        f32  cfo_hat = 0.0f;
+        for (int ci = 0; ci < static_cast<int>(candidates.size()); ++ci) {
+            int cand = candidates[ci];
+
+            // Energy-ratio: skip if the signal just before the gap is near-silent
+            if (ci < static_cast<int>(candidates.size()) - 1) {
+                int before_pos = pre_gap_pos[ci];
+                int next_cand  = candidates[ci + 1];
+                if (r_d[before_pos] < r_d[next_cand] * 0.25f)
+                    continue;
+            }
+
+            if (use_minn_park) {
+                // Minn/Park sign-flip check (CFO-independent):
+                //   P(d₀)   ≈ +L·e^{jφ}  (rep1→rep2, same sign)
+                //   P(d₀+L) ≈ −L·e^{jφ}  (rep2→rep3, sign flip)
+                // ⇒ Re(P(d₀+L)·conj(P(d₀))) < 0 for preamble (any CFO).
+                // For any pure tone or payload data: product real-positive → rejected.
+                int mp_pos = std::min(cand + L, md_len - 1);
+                c64 check = p_d[mp_pos] * std::conj(p_d[cand]);
+                if (check.real() >= 0.0f)
+                    continue;  // Minn/Park failed — try next candidate
+
+                // CFO: P(d₀) − P(d₀+L) = 2L·e^{jφ}  (constructive combination)
+                c64 p_combined = p_d[cand] - p_d[mp_pos];
+                cfo_hat = std::atan2(p_combined.imag(), p_combined.real())
+                          * static_cast<f32>(fs)
+                          / (2.0f * f32(M_PI) * static_cast<f32>(L));
+            } else {
+                c64 psum(0.0f, 0.0f);
+                for (int j = s0; j < s1; ++j)
+                    psum += p_d[above[j]];
+                int cnt = s1 - s0;
+                c64 pmean = psum / static_cast<f32>(cnt);
+                cfo_hat = std::atan2(pmean.imag(), pmean.real())
+                          * static_cast<f32>(fs)
+                          / (2.0f * f32(M_PI) * static_cast<f32>(L));
+            }
+
+            d_hat = cand;
+            break;
+        }
+
+        if (d_hat < 0) continue;  // no valid candidate in this cluster
+
+        f32 m_peak = 0.0f;
         for (int j = s0; j < s1; ++j)
             if (m_d[above[j]] > m_peak) m_peak = m_d[above[j]];
-
-        f32 cfo_hat;
-        if (use_minn_park) {
-            // Minn/Park sign-flip check (CFO-independent):
-            //   P(d₀)   ≈ +L·e^{jφ}  (rep1→rep2, same sign)
-            //   P(d₀+L) ≈ −L·e^{jφ}  (rep2→rep3, sign flip)
-            // ⇒ Re(P(d₀+L)·conj(P(d₀))) < 0 for preamble (any CFO).
-            // For any pure tone: P(d) identical at all d → product real-positive → rejected.
-            int mp_pos = std::min(d_hat + L, md_len - 1);
-            c64 check = p_d[mp_pos] * std::conj(p_d[d_hat]);
-            if (check.real() >= 0.0f)
-                continue;  // Minn/Park check failed — not a preamble
-
-            // CFO: P(d₀) − P(d₀+L) = 2L·e^{jφ}  (constructive combination)
-            c64 p_combined = p_d[d_hat] - p_d[mp_pos];
-            cfo_hat = std::atan2(p_combined.imag(), p_combined.real())
-                      * static_cast<f32>(fs)
-                      / (2.0f * f32(M_PI) * static_cast<f32>(L));
-        } else {
-            c64 psum(0.0f, 0.0f);
-            for (int j = s0; j < s1; ++j)
-                psum += p_d[above[j]];
-            int cnt = s1 - s0;
-            c64 pmean = psum / static_cast<f32>(cnt);
-            cfo_hat = std::atan2(pmean.imag(), pmean.real())
-                      * static_cast<f32>(fs)
-                      / (2.0f * f32(M_PI) * static_cast<f32>(L));
-        }
 
         out_d_vec.push_back(static_cast<ssize_t>(d_hat));
         out_cfo_vec.push_back(cfo_hat);

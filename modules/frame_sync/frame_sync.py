@@ -204,10 +204,12 @@ def coarse_sync(
     m_d = np.abs(p_d) ** 2 / np.maximum(r_d**2, cfg.energy_floor)
 
     # Multi-frame detection — batch iterate-and-advance (cf. gr-ieee802-11 sync_short MIN_GAP)
-    min_gap = (
-        cfg.short_preamble_nsym * samples_per_symbol * cfg.short_preamble_nreps
-        + cfg.long_preamble_nsym * samples_per_symbol
-    )
+    # Minn/Park [+,+,-,-] plateau spans (nreps-1) sub-clusters, each L samples
+    # apart, for a total width of (nreps-1)*L samples.  min_gap must exceed
+    # the plateau width to avoid splitting within a single preamble, but should
+    # be as small as possible to cleanly separate consecutive packets even when
+    # noise creates above-threshold bridges between them.
+    min_gap = (cfg.short_preamble_nreps - 1) * sample_cnt
 
     # Energy gate: suppress low-power regions where thermal noise yields M(d)≈1 spuriously.
     # In hardware, the guard has r_d ~1000x smaller than the preamble but M(d)≈1 because
@@ -223,35 +225,86 @@ def coarse_sync(
 
     # Cluster by gaps > min_gap — each cluster is one frame's plateau
     splits = np.r_[0, np.flatnonzero(np.diff(above) > min_gap) + 1]
-    d_hats = above[splits]
+    ends   = np.r_[splits[1:], len(above)]
     m_peaks = np.maximum.reduceat(m_d[above], splits)
 
+    # Per-cluster d_hat selection with integrated Minn/Park.
+    #
+    # Within each cluster, large internal gaps (> 1.5·L) mark boundaries between
+    # sub-clusters: the first gap separates any spurious early trigger (filter
+    # transient in the preceding packet's payload/guard) from the true preamble.
+    #
+    # Candidates are: cluster[0], then the position after each large gap.
+    # We try them in order and accept the first one that passes both:
+    #   1. Energy-ratio check: r_d[cand] >= 25% of r_d[next_cand]
+    #      (spurious near-silence positions have << 25%; AGC-attenuated preambles
+    #       have ~42%, so the 25% threshold cleanly separates them)
+    #   2. Minn/Park sign-flip: Re(P(d+L)·conj(P(d))) < 0
+    #      (holds for [+,+,-,-] ZC preamble, rejects any single-tone interferer
+    #       and payload data that accidentally triggered above threshold)
+    #
+    # If no candidate in a cluster passes, that cluster is dropped.
+    large_gap_thr    = int(1.5 * sample_cnt)
+    energy_ratio_thr = 0.25
+    d_hats_list  = []
+    m_peaks_list = []
+
+    for (s0, e0), mp in zip(zip(splits, ends), m_peaks):
+        cluster  = above[s0:e0]
+        int_gaps = np.diff(cluster)
+
+        # Build ordered candidate list + the last position BEFORE each gap
+        # (used for the energy-ratio check — that position reflects whether the
+        # pre-gap region has real signal or is near-silent tail/guard)
+        large_gap_idxs = np.flatnonzero(int_gaps > large_gap_thr)
+        candidates     = [int(cluster[0])] + [int(cluster[gi + 1]) for gi in large_gap_idxs]
+        pre_gap_pos    = [int(cluster[gi])     for gi in large_gap_idxs]
+
+        chosen = None
+        for ci, cand in enumerate(candidates):
+            # Energy-ratio: skip if the signal just before the gap leading to
+            # the next candidate is near-silent (< 25% of post-gap energy).
+            # Uses the last above-threshold position before the gap, not the
+            # start of the current sub-cluster, so long payloads don't fool it.
+            if ci < len(candidates) - 1:
+                before_pos = pre_gap_pos[ci]
+                next_cand  = candidates[ci + 1]
+                if r_d[before_pos] < r_d[next_cand] * energy_ratio_thr:
+                    continue
+
+            # Minn/Park sign-flip check (CFO-independent).
+            #
+            # For preamble [+ZC, +ZC, -ZC, -ZC] with any CFO φ per lag:
+            #   P(d₀)   ≈ +L·e^{jφ}   (rep1→rep2, same sign)
+            #   P(d₀+L) ≈ −L·e^{jφ}   (rep2→rep3, sign flip)
+            # ⇒  P(d₀+L)·conj(P(d₀)) ≈ −L²   (real-negative, φ cancels)
+            #
+            # For any pure tone or payload data triggering above threshold:
+            #   Re(P(d+L)·conj(P(d))) >= 0  → rejected
+            if cfg.minn_park:
+                mp_idx = min(cand + sample_cnt, len(p_d) - 1)
+                if np.real(p_d[mp_idx] * np.conj(p_d[cand])) >= 0:
+                    continue
+
+            chosen = cand
+            break
+
+        if chosen is not None:
+            d_hats_list.append(chosen)
+            m_peaks_list.append(float(mp))
+
+    if not d_hats_list:
+        return CoarseResult(np.empty(0, np.intp), np.empty(0), np.empty(0))
+
+    d_hats  = np.array(d_hats_list, dtype=np.intp)
+    m_peaks = np.array(m_peaks_list)
+
     if cfg.minn_park:
-        # Minn/Park sign-flip check (CFO-independent).
-        #
-        # For preamble [+ZC, +ZC, -ZC, -ZC] with any CFO φ per lag:
-        #   P(d₀)   ≈ +L·e^{jφ}   (rep1→rep2, same sign)
-        #   P(d₀+L) ≈ −L·e^{jφ}   (rep2→rep3, sign flip)
-        # ⇒  P(d₀+L)·conj(P(d₀)) ≈ −L²   (real-negative, φ cancels)
-        #
-        # For any pure tone A·e^{jω₀n}:
-        #   P(d) = L|A|²·e^{jω₀L}  at EVERY d
-        # ⇒  P(d+L)·conj(P(d)) = L²|A|⁴ > 0  (always real-positive)
-        #
-        # The check Re(P(d+L)·conj(P(d))) < 0 therefore accepts preambles and
-        # rejects any single-frequency interferer regardless of CFO.
-        L = sample_cnt
-        mp_idx = np.minimum(d_hats + L, len(p_d) - 1)
-        valid_mp = np.real(p_d[mp_idx] * np.conj(p_d[d_hats])) < 0
-        d_hats = d_hats[valid_mp]
-        m_peaks = m_peaks[valid_mp]
-        if d_hats.size == 0:
-            return CoarseResult(np.empty(0, np.intp), np.empty(0), np.empty(0))
         # CFO: combine P(d) and P(d+L) constructively.
         # P(d₀) − P(d₀+L) = +L·e^{jφ} − (−L·e^{jφ}) = 2L·e^{jφ}  → 2× stronger.
-        mp_idx = np.minimum(d_hats + L, len(p_d) - 1)
+        mp_idx    = np.minimum(d_hats + sample_cnt, len(p_d) - 1)
         p_combined = p_d[d_hats] - p_d[mp_idx]
-        cfo_hats = np.angle(p_combined) * fs / (2 * np.pi * sample_cnt)
+        cfo_hats  = np.angle(p_combined) * fs / (2 * np.pi * sample_cnt)
     else:
         plateau_sum = np.add.reduceat(p_d[above], splits)
         plateau_cnt = np.diff(np.r_[splits, above.size])
