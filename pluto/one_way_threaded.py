@@ -61,6 +61,7 @@ parser.add_argument("--ip",       type=str,   default="192.168.2.1", help="Pluto
 parser.add_argument("--batch-size",type=int,   default=8,             help="Packets per TX batch/window (default: 8)")
 parser.add_argument("--mode",     type=str,   default="both",        help="Mode: 'tx', 'rx', or 'both' (default: both)")
 parser.add_argument("--cfo-offset", type=int, default=15200, help="CFO offset of RX relative to TX")
+parser.add_argument("--constellation", action="store_true", help="Show live PSK8 constellation plot (RX mode only)")
 args = parser.parse_args()
 
 if args.mode not in ("tx", "rx", "both"):
@@ -208,6 +209,46 @@ def run_tx():
 # RX mode — run forever, print every decoded packet
 # ---------------------------------------------------------------------------
 
+def _setup_constellation_plot():
+    """Set up a live PSK8 constellation figure. Returns (fig, ax, scatter_handle)."""
+    import matplotlib
+    matplotlib.use("TkAgg" if "DISPLAY" in __import__("os").environ else "Agg")
+    import matplotlib.pyplot as plt
+
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_aspect("equal")
+    ax.set_xlim(-1.6, 1.6)
+    ax.set_ylim(-1.6, 1.6)
+    ax.set_xlabel("I")
+    ax.set_ylabel("Q")
+    ax.set_title("PSK8 constellation — accumulating…")
+    ax.grid(True, alpha=0.25)
+
+    # Decision boundary lines at every π/4
+    for k in range(8):
+        angle = k * np.pi / 4 + np.pi / 8
+        ax.plot([0, 1.55 * np.cos(angle)], [0, 1.55 * np.sin(angle)],
+                "k--", alpha=0.15, linewidth=0.8)
+
+    # Unit circle
+    theta = np.linspace(0, 2 * np.pi, 256)
+    ax.plot(np.cos(theta), np.sin(theta), "k-", alpha=0.08, linewidth=1)
+
+    # Ideal 8-PSK points
+    ideal = rx_pipe.psk8.symbol_mapping
+    ax.scatter(ideal.real, ideal.imag, s=200, marker="*", c="red",
+               zorder=6, label="Ideal", linewidths=0)
+
+    # Received symbols — start empty
+    scat = ax.scatter([], [], s=6, alpha=0.35, c="steelblue",
+                      label="Received", linewidths=0)
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    plt.pause(0.01)
+    return fig, ax, scat
+
+
 def run_rx():
     # Lossless stream: large queue so the hardware reader never stalls while
     # the decoder is busy.
@@ -215,6 +256,15 @@ def run_rx():
     stream.start(flush=16)
 
     print("  [RX] listening …")
+
+    # --- optional constellation plot ---
+    _fig = _ax = _scat = None
+    _sym_buf: list[np.ndarray] = []   # post-Costas symbols accumulated across packets
+    _pkt_count = 0                    # valid packets since last plot refresh
+    _PLOT_EVERY = 20                  # update plot every N valid packets
+    if args.constellation:
+        import matplotlib.pyplot as plt
+        _fig, _ax, _scat = _setup_constellation_plot()
 
     n_total     = 0
     n_valid     = 0
@@ -232,6 +282,9 @@ def run_rx():
             try:
                 curr_buf = stream.get(timeout=0.05)
             except queue.Empty:
+                if args.constellation and _fig is not None:
+                    import matplotlib.pyplot as plt
+                    plt.pause(0.001)
                 continue
 
             prev_len = len(prev_buf) if prev_buf is not None else 0
@@ -274,6 +327,23 @@ def run_rx():
                     gap_str = f"  *** GAP: {gap} dropped ***" if gap > 0 else ""
                     print(f"  [RX] #{n_total}  seq={seq:10d}  valid=True   "
                           f"(ok={n_valid}, dropped≈{n_dropped}){gap_str}")
+
+                    # Collect symbols for constellation plot
+                    if args.constellation and pkt.rx_symbols is not None:
+                        _sym_buf.append(pkt.rx_symbols)
+                        _pkt_count += 1
+                        if _pkt_count >= _PLOT_EVERY:
+                            import matplotlib.pyplot as plt
+                            all_syms = np.concatenate(_sym_buf)
+                            _scat.set_offsets(np.column_stack([all_syms.real, all_syms.imag]))
+                            _ax.set_title(
+                                f"PSK8 constellation — last {_pkt_count} pkts "
+                                f"({len(all_syms)} symbols)"
+                            )
+                            _fig.canvas.flush_events()
+                            plt.pause(0.001)
+                            _sym_buf.clear()
+                            _pkt_count = 0
                 else:
                     print(f"  [RX] #{n_total}  header CRC failed  "
                           f"(ok={n_valid}, dropped≈{n_dropped})")
@@ -282,6 +352,10 @@ def run_rx():
         print(f"\n  [RX] interrupted — decoded {n_valid} valid / {n_total} total frames, ~{n_dropped} dropped by seq gap")
     finally:
         stream.stop()
+        if args.constellation and _fig is not None:
+            import matplotlib.pyplot as plt
+            plt.ioff()
+            plt.show()  # keep window open after run ends
 
 # ---------------------------------------------------------------------------
 # Run

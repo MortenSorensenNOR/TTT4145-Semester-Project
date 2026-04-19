@@ -30,7 +30,7 @@ class PipelineConfig:
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.07) #Need to tune more
+    COSTAS_CONFIG = CostasConfig(0.008) # Bn=0.008 empirically optimal for PSK8 over coax
     GARDNER_CONFIG = GardnerConfig(0.0025) #Probably needs more tuning
 
     pulse_shaping: bool = True
@@ -59,6 +59,7 @@ class Packet:
     valid: bool = False
     err_reason: str = ""
     sample_start: int = -1   # payload_start within the buffer passed to receive()
+    rx_symbols: np.ndarray | None = field(default=None)  # post-Costas PSK8 symbols (for diagnostics)
 
 class TXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
@@ -139,6 +140,7 @@ class RXPipeline:
         # generate the known long preamble for matched filtering
         self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
         self.ref_f = build_fine_ref(self.long_ref, self.config.SYNC_CONFIG, self.config.SPS)
+
         # decimated (symbol-rate) reference for fine timing on the decimated buffer
         self.long_ref_dec = decimate(self.long_ref, self.config.SPS)
         self.ref_f_dec = build_fine_ref(self.long_ref_dec, self.config.SYNC_CONFIG, 1)
@@ -230,13 +232,13 @@ class RXPipeline:
         ]
 
     def decode(self, buffer: np.ndarray, cfo: np.float32, phase_estimate: np.float32) -> Packet:
-        cfo_rad_per_symbol = 2 * np.pi * cfo / self.config.SAMPLE_RATE * self.config.SPS
-        
+        cfo_rad_per_symbol = np.float32(2 * np.pi * float(cfo) / self.config.SAMPLE_RATE * self.config.SPS)
+
         header, payload_start, current_phase_estimate, current_timing_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
         if header.length == 0:
             msg = "Payload length = 0"
             raise ValueError(msg)
-        payload = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate, current_timing_estimate)
+        payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate, current_timing_estimate)
         return Packet(
             src_mac=header.src,
             dst_mac=header.dst,
@@ -245,6 +247,7 @@ class RXPipeline:
             length=header.length,
             payload=payload,
             valid=header.crc_passed,
+            rx_symbols=rx_symbols,
         )
 
     def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32, np.float32]:
@@ -320,7 +323,7 @@ class RXPipeline:
                 payload_bits_encoded = self.psk8.symbols2bits(rx_syms)
 
         payload_bits = self.frame_constructor.decode_payload(header, payload_bits_encoded.ravel())
-        return payload_bits.reshape(-1, 1)
+        return payload_bits.reshape(-1, 1), rx_syms
 
 if __name__ == "__main__":
     config = PipelineConfig()
