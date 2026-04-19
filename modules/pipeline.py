@@ -26,7 +26,7 @@ class PipelineConfig:
     RRC_ALPHA: np.float32 = 0.25
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
     CODING_RATE: CodeRates = CodeRates.NONE
-    PRE_HEADER_GUARD_BITS: int = 0
+    PRE_HEADER_GUARD_BITS: int = 8
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
@@ -143,34 +143,46 @@ class RXPipeline:
         self.long_ref_dec = decimate(self.long_ref, self.config.SPS)
         self.ref_f_dec = build_fine_ref(self.long_ref_dec, self.config.SYNC_CONFIG, 1)
 
-    def receive(self, buffer: np.ndarray, search_from: int = 0) -> list[Packet]:
+    def receive(self, buffer: np.ndarray, search_from: int = 0) -> tuple[list[Packet], int]:
         """Detect and decode all frames in buffer.
 
         search_from: sample offset into buffer where detection begins.  Samples
         before this index are ignored, which prevents re-detecting frames that
         were already decoded in a previous sliding-window iteration.
+
+        Returns (packets, max_detection_sample) where max_detection_sample is the
+        absolute position of the last detection attempted (success or failure).
+        Callers should advance search_from to at least this position to avoid
+        re-detecting packets that already failed decode.
         """
         search_buf = buffer[search_from:]
         # Skip SW match-filter if hardware RRC already did it
         filtered_buffer = search_buf if self.config.hardware_rrc else match_filter(search_buf, self.rrc_taps)
         detections = self.detect(filtered_buffer)
         if not detections:
-            return []
+            return [], search_from
 
         logger.info(f"Detected {len(detections)} packets\n\t Cfo's: {[float(det.cfo_estimate) for det in detections]}'")
 
         packets = []
+        n_decode_errors = 0
+        max_detection_sample = search_from  # track furthest detection attempted
         for det in detections:
+            abs_payload_start = search_from + det.payload_start
+            max_detection_sample = max(max_detection_sample, abs_payload_start)
             rx_syms = filtered_buffer[det.payload_start:]
             try:
                 decoded_packet = self.decode(rx_syms, det.cfo_estimate, det.phase_estimate)
-                decoded_packet.sample_start = search_from + det.payload_start
+                decoded_packet.sample_start = abs_payload_start
                 packets.append(decoded_packet)
             except Exception as e:
-                # logger.warning(f"DECODE ERROR: {e}")
-                pass
+                n_decode_errors += 1
+                logger.info(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
 
-        return packets
+        if n_decode_errors:
+            logger.info(f"{n_decode_errors}/{len(detections)} detections failed decode")
+
+        return packets, max_detection_sample
 
     def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:
         """Detect frames in a match-filtered buffer. Both coarse and fine sync run post-RRC
@@ -241,23 +253,37 @@ class RXPipeline:
             header_syms, timing_est = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, ModulationSchemes.BPSK, self.config.SPS)
         else:
             header_syms, timing_est = decimate(buffer[:header_end*self.config.SPS], self.config.SPS), [0.0]
-        # costas correction
+
+        # If guard pilots are present, use them as known BPSK symbols (-1+0j) to compute
+        # a noise-averaged ML phase estimate.  This replaces the Costas seed from fine_timing
+        # and resolves BPSK π ambiguity before the header Costas even starts.
+        # ML: angle( Σ r_k · conj(s_k) ) = angle( Σ r_k · (-1) ) = angle( -mean(guard) )
+        n_guard = self.config.PRE_HEADER_GUARD_BITS
+        if n_guard > 0:
+            current_phase_estimate = np.float32(np.angle(np.mean(-header_syms[:n_guard])))
+
+        # costas correction on header symbols only (guard already used for phase estimation)
+        header_only = header_syms[n_guard:header_end]
         if self.config.costas_loop:
-            header_syms_corr, phase_est = apply_costas_loop(header_syms[:header_end], self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
+            header_syms_corr, phase_est = apply_costas_loop(header_only, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
         else:
-            header_syms_corr, phase_est = header_syms[:header_end]*np.exp(-1j*current_phase_estimate), [current_phase_estimate]
-        
-        # checks known pre header bits and flips syms and rotates phase estimate
-        if self.config.PRE_HEADER_GUARD_BITS > 0:
-            if np.mean(np.real(header_syms_corr[:self.config.PRE_HEADER_GUARD_BITS])) > 0:
-                header_syms_corr = -header_syms_corr
-                phase_est[-1] -= np.pi
+            header_syms_corr, phase_est = header_only * np.exp(-1j*current_phase_estimate), [current_phase_estimate]
 
         # demodulate header
-        header_bits = self.bpsk.symbols2bits(header_syms_corr[self.config.PRE_HEADER_GUARD_BITS:])
-        header = self.frame_constructor.decode_header(header_bits)
+        header_bits = self.bpsk.symbols2bits(header_syms_corr)
 
-        return header, header_end, np.float32(phase_est[-1]), np.float32(timing_est[-1])
+        # Resolve BPSK π phase ambiguity: try both polarities.
+        # If normal polarity fails CRC, flip all bits (≡ +π phase) and retry.
+        # False-pass probability with CRC-8 is only 1/256.
+        try:
+            header = self.frame_constructor.decode_header(header_bits)
+        except Exception:
+            header = self.frame_constructor.decode_header(1 - header_bits)
+            # Costas locked π off — correct the phase estimate so payload
+            # Costas loop gets the right starting point.
+            phase_est[-1] = float(phase_est[-1]) - np.pi
+
+        return header, header_end, np.float32(phase_est[-1] % (2 * np.pi)), np.float32(timing_est[-1])
 
     def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32, current_timing_estimate: np.float32) -> np.ndarray:
         payload_end = payload_start + ceil((header.length*8 + self.frame_constructor.PAYLOAD_CRC_BITS)/(header.mod_scheme.value+1)) # header.mod_scheme.value+1 is same as bits per symbol of modulator
@@ -285,9 +311,9 @@ class RXPipeline:
                 payload_bits_encoded = self.qpsk.symbols2bits(rx_syms)
             case ModulationSchemes.PSK8:
                 payload_bits_encoded = self.psk8.symbols2bits(rx_syms)
-        
+
         payload_bits = self.frame_constructor.decode_payload(header, payload_bits_encoded.ravel())
-        return payload_bits.reshape(-1,1)
+        return payload_bits.reshape(-1, 1)
 
 if __name__ == "__main__":
     config = PipelineConfig()

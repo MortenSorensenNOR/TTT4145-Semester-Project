@@ -31,6 +31,9 @@ import queue
 import sys
 import threading
 import time
+
+# Force line-buffered stdout so prints are visible even if the process is killed.
+sys.stdout.reconfigure(line_buffering=True)
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -84,7 +87,7 @@ if args.mode in ("tx", "both"):
     configure_tx(sdr, freq=pipe_cfg.CENTER_FREQ + args.cfo_offset, gain=args.gain, cyclic=False)
 
 if args.mode in ("rx", "both"):
-    configure_rx(sdr, freq=pipe_cfg.CENTER_FREQ, gain_mode="fast_attack")
+    configure_rx(sdr, freq=pipe_cfg.CENTER_FREQ, gain_mode="slow_attack")
 
 # ---------------------------------------------------------------------------
 # RX buffer sizing (needed for RX and both modes, and for the TX probe)
@@ -94,7 +97,7 @@ _probe_bits    = rng.integers(0, 2, args.payload * 8, dtype=np.uint8)
 _probe_pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=_probe_bits)
 _probe_samples = tx_pipe.transmit(_probe_pkt)
 frame_len      = len(_probe_samples)
-rx_buf_size    = 2 * int(2 ** np.ceil(np.log2(frame_len)))
+rx_buf_size    = 16 * int(2 ** np.ceil(np.log2(frame_len)))
 
 if args.mode in ("rx", "both"):
     sdr.rx_buffer_size = rx_buf_size
@@ -169,8 +172,8 @@ def run_tx():
                 current = np.concatenate([current,
                     np.zeros(chunk_len - len(current), dtype=np.complex64)])
 
-            sdr.tx(current)
             t_tx_start = time.perf_counter()
+            sdr.tx(current)
 
             # Overlap: build next batch while hardware is on air.
             if i + 1 < len(offsets):
@@ -220,6 +223,10 @@ def run_rx():
     prev_buf    = None
     search_from = 0
 
+    # Processing time stats (printed every 500 buffers)
+    _proc_times: list[float] = []
+    _buf_count  = 0
+
     try:
         while True:
             try:
@@ -227,17 +234,27 @@ def run_rx():
             except queue.Empty:
                 continue
 
-            raw      = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
             prev_len = len(prev_buf) if prev_buf is not None else 0
+            raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
+
+            _t0 = time.perf_counter()
+            packets, max_det = rx_pipe.receive(raw, search_from=search_from)
+            _proc_ms = (time.perf_counter() - _t0) * 1e3
+            _proc_times.append(_proc_ms)
+            _buf_count += 1
+            if _buf_count % 500 == 0:
+                buf_dur_ms = rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3
+                print(f"  [RX perf] proc={np.mean(_proc_times):.2f} ms avg / "
+                      f"{max(_proc_times):.2f} ms max  (buf={buf_dur_ms:.2f} ms, "
+                      f"queue≈{stream._q.qsize()}/{stream._q.maxsize})")
+                _proc_times.clear()
+
             prev_buf = curr_buf
-
-            packets = rx_pipe.receive(raw, search_from=search_from)
-
             if packets:
-                last_ps     = max(pkt.sample_start for pkt in packets)
-                search_from = max(0, last_ps - prev_len)
+                last_ps = max(pkt.sample_start for pkt in packets)
+                search_from = max(0, max(last_ps, max_det) - prev_len)
             else:
-                search_from = 0
+                search_from = max(0, max_det - prev_len)
 
             for pkt in packets:
                 n_total += 1
@@ -357,17 +374,17 @@ else:  # "both" — original threaded loopback behaviour
             if tx_done.is_set():
                 n_after_tx += 1
 
-            raw      = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
             prev_len = len(prev_buf) if prev_buf is not None else 0
+            raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
+
+            packets, max_det = rx_pipe.receive(raw, search_from=search_from)
+
             prev_buf = curr_buf
-
-            packets = rx_pipe.receive(raw, search_from=search_from)
-
             if packets:
-                last_ps     = max(pkt.sample_start for pkt in packets)
-                search_from = max(0, last_ps - prev_len)
+                last_ps = max(pkt.sample_start for pkt in packets)
+                search_from = max(0, max(last_ps, max_det) - prev_len)
             else:
-                search_from = 0
+                search_from = max(0, max_det - prev_len)
 
             for pkt in packets:
                 if pkt.valid:

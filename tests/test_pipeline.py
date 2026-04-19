@@ -61,7 +61,7 @@ def test_false_alarm_on_noise():
     rx = RXPipeline(PipelineConfig())
     rng = np.random.default_rng(0)
     false_alarms = sum(
-        len(rx.receive((rng.standard_normal(FA_BUFFER_LENGTH) + 1j * rng.standard_normal(FA_BUFFER_LENGTH)) / np.sqrt(2)))
+        len(rx.receive((rng.standard_normal(FA_BUFFER_LENGTH) + 1j * rng.standard_normal(FA_BUFFER_LENGTH)) / np.sqrt(2))[0])
         for _ in range(FA_TRIALS)
     )
     fa_rate = false_alarms / FA_TRIALS
@@ -78,7 +78,7 @@ def test_overdetection_on_signal():
     overdetections = 0
     for _ in range(FA_TRIALS):
         noise_signal = signal + (rng.standard_normal(len(signal)) + 1j * rng.standard_normal(len(signal))) / np.sqrt(2) * 0.1
-        rx_packets = rx.receive(noise_signal)
+        rx_packets, _ = rx.receive(noise_signal)
         overdetections += max(0, len(rx_packets) - len(tx_packets))
 
     od_rate = overdetections / FA_TRIALS
@@ -92,7 +92,7 @@ def test_overdetection_on_signal():
 def test_ideal(specs, seed):
     tx_packets, signal = make_packets_and_signal(specs, seed)
     _, config = tx_packets[0]
-    rx_packets = RXPipeline(config).receive(signal)
+    rx_packets, _ = RXPipeline(config).receive(signal)
     assert_packets(tx_packets, rx_packets)
     assert len(rx_packets) == len(tx_packets)
 
@@ -121,7 +121,7 @@ def test_channel(snr_db, specs, cfo_hz, phase, seed):
             if i[2] == ModulationSchemes.PSK8:
                 pytest.xfail("8PSK requires ~18dB SNR; below this threshold decoding is unreliable")
 
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
     assert_all_received(tx_packets, rx_packets)
 
 @pytest.mark.xfail(strict=False, reason="sub-15 dB SNR may not decode reliably")
@@ -144,7 +144,7 @@ def test_hard_channel(specs, cfo_hz, phase, snr_db, seed):
         initial_phase_rad=phase,
         seed=seed,
     ))
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
     assert_all_received(tx_packets, rx_packets)
 
 
@@ -167,7 +167,7 @@ def _trial(mod, snr_db, cfo_hz):
         cfo_hz=cfo_hz,
         initial_phase_rad=rng.uniform(0, 2 * np.pi),
     ))
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
 
     match = next((p for p in rx_packets if p.seq_num == 0), None)
     if match is None or match.payload.shape != packet.payload.shape:
@@ -272,7 +272,7 @@ def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
     rx_signal_sim = channel.apply(signal)
     rx_signal = rx_signal_sim# np.load("pluto/plots/rx_raw_0.npy")
 
-    rx_packets = RXPipeline(config).receive(rx_signal)
+    rx_packets, _ = RXPipeline(config).receive(rx_signal)
     assert_all_received(tx_packets, rx_packets)
 
 if __name__ == "__main__":

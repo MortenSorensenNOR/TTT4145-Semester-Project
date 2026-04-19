@@ -674,7 +674,7 @@ def test_false_positive_hw_matched_noise(channel: SyncFixture) -> None:
     for seed in range(_HW_NOISE_TRIALS):
         rng     = np.random.default_rng(50_000 + seed)
         buf     = _make_hw_noise(rng, noise_len, channel.noise_scale)
-        packets = rx_pipe.receive(buf)
+        packets, _ = rx_pipe.receive(buf)
         assert len(packets) == 0, (
             f"snr={channel.snr_db}dB, seed={seed}: "
             f"{len(packets)} false detection(s) on hardware-matched colored noise"
