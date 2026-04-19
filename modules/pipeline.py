@@ -169,13 +169,20 @@ class RXPipeline:
         max_detection_sample = search_from  # track furthest detection attempted
         for det in detections:
             abs_payload_start = search_from + det.payload_start
-            max_detection_sample = max(max_detection_sample, abs_payload_start)
             rx_syms = filtered_buffer[det.payload_start:]
             try:
                 decoded_packet = self.decode(rx_syms, det.cfo_estimate, det.phase_estimate)
                 decoded_packet.sample_start = abs_payload_start
                 packets.append(decoded_packet)
+                max_detection_sample = max(max_detection_sample, abs_payload_start)
+            except IndexError as e:
+                # Tail cutoff: frame extends beyond buffer. Don't advance max_det so
+                # the preamble stays inside the search window on the next iteration,
+                # allowing a retry once the full frame is available.
+                n_decode_errors += 1
+                logger.info(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
             except Exception as e:
+                max_detection_sample = max(max_detection_sample, abs_payload_start)
                 n_decode_errors += 1
                 logger.info(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
 

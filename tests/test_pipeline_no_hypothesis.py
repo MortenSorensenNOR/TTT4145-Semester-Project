@@ -126,7 +126,7 @@ def test_false_alarm_on_noise():
             + 1j * rng.standard_normal(FA_BUFFER_LENGTH)
         ) / np.sqrt(2)
 
-        rx_packets = rx.receive(noise)
+        rx_packets, _ = rx.receive(noise)
         false_alarms += len(rx_packets)
 
     fa_rate = false_alarms / FA_TRIALS
@@ -150,7 +150,7 @@ def test_overdetection_on_signal():
         ) / np.sqrt(2) * 0.1
 
         noisy_signal = signal + noise
-        rx_packets = rx.receive(noisy_signal)
+        rx_packets, _ = rx.receive(noisy_signal)
         overdetections += max(0, len(rx_packets) - len(tx_packets))
 
     od_rate = overdetections / FA_TRIALS
@@ -183,7 +183,7 @@ def test_ideal(specs, seed):
     tx_packets, signal = make_packets_and_signal(specs, seed)
     _, config = tx_packets[0]
 
-    rx_packets = RXPipeline(config).receive(signal)
+    rx_packets, _ = RXPipeline(config).receive(signal)
     assert_packets(tx_packets, rx_packets)
 
 
@@ -227,7 +227,7 @@ def test_channel(snr_db, specs, cfo_hz, phase, seed):
         seed=seed,
     ))
 
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
     assert_all_received(tx_packets, rx_packets)
 
 
@@ -303,7 +303,7 @@ def test_channel_multipath(snr_db, specs, cfo_hz, phase, seed):
         seed=seed,
     ))
 
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
     diagnose_and_assert(tx_packets, rx_packets)
 
 
@@ -339,7 +339,7 @@ def test_channel_pedestrian_b(snr_db, specs, cfo_hz, phase, seed):
         seed=seed,
     ))
 
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
     diagnose_and_assert(tx_packets, rx_packets)
 
 
@@ -375,7 +375,7 @@ def test_channel_vehicular_a(snr_db, specs, cfo_hz, phase, seed):
         seed=seed,
     ))
 
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
     diagnose_and_assert(tx_packets, rx_packets)
 
 
@@ -405,7 +405,7 @@ def test_channel_vehicular_b(snr_db, specs, cfo_hz, phase, seed):
         seed=seed,
     ))
 
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
     diagnose_and_assert(tx_packets, rx_packets)
 
 
@@ -436,7 +436,7 @@ def test_hard_channel(specs, cfo_hz, phase, snr_db, seed):
         seed=seed,
     ))
 
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
     assert_all_received(tx_packets, rx_packets)
 
 
@@ -472,7 +472,7 @@ def _trial(mod, snr_db, cfo_hz):
         initial_phase_rad=rng.uniform(0, 2 * np.pi),
     ))
 
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
 
     match = next((p for p in rx_packets if p.seq_num == 0), None)
     if match is None or match.payload.shape != packet.payload.shape:
@@ -602,7 +602,7 @@ def replay_scenario(specs, cfo_hz, phase, snr_db, seed):
         seed=seed,
     ))
 
-    rx_packets = RXPipeline(config).receive(channel.apply(signal))
+    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
     assert_all_received(tx_packets, rx_packets)
 
 
