@@ -43,7 +43,7 @@ class TunDevice:
         self,
         name: str = "tun0",
         mtu: int = 1500,
-        poll_timeout: np.float32 = np.float32(0.05),
+        poll_timeout: float = 0.05,
     ) -> None:
         self.name = name
         self.mtu = mtu

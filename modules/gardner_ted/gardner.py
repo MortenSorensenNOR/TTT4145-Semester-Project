@@ -200,8 +200,8 @@ def apply_gardner_ted(
     config: GardnerConfig,
     modulation: ModulationSchemes,
     sps: int,
-    current_timing_offset: float | None = None,
-    current_frequency_offset: float | None = None,
+    current_timing_offset: np.float32 | None = None,
+    current_frequency_offset: np.float32 | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Apply a second-order Gardner TED to correct symbol timing.
 

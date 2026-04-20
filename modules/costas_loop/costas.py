@@ -147,8 +147,8 @@ def apply_costas_loop(
     symbols: np.ndarray,
     config: CostasConfig,
     modulator: ModulationSchemes,
-    current_phase_estimate: float = 0.0,
-    current_frequency_offset: float = 0.0,
+    current_phase_estimate: np.float32 = np.float32(0.0),
+    current_frequency_offset: np.float32 = np.float32(0.0),
 ) -> tuple[np.ndarray, np.ndarray]:
     """Apply a second-order Costas loop to correct carrier phase offset.
 

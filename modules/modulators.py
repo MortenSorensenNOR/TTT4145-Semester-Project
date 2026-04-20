@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import runtime_checkable, Protocol
 import numpy as np
+from numpy.typing import NDArray
 
 EMPTY_COMPLEX = np.empty(0, dtype=np.complex64)
 EMPTY_INT = np.empty(0, dtype=np.uint8)
@@ -30,7 +31,7 @@ class BPSK(Modulator):
             return EMPTY_COMPLEX
         return self.symbol_mapping[bitstream.reshape(-1)]
 
-    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+    def symbols2bits(self, symbols: NDArray[np.complex64]) -> np.ndarray:
         if symbols.size == 0:
             return EMPTY_INT
         # BPSK: decision boundary is the imaginary axis
@@ -52,7 +53,7 @@ class QPSK(Modulator):
         #indices = bitstream[:, 0] * 2 + bitstream[:, 1]
         return self.symbol_mapping[indices]
 
-    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+    def symbols2bits(self, symbols: NDArray[np.complex64]) -> np.ndarray:
         if symbols.size == 0:
             return np.array([], dtype=int)
         # QPSK mapping: [-1-j, -1+j, 1-j, 1+j]/√2 → bit0=sign(re), bit1=sign(im)

@@ -96,6 +96,6 @@ def decimate(signal: np.ndarray, sps: int) -> np.ndarray:
 
 
 if __name__ == "__main__":
-    taps = rrc_filter(8, 0.25, 2 * 8 * 8 + 1)
+    taps = rrc_filter(8, np.float32(0.25), 2 * 8 * 8 + 1)
     plt.plot(taps)
     plt.savefig("rrc.png")

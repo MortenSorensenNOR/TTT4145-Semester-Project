@@ -23,7 +23,7 @@ class PipelineConfig:
     CENTER_FREQ: int = 2_401_000_000
     SPS: int = 4
     SPAN: int = 8
-    RRC_ALPHA: np.float32 = 0.25
+    RRC_ALPHA: np.float32 = np.float32(0.25)
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
     CODING_RATE: CodeRates = CodeRates.NONE
     PRE_HEADER_GUARD_BITS: int = 8
@@ -291,11 +291,11 @@ class RXPipeline:
             header = self.frame_constructor.decode_header(1 - header_bits)
             # Costas locked π off — correct the phase estimate so payload
             # Costas loop gets the right starting point.
-            phase_est[-1] = float(phase_est[-1]) - np.pi
+            phase_est[-1] = np.float32(phase_est[-1]) - np.pi
 
         return header, header_end, np.float32(phase_est[-1] % (2 * np.pi)), np.float32(timing_est[-1])
 
-    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32, current_timing_estimate: np.float32) -> np.ndarray:
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32, current_timing_estimate: np.float32) -> tuple[np.ndarray, np.ndarray]:
         payload_end = payload_start + ceil((header.length*8 + self.frame_constructor.PAYLOAD_CRC_BITS)/(header.mod_scheme.value+1)) # header.mod_scheme.value+1 is same as bits per symbol of modulator
         
         if payload_end*self.config.SPS > len(buffer):
