@@ -265,18 +265,12 @@ def _run_rx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--node",        choices=["A", "B"], required=True,
-                        help="Node identity — A=10.0.0.1, B=10.0.0.2")
-    parser.add_argument("--tun",         default="pluto0",
-                        help="TUN interface name (default: pluto0)")
-    parser.add_argument("--tx-gain",     type=float, default=DEFAULT_TX_GAIN,
-                        help="TX hardware gain in dB (default: %(default)s)")
-    parser.add_argument("--cfo-offset", type=int, default=0,
-                        help="LO offset in Hz applied to both RX and TX to compensate oscillator error (default: 0)")
-    parser.add_argument("--pluto-ip",    default="192.168.2.1",
-                        help="PlutoSDR IP address (default: %(default)s)")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Enable DEBUG logging")
+    parser.add_argument("--node",        choices=["A", "B"], required=True, help="Node identity — A=10.0.0.1, B=10.0.0.2")
+    parser.add_argument("--tun",         default="pluto0", help="TUN interface name (default: pluto0)")
+    parser.add_argument("--tx-gain",     type=float, default=DEFAULT_TX_GAIN, help="TX hardware gain in dB (default: %(default)s)")
+    parser.add_argument("--cfo-offset", type=int, default=0, help="LO offset in Hz applied to both RX and TX to compensate oscillator error (default: 0)")
+    parser.add_argument("--pluto-ip",    default="192.168.2.1", help="PlutoSDR IP address (default: %(default)s)")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable DEBUG logging")
     args = parser.parse_args()
 
     logging.basicConfig(

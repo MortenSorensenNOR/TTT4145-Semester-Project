@@ -30,7 +30,7 @@ class PipelineConfig:
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.008) # Bn=0.008 empirically optimal for PSK8 over coax
+    COSTAS_CONFIG = CostasConfig(0.006) # Bn=0.008 empirically optimal for PSK8 over coax
     GARDNER_CONFIG = GardnerConfig(0.0025) #Probably needs more tuning
 
     pulse_shaping: bool = True

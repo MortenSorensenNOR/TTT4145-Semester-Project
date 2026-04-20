@@ -382,12 +382,16 @@ else:  # "both" — original threaded loopback behaviour
     _decoded_seqs: set[int] = set()
     _all_decoded = threading.Event()
 
-    _air_time_ms   = int(frame_len * args.packets / pipe_cfg.SAMPLE_RATE * 1000)
+    # Round up to the next full batch — the last batch is zero-padded to the
+    # full batch length, so actual air time includes that padding.
+    _padded_packets = int(np.ceil(args.packets / args.batch_size)) * args.batch_size
+    _air_time_ms   = int(frame_len * _padded_packets / pipe_cfg.SAMPLE_RATE * 1000)
     _buf_ms        = int(rx_buf_size / pipe_cfg.SAMPLE_RATE * 1000)
     _BUFS_AFTER_TX = int(np.ceil(_air_time_ms / _buf_ms)) + 8
 
     print(f"Post-TX   : {_BUFS_AFTER_TX} bufs needed after tx_done  "
-          f"(air={_air_time_ms} ms / buf={_buf_ms} ms + 8 margin)\n")
+          f"(air={_air_time_ms} ms / buf={_buf_ms} ms + 8 margin, "
+          f"padded {args.packets}→{_padded_packets} pkts)\n")
 
     # -----------------------------------------------------------------------
     # TX thread
