@@ -42,7 +42,7 @@ import numpy as np
 import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
-from pluto.config import DAC_SCALE, configure_rx, configure_tx
+from pluto.config import PIPELINE, DAC_SCALE, configure_rx, configure_tx
 from pluto.sdr_stream import RxStream
 
 import logging
@@ -61,6 +61,7 @@ parser.add_argument("--ip",       type=str,   default="192.168.2.1", help="Pluto
 parser.add_argument("--batch-size",type=int,   default=8,             help="Packets per TX batch/window (default: 8)")
 parser.add_argument("--mode",     type=str,   default="both",        help="Mode: 'tx', 'rx', or 'both' (default: both)")
 parser.add_argument("--cfo-offset", type=int, default=15200, help="CFO offset of RX relative to TX")
+parser.add_argument("--freq", type=float, default=PIPELINE.CENTER_FREQ, help="Center frequency")
 parser.add_argument("--constellation", action="store_true", help="Show live PSK8 constellation plot (RX mode only)")
 args = parser.parse_args()
 
@@ -84,11 +85,12 @@ rng = np.random.default_rng(0)
 
 sdr = adi.Pluto("ip:" + args.ip)
 
+frequency = args.freq
 if args.mode in ("tx", "both"):
-    configure_tx(sdr, freq=pipe_cfg.CENTER_FREQ + args.cfo_offset, gain=args.gain, cyclic=False)
+    configure_tx(sdr, freq=frequency + args.cfo_offset, gain=args.gain, cyclic=False)
 
 if args.mode in ("rx", "both"):
-    configure_rx(sdr, freq=pipe_cfg.CENTER_FREQ, gain_mode="slow_attack")
+    configure_rx(sdr, freq=frequency, gain_mode="slow_attack")
 
 # ---------------------------------------------------------------------------
 # RX buffer sizing (needed for RX and both modes, and for the TX probe)
