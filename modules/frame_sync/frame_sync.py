@@ -262,13 +262,24 @@ def coarse_sync(
 
         chosen = None
         for ci, cand in enumerate(candidates):
-            # Energy-ratio: skip if the signal just before the gap leading to
-            # the next candidate is near-silent (< 25% of post-gap energy).
-            # Uses the last above-threshold position before the gap, not the
-            # start of the current sub-cluster, so long payloads don't fool it.
             if ci < len(candidates) - 1:
                 before_pos = pre_gap_pos[ci]
                 next_cand  = candidates[ci + 1]
+
+                # Sub-cluster span check: a real preamble plateau spans at least
+                # (nreps-1)*L ≈ 516 samples above threshold.  A spurious M(d)
+                # spike in payload data typically covers only a handful of samples.
+                # Reject any candidate whose sub-cluster spans fewer than L/8
+                # samples so we skip over to the next (likely real) candidate.
+                # L/8 ≈ 21 is small enough to pass AGC-attenuated preamble starts
+                # (span ~40+) while still rejecting accidental payload spikes (span < 10).
+                if before_pos - cand < sample_cnt // 8:
+                    continue
+
+                # Energy-ratio: skip if the signal just before the gap leading to
+                # the next candidate is near-silent (< 25% of post-gap energy).
+                # Uses the last above-threshold position before the gap, not the
+                # start of the current sub-cluster, so long payloads don't fool it.
                 if r_d[before_pos] < r_d[next_cand] * energy_ratio_thr:
                     continue
 

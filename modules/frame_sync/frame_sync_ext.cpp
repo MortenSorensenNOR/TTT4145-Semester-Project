@@ -207,10 +207,21 @@ CoarseResult coarse_sync_ext(
         for (int ci = 0; ci < static_cast<int>(candidates.size()); ++ci) {
             int cand = candidates[ci];
 
-            // Energy-ratio: skip if the signal just before the gap is near-silent
             if (ci < static_cast<int>(candidates.size()) - 1) {
                 int before_pos = pre_gap_pos[ci];
                 int next_cand  = candidates[ci + 1];
+
+                // Sub-cluster span check: a real preamble plateau spans at least
+                // (nreps-1)*L ≈ 516 samples above threshold.  A spurious M(d)
+                // spike in payload data typically covers only a handful of samples.
+                // Reject any candidate whose sub-cluster spans fewer than L/8
+                // samples so we fall through to the next (likely real) candidate.
+                // L/8 ≈ 21 is small enough to pass AGC-attenuated preamble starts
+                // (span ~40+) while still rejecting accidental payload spikes (span < 10).
+                if (before_pos - cand < L / 8)
+                    continue;
+
+                // Energy-ratio: skip if the signal just before the gap is near-silent
                 if (r_d[before_pos] < r_d[next_cand] * 0.25f)
                     continue;
             }
