@@ -271,8 +271,8 @@ def main() -> None:
                         help="TUN interface name (default: pluto0)")
     parser.add_argument("--tx-gain",     type=float, default=DEFAULT_TX_GAIN,
                         help="TX hardware gain in dB (default: %(default)s)")
-    parser.add_argument("--rx-cfo-offset", type=int, default=0,
-                        help="RX LO offset in Hz to compensate CFO (default: 0)")
+    parser.add_argument("--cfo-offset", type=int, default=0,
+                        help="LO offset in Hz applied to both RX and TX to compensate oscillator error (default: 0)")
     parser.add_argument("--pluto-ip",    default="192.168.2.1",
                         help="PlutoSDR IP address (default: %(default)s)")
     parser.add_argument("--verbose", "-v", action="store_true",
@@ -309,15 +309,15 @@ def main() -> None:
 
     # ── SDR ──────────────────────────────────────────────────────────────
     sdr = adi.Pluto(f"ip:{args.pluto_ip}")
-    configure_tx(sdr, freq=node.tx_freq, gain=args.tx_gain,
+    configure_tx(sdr, freq=node.tx_freq + args.cfo_offset, gain=args.tx_gain,
                  sample_rate=config.SAMPLE_RATE, cyclic=False)
-    configure_rx(sdr, freq=node.rx_freq + args.rx_cfo_offset,
+    configure_rx(sdr, freq=node.rx_freq + args.cfo_offset,
                  sample_rate=config.SAMPLE_RATE, buffer_size=rx_buf_size)
 
     logger.info("Node %s  TX %.3f MHz (%.0f dB)  RX %.3f MHz (CFO %+d Hz)",
                 args.node,
-                node.tx_freq / 1e6, args.tx_gain,
-                (node.rx_freq + args.rx_cfo_offset) / 1e6, args.rx_cfo_offset)
+                (node.tx_freq + args.cfo_offset) / 1e6, args.tx_gain,
+                (node.rx_freq + args.cfo_offset) / 1e6, args.cfo_offset)
 
     # ── Threads ──────────────────────────────────────────────────────────
     stop = threading.Event()
