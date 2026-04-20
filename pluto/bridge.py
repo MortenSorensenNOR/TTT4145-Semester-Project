@@ -70,6 +70,9 @@ IFF_RUNNING = 0x40
 # Minimum valid IPv4 header size
 MIN_IP_PACKET_SIZE = 20
 
+SUBNET_IP = -1
+DST_SUBNET_IP = -1
+
 
 @dataclass
 class NodeConfig:
@@ -167,7 +170,7 @@ def _run_tx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto,
             continue
 
         payload_bits = bytes_to_bits(raw_ip)
-        pkt = Packet(src_mac=0, dst_mac=0, type=0, seq_num=0,
+        pkt = Packet(src_mac=SUBNET_IP, dst_mac=DST_SUBNET_IP, type=0, seq_num=0,
                      length=len(raw_ip), payload=payload_bits)
 
         try:
@@ -285,6 +288,8 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
+    SUBNET_IP = 1 if args.node == "B" else 0
+    DST_SUBNET_IP = 0 if SUBNET_IP == 1 else 1
     node    = NODE_CONFIGS[args.node]
     config  = PIPELINE
     tun_mtu = MAX_PACKET_SIZE_BYTES

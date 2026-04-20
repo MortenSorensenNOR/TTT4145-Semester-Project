@@ -238,6 +238,10 @@ class RXPipeline:
         if header.length == 0:
             msg = "Payload length = 0"
             raise ValueError(msg)
+
+        if header.crc_passed:
+            logger.info(f"CRC Passed on header with payload length: {header.length} bytes")
+
         payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate, current_timing_estimate)
         return Packet(
             src_mac=header.src,
