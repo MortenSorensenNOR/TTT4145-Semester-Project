@@ -9,10 +9,10 @@ FREQ_B_TO_A; Node B does the opposite.
 
 Usage:
     # Machine A (10.0.0.1) — Pluto at 192.168.2.1
-    sudo python -m pluto.bridge --node A --pluto-ip 192.168.2.1
+    sudo .venv/bin/python -m pluto.bridge --node A --pluto-ip 192.168.2.1
 
     # Machine B (10.0.0.2) — Pluto at 192.168.3.1
-    sudo python -m pluto.bridge --node B --pluto-ip 192.168.3.1
+    sudo .venv/bin/python -m pluto.bridge --node B --pluto-ip 192.168.3.1
 
     # Then from machine A:
     ping 10.0.0.2
@@ -135,10 +135,15 @@ def bits_to_bytes(bits: np.ndarray) -> bytes:
 
 # ── TX thread ─────────────────────────────────────────────────────────────
 
-def _run_tx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto, mtu: int) -> None:
-    """Read IP packets from TUN and transmit over PlutoSDR (runs forever)."""
+def _run_tx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto,
+            mtu: int, tx_frame_len: int) -> None:
+    """Read IP packets from TUN and transmit over PlutoSDR (runs forever).
+
+    All frames are zero-padded to tx_frame_len samples so the PlutoSDR DMA
+    buffer length stays constant across packets of varying sizes.
+    """
     tx = TXPipeline(config)
-    logger.info("TX thread started (MTU %d bytes)", mtu)
+    logger.info("TX thread started (MTU %d bytes, fixed frame %d samples)", mtu, tx_frame_len)
 
     while True:
         # select() so we can loop cleanly without blocking forever on a dead fd
@@ -168,8 +173,15 @@ def _run_tx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto, mtu: int) -> No
             peak = np.max(np.abs(samples))
             if peak > 0:
                 samples = samples / peak
-            sdr.tx((samples * DAC_SCALE).astype(np.complex64))
-            logger.debug("TX: %d bytes  (%d samples)", len(raw_ip), len(samples))
+            samples = (samples * DAC_SCALE).astype(np.complex64)
+
+            # Pad to the fixed DMA buffer length (PlutoSDR rejects length changes)
+            if len(samples) < tx_frame_len:
+                samples = np.concatenate([samples,
+                    np.zeros(tx_frame_len - len(samples), dtype=np.complex64)])
+
+            sdr.tx(samples)
+            logger.debug("TX: %d bytes  (%d samples)", len(raw_ip), tx_frame_len)
         except Exception:
             logger.exception("TX: transmit failed")
 
@@ -312,7 +324,7 @@ def main() -> None:
 
     t_tx = threading.Thread(
         target=_run_tx,
-        args=(config, tun_fd, sdr, tun_mtu),
+        args=(config, tun_fd, sdr, tun_mtu, _frame_len),
         name="TX", daemon=True,
     )
     t_rx = threading.Thread(
