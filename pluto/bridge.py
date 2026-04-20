@@ -143,7 +143,9 @@ def _run_tx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto,
     buffer length stays constant across packets of varying sizes.
     """
     tx = TXPipeline(config)
-    logger.info("TX thread started (MTU %d bytes, fixed frame %d samples)", mtu, tx_frame_len)
+    air_time = tx_frame_len / config.SAMPLE_RATE
+    logger.info("TX thread started (MTU %d bytes, fixed frame %d samples, air time %.1f ms)",
+                mtu, tx_frame_len, air_time * 1e3)
 
     while True:
         # select() so we can loop cleanly without blocking forever on a dead fd
@@ -179,8 +181,13 @@ def _run_tx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto,
             if len(samples) < tx_frame_len:
                 samples = np.concatenate([samples, np.zeros(tx_frame_len - len(samples), dtype=np.complex64)])
 
+            t_tx = time.perf_counter()
             sdr.tx(samples)
-            logger.debug("TX: %d bytes  (%d samples)", len(raw_ip), tx_frame_len)
+            elapsed = time.perf_counter() - t_tx
+            remaining = air_time - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+            logger.debug("TX: %d bytes  (%d samples, air %.1f ms)", len(raw_ip), tx_frame_len, air_time * 1e3)
         except Exception:
             logger.exception("TX: transmit failed")
 
