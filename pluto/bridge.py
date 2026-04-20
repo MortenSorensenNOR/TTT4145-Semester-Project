@@ -49,6 +49,7 @@ from pluto.config import (
 from pluto.sdr_stream import RxStream
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # ── Linux ioctl constants ─────────────────────────────────────────────────
 # From linux/if_tun.h

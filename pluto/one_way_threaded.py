@@ -144,10 +144,21 @@ def run_tx():
     global_seq = 0
     current    = None  # pre-built first batch handed over from previous burst
 
+    # Ensure packets-per-burst is a multiple of batch_size.  If not, the last
+    # batch would be short and zero-padded to match the fixed DMA buffer length.
+    # That silence causes a false preamble detection at the silence boundary,
+    # which advances search_from past real packets in the next buffer → ~50% drops.
+    n_per_burst = args.packets
+    if n_per_burst % args.batch_size != 0:
+        n_per_burst = int(np.ceil(n_per_burst / args.batch_size)) * args.batch_size
+        print(f"  [TX] NOTE: --packets {args.packets} not divisible by "
+              f"--batch-size {args.batch_size}; adjusted to {n_per_burst} "
+              f"to avoid silence gaps")
+
     while True:
         burst_num   += 1
         burst_start  = global_seq
-        n            = args.packets
+        n            = n_per_burst
         batch_size   = args.batch_size
         offsets      = list(range(0, n, batch_size))
         chunk_len    = None
