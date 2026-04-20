@@ -257,7 +257,7 @@ def _run_rx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto,
 
                 try:
                     os.write(tun_fd, data)
-                    logger.debug("RX: %d bytes injected into TUN", len(data))
+                    logger.info("RX: %d bytes injected into TUN", len(data))
                 except OSError:
                     logger.exception("RX: TUN write failed")
 

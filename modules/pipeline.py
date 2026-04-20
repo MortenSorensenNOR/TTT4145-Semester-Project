@@ -164,7 +164,7 @@ class RXPipeline:
         if not detections:
             return [], search_from
 
-        logger.info(f"Detected {len(detections)} packets\n\t Cfo's: {[float(det.cfo_estimate) for det in detections]}'")
+        logger.debug(f"Detected {len(detections)} packets\n\t Cfo's: {[float(det.cfo_estimate) for det in detections]}'")
 
         packets = []
         n_decode_errors = 0
@@ -240,7 +240,7 @@ class RXPipeline:
             raise ValueError(msg)
 
         if header.crc_passed:
-            logger.info(f"CRC Passed on header with payload length: {header.length} bytes")
+            logger.debug(f"CRC Passed on header with payload length: {header.length} bytes")
 
         payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate, current_timing_estimate)
         return Packet(
@@ -325,6 +325,7 @@ class RXPipeline:
                 payload_bits_encoded = self.qpsk.symbols2bits(rx_syms)
             case ModulationSchemes.PSK8:
                 payload_bits_encoded = self.psk8.symbols2bits(rx_syms)
+        logger.debug(f"Modulation scheme: {header.mod_scheme}")
 
         payload_bits = self.frame_constructor.decode_payload(header, payload_bits_encoded.ravel())
         return payload_bits.reshape(-1, 1), rx_syms
