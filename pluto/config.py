@@ -22,7 +22,7 @@ MAX_PACKET_SIZE_BYTES = 1500
 
 # FDD frequency pair for bidirectional bridge mode
 FREQ_A_TO_B = 2_400_000_000
-FREQ_B_TO_A = 2_450_000_000
+FREQ_B_TO_A = 2_410_000_000
 
 PIPELINE = PipelineConfig()
 
