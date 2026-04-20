@@ -49,7 +49,6 @@ from pluto.config import (
 from pluto.sdr_stream import RxStream
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 # ── Linux ioctl constants ─────────────────────────────────────────────────
 # From linux/if_tun.h
@@ -178,8 +177,7 @@ def _run_tx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto,
 
             # Pad to the fixed DMA buffer length (PlutoSDR rejects length changes)
             if len(samples) < tx_frame_len:
-                samples = np.concatenate([samples,
-                    np.zeros(tx_frame_len - len(samples), dtype=np.complex64)])
+                samples = np.concatenate([samples, np.zeros(tx_frame_len - len(samples), dtype=np.complex64)])
 
             sdr.tx(samples)
             logger.debug("TX: %d bytes  (%d samples)", len(raw_ip), tx_frame_len)
