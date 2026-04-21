@@ -327,18 +327,21 @@ def main() -> None:
     # ── Threads ──────────────────────────────────────────────────────────
     stop = threading.Event()
 
-    t_tx = threading.Thread(
-        target=_run_tx,
-        args=(config, tun_fd, sdr, tun_mtu, _frame_len),
-        name="TX", daemon=True,
-    )
-    t_rx = threading.Thread(
-        target=_run_rx,
-        args=(config, tun_fd, sdr, rx_buf_size, stop),
-        name="RX", daemon=True,
-    )
-    t_rx.start()
-    t_tx.start()
+    t_rx, t_tx = None, None
+    if args.node == "A":
+        t_rx = threading.Thread(
+            target=_run_rx,
+            args=(config, tun_fd, sdr, rx_buf_size, stop),
+            name="RX", daemon=True,
+        )
+        t_rx.start()
+    elif args.node == "B":
+        t_tx = threading.Thread(
+            target=_run_tx,
+            args=(config, tun_fd, sdr, tun_mtu, _frame_len),
+            name="TX", daemon=True,
+        )
+        t_tx.start()
 
     try:
         while True:
@@ -347,7 +350,8 @@ def main() -> None:
         logger.info("Shutting down…")
     finally:
         stop.set()
-        t_rx.join(timeout=3)
+        if args.node == "A":
+            t_rx.join(timeout=3)
         try:
             os.close(tun_fd)
         except OSError:
