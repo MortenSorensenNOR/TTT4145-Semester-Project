@@ -46,7 +46,7 @@ from pluto.config import (
     configure_rx,
     configure_tx,
 )
-from pluto.sdr_stream import RxStream
+from pluto.sdr_stream import RxStream, TxStream
 
 logger = logging.getLogger(__name__)
 
@@ -142,57 +142,52 @@ def _run_tx(config: PipelineConfig, tun_fd: int, sdr: adi.Pluto,
             mtu: int, tx_frame_len: int) -> None:
     """Read IP packets from TUN and transmit over PlutoSDR (runs forever).
 
-    All frames are zero-padded to tx_frame_len samples so the PlutoSDR DMA
-    buffer length stays constant across packets of varying sizes.
+    Uses a TxStream for continuous streaming — packets are queued and packed
+    into fixed-size TX buffers by a background thread.  When no IP traffic is
+    flowing, silence (zeros) is transmitted to keep the stream alive.
     """
     tx = TXPipeline(config)
-    air_time = tx_frame_len / config.SAMPLE_RATE
-    logger.info("TX thread started (MTU %d bytes, fixed frame %d samples, air time %.1f ms)",
-                mtu, tx_frame_len, air_time * 1e3)
+    buf_size = 8 * int(2 ** np.ceil(np.log2(tx_frame_len)))
+    stream = TxStream(sdr, config.SAMPLE_RATE, buf_size)
+    stream.start()
+    logger.info("TX thread started (MTU %d bytes, frame %d samples, buf %d samples / %.1f ms)",
+                mtu, tx_frame_len, buf_size, buf_size / config.SAMPLE_RATE * 1e3)
 
-    while True:
-        # select() so we can loop cleanly without blocking forever on a dead fd
-        ready, _, _ = select.select([tun_fd], [], [], 0.1)
-        if not ready:
-            continue
+    try:
+        while True:
+            ready, _, _ = select.select([tun_fd], [], [], 0.1)
+            if not ready:
+                continue
 
-        try:
-            raw_ip = os.read(tun_fd, mtu)
-        except OSError:
-            logger.exception("TX: TUN read failed — stopping")
-            break
+            try:
+                raw_ip = os.read(tun_fd, mtu)
+            except OSError:
+                logger.exception("TX: TUN read failed — stopping")
+                break
 
-        if not raw_ip:
-            continue
+            if not raw_ip:
+                continue
 
-        if len(raw_ip) > mtu:
-            logger.warning("TX: dropping oversized packet (%d > %d)", len(raw_ip), mtu)
-            continue
+            if len(raw_ip) > mtu:
+                logger.warning("TX: dropping oversized packet (%d > %d)", len(raw_ip), mtu)
+                continue
 
-        payload_bits = bytes_to_bits(raw_ip)
-        pkt = Packet(src_mac=SUBNET_IP, dst_mac=DST_SUBNET_IP, type=0, seq_num=0,
-                     length=len(raw_ip), payload=payload_bits)
+            payload_bits = bytes_to_bits(raw_ip)
+            pkt = Packet(src_mac=SUBNET_IP, dst_mac=DST_SUBNET_IP, type=0, seq_num=0,
+                         length=len(raw_ip), payload=payload_bits)
 
-        try:
-            samples = tx.transmit(pkt)
-            peak = np.max(np.abs(samples))
-            if peak > 0:
-                samples = samples / peak
-            samples = (samples * DAC_SCALE).astype(np.complex64)
-
-            # Pad to the fixed DMA buffer length (PlutoSDR rejects length changes)
-            if len(samples) < tx_frame_len:
-                samples = np.concatenate([samples, np.zeros(tx_frame_len - len(samples), dtype=np.complex64)])
-
-            t_tx = time.perf_counter()
-            sdr.tx(samples)
-            elapsed = time.perf_counter() - t_tx
-            remaining = air_time - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
-            logger.debug("TX: %d bytes  (%d samples, air %.1f ms)", len(raw_ip), tx_frame_len, air_time * 1e3)
-        except Exception:
-            logger.exception("TX: transmit failed")
+            try:
+                samples = tx.transmit(pkt)
+                peak = np.max(np.abs(samples))
+                if peak > 0:
+                    samples = samples / peak
+                samples = (samples * DAC_SCALE).astype(np.complex64)
+                stream.send(samples)
+                logger.debug("TX: %d bytes queued (pending=%d)", len(raw_ip), stream.pending)
+            except Exception:
+                logger.exception("TX: transmit failed")
+    finally:
+        stream.stop()
 
 
 # ── RX thread ─────────────────────────────────────────────────────────────

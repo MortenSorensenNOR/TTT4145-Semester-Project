@@ -13,25 +13,26 @@ RxStream — continuous hardware buffer drain
             packets = rx_pipe.receive(samples)
         stream.stop()
 
-TxStream — chunked non-cyclic transmit
-    Accepts one packet's samples at a time and sends them in fixed-size
-    chunks.  Because the USB push completes in less than one chunk's air
-    time, the hardware receives the next chunk before finishing the current
-    one, giving gapless transmission without a single giant buffer.
+TxStream — continuous queue-based transmit
+    Maintains a background packer thread that continuously pushes fixed-size
+    buffers to the SDR.  Callers enqueue packet samples via send(); the packer
+    greedily packs as many queued packets as possible into each buffer (FIFO).
+    When the queue is empty, silence (zeros) is transmitted to keep the TX
+    stream alive — symmetric with RxStream's continuous drain.
 
     Typical usage::
 
-        stream = TxStream(sdr, sample_rate=pipe_cfg.SAMPLE_RATE, chunk_packets=8)
+        stream = TxStream(sdr, sample_rate=pipe_cfg.SAMPLE_RATE, buf_size=32768)
+        stream.start()
         for pkt in packets:
             samples = tx_pipe.transmit(pkt)
             samples /= np.max(np.abs(samples))   # normalise to [-1, 1]
             stream.send(samples)
-        stream.close()   # flush remainder + wait for last chunk to finish
+        stream.stop()
 """
 
 import queue
 import threading
-import time
 
 import numpy as np
 import adi
@@ -152,81 +153,124 @@ class RxStream:
 
 
 class TxStream:
-    """Chunked non-cyclic transmit for PlutoSDR.
+    """Continuous non-cyclic transmit stream for PlutoSDR.
 
-    Buffers ``chunk_packets`` packets' worth of samples and pushes them to the
-    hardware in one DMA call, eliminating per-packet USB overhead while
-    modelling a real windowed/ARQ transmitter (send window → wait for ACKs →
-    next window).
+    Maintains a background thread that continuously pushes fixed-size buffers
+    to the SDR, keeping the TX stream alive at all times.  Callers enqueue
+    packet samples via :meth:`send`; the packer thread greedily packs as many
+    queued packets as possible into each buffer (FIFO order).  When the queue
+    is empty the buffer is zero-filled (silence), so TX never goes idle.
 
-    Each chunk is timed so the next push does not start until the hardware has
-    finished transmitting the current one, preventing DMA buffer corruption.
+    If a packet does not fit entirely in the current buffer the remainder is
+    carried over to the next buffer — no data is lost or reordered.
 
     Typical usage::
 
-        stream = TxStream(sdr, sample_rate=pipe_cfg.SAMPLE_RATE, chunk_packets=8)
+        stream = TxStream(sdr, sample_rate=pipe_cfg.SAMPLE_RATE, buf_size=32768)
+        stream.start()
         for pkt in packets:
             samples = tx_pipe.transmit(pkt)
-            samples /= np.max(np.abs(samples))   # normalise to [-1, 1]
+            samples /= np.max(np.abs(samples))
             stream.send(samples)
-        stream.close()   # flush remainder + wait for last chunk to finish
+        stream.stop()
     """
 
-    def __init__(self, sdr: adi.Pluto, sample_rate: int, chunk_packets: int = 8):
+    def __init__(self, sdr: adi.Pluto, sample_rate: int, buf_size: int, *,
+                 maxsize: int = 64):
         """
         Args:
-            sdr:           configured adi.Pluto instance (tx_cyclic_buffer=False)
-            sample_rate:   SDR sample rate in Hz — used to compute air time
-            chunk_packets: number of packets to accumulate before each push
+            sdr:         configured adi.Pluto instance (tx_cyclic_buffer=False)
+            sample_rate: SDR sample rate in Hz — used to compute air-time sleep
+            buf_size:    fixed TX buffer length in samples (every sdr.tx() push
+                         is exactly this many samples)
+            maxsize:     maximum number of packet sample arrays to queue before
+                         send() blocks
         """
-        self._sdr           = sdr
-        self._sample_rate   = sample_rate
-        self._chunk_packets = chunk_packets
-        self._pending: list[np.ndarray] = []
-        self._n_pending     = 0
-        self._chunk_len: int | None = None  # fixed on first flush; used to pad later batches
+        self._sdr = sdr
+        self._sample_rate = sample_rate
+        self._buf_size = buf_size
+        self._air_time = buf_size / sample_rate
+        self._q: queue.Queue[np.ndarray] = queue.Queue(maxsize=maxsize)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._packer, daemon=True)
+        self._bufs_sent = 0
+
+    def start(self) -> None:
+        """Launch the background packer/sender thread."""
+        self._stop.clear()
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Signal the packer thread to finish and wait for it to join."""
+        self._stop.set()
+        self._thread.join(timeout=self._air_time + 1.0)
 
     def send(self, samples: np.ndarray) -> None:
-        """Buffer one packet's normalised samples (range [-1, 1]).
+        """Enqueue one packet's samples for transmission.
 
-        Scales to the DAC range internally.  Flushes to hardware automatically
-        once ``chunk_packets`` packets have been accumulated.
-
-        Args:
-            samples: complex64 (or float-compatible) array, peak amplitude ≤ 1.
+        The samples should already be DAC-scaled complex64.  Blocks if the
+        internal queue is full (back-pressure to the producer).
         """
-        self._pending.append((samples * DAC_SCALE).astype(np.complex64))
-        self._n_pending += 1
-        if self._n_pending >= self._chunk_packets:
-            self._flush()
+        while not self._stop.is_set():
+            try:
+                self._q.put(samples, timeout=0.1)
+                return
+            except queue.Full:
+                pass
 
-    def close(self) -> None:
-        """Flush any remaining buffered samples and wait for transmission to end."""
-        self._flush()
+    @property
+    def pending(self) -> int:
+        """Approximate number of packets waiting in the queue."""
+        return self._q.qsize()
+
+    @property
+    def bufs_sent(self) -> int:
+        """Total TX buffers pushed to the SDR so far."""
+        return self._bufs_sent
 
     # ------------------------------------------------------------------
 
-    def _flush(self) -> None:
-        if not self._pending:
-            return
-        chunk = np.concatenate(self._pending)
+    def _packer(self) -> None:
+        # A packet popped from the queue that didn't fit in the previous
+        # buffer. Placed at the head of the next buffer (keeps FIFO order
+        # without splitting the packet across the DMA boundary).
+        pending: np.ndarray | None = None
 
-        # pyadi-iio creates the TX DMA buffer on the first sdr.tx() call and
-        # rejects any subsequent push with a different length.  Lock in the
-        # full-batch length on the first flush, then zero-pad partial batches
-        # (e.g. the final window when packets % chunk_packets != 0).
-        if self._chunk_len is None:
-            self._chunk_len = len(chunk)
-        elif len(chunk) < self._chunk_len:
-            chunk = np.concatenate([chunk, np.zeros(self._chunk_len - len(chunk), dtype=np.complex64)])
+        while not self._stop.is_set():
+            buf = np.zeros(self._buf_size, dtype=np.complex64)
+            write_pos = 0
 
-        # On PlutoSDR over USB, sdr.tx() returns after the DMA push completes
-        # and the hardware begins transmitting from the start of that point.
-        # Sleep for the full air time so the next push does not start before
-        # the hardware has finished reading the current buffer.
-        air_time = self._chunk_len / self._sample_rate
-        self._sdr.tx(chunk)
-        time.sleep(air_time)
+            # Place held-over packet from previous buffer at the start.
+            if pending is not None:
+                buf[:len(pending)] = pending
+                write_pos = len(pending)
+                pending = None
 
-        self._pending.clear()
-        self._n_pending = 0
+            # Greedily pack queued packets. Never split a packet across a
+            # buffer boundary — the Pluto DMA can hiccup between kernel
+            # buffers, and a packet straddling that seam gets corrupted
+            # (seen as bursty CRC-16 mismatches at ~1 packet per TX buffer).
+            while write_pos < self._buf_size:
+                try:
+                    pkt_samples = self._q.get(timeout=0.001)
+                except queue.Empty:
+                    break
+
+                space = self._buf_size - write_pos
+                if len(pkt_samples) <= space:
+                    buf[write_pos:write_pos + len(pkt_samples)] = pkt_samples
+                    write_pos += len(pkt_samples)
+                else:
+                    # Doesn't fit — hold the whole packet for the next
+                    # buffer and pad the rest of this one with silence.
+                    pending = pkt_samples
+                    break
+
+            # sdr.tx() blocks on the iio kernel TX ring (nb_blocks=4 under
+            # libiio v1): once the ring is full it returns at the rate the
+            # DMA drains, giving natural backpressure. No manual sleep here
+            # — an explicit time.sleep() after tx() was causing repeated
+            # DMA underruns between buffers and silently dropping ~5–10 %
+            # of packets on coax.
+            self._sdr.tx(buf)
+            self._bufs_sent += 1

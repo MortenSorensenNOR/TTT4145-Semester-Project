@@ -4,9 +4,11 @@ Spins up two threads — TX and RX — that run independently, mimicking a real
 intermittent transmitter and a continuously listening receiver.
 
 TX thread:
-  - Builds a fresh packet per transmission with an incrementing sequence number
-  - Waits a configurable inter-packet gap between transmissions
-  - Non-cyclic: each packet is sent once, not looped
+  - Continuously streams fixed-size TX buffers via TxStream
+  - Builds packets with incrementing sequence numbers and queues them
+  - TxStream packer thread greedily packs queued packets into each buffer
+  - When queue is empty, silence (zeros) is transmitted to keep stream alive
+  - Supports variable-length packets with --variable flag
 
 RX thread:
   - Drains the SDR RX buffer via RxStream (lossless, large queue)
@@ -14,16 +16,18 @@ RX thread:
   - Tracks sequence numbers and reports packet drop rate at the end
 
 Usage:
-    python pluto/loopback_threaded.py [options]
+    python pluto/one_way_threaded.py [options]
 
 Options:
-    --gain        TX hardware gain in dB        (default: -30)
-    --payload     Payload size in bytes         (default: 10)
-    --packets     Number of packets to TX       (default: 20)
-    --batch-size  Packets per TX window         (default: 8)
-    --interval    Inter-burst gap in ms         (default: 200)
-    --ip          PlutoSDR IP address           (default: 192.168.2.1)
-    --mode        Operation mode: 'tx', 'rx', or 'both' (default: 'both')
+    --gain         TX hardware gain in dB        (default: -30)
+    --payload      Payload size in bytes         (default: 10)
+    --packets      Number of packets per burst   (default: 20)
+    --interval     Inter-burst gap in ms         (default: 200)
+    --ip           PlutoSDR IP address           (default: 192.168.2.1)
+    --mode         Operation mode: 'tx', 'rx', or 'both' (default: 'both')
+    --variable     Randomize payload size per packet
+    --min-payload  Min payload bytes (variable)  (default: 4)
+    --tx-buf-mult  TX buf multiplier             (default: 8)
 """
 
 import argparse
@@ -43,7 +47,8 @@ import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
 from pluto.config import PIPELINE, DAC_SCALE, configure_rx, configure_tx
-from pluto.sdr_stream import RxStream
+from pluto.rrc_ctrl import set_hardware_rrc as _set_pluto_hardware_rrc, get_hardware_rrc as _get_pluto_hardware_rrc
+from pluto.sdr_stream import RxStream, TxStream
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -58,11 +63,14 @@ parser.add_argument("--payload",  type=int,   default=10,            help="Paylo
 parser.add_argument("--packets",  type=int,   default=20,            help="Number of packets per TX burst (default: 20)")
 parser.add_argument("--interval", type=float, default=200,           help="Inter-burst gap in ms (default: 200)")
 parser.add_argument("--ip",       type=str,   default="192.168.2.1", help="PlutoSDR IP (default: 192.168.2.1)")
-parser.add_argument("--batch-size",type=int,   default=8,             help="Packets per TX batch/window (default: 8)")
 parser.add_argument("--mode",     type=str,   default="both",        help="Mode: 'tx', 'rx', or 'both' (default: both)")
 parser.add_argument("--cfo-offset", type=int, default=15200, help="CFO offset of RX relative to TX")
 parser.add_argument("--freq", type=float, default=PIPELINE.CENTER_FREQ, help="Center frequency")
 parser.add_argument("--constellation", action="store_true", help="Show live PSK8 constellation plot (RX mode only)")
+parser.add_argument("--variable", action="store_true", help="Randomize payload size per packet (between --min-payload and --payload)")
+parser.add_argument("--min-payload", type=int, default=4, help="Minimum payload bytes when --variable is set (default: 4, must hold seq number)")
+parser.add_argument("--tx-buf-mult", type=int, default=8, help="TX buffer size as multiple of next-power-of-2 frame length (default: 8)")
+parser.add_argument("--hardware-rrc", action="store_true", help="Use the FPGA hardware RRC/4x interpolation path on TX (toggles the pluto_custom firmware GPIO). TX only — RX always uses software match filter.")
 args = parser.parse_args()
 
 if args.mode not in ("tx", "rx", "both"):
@@ -70,10 +78,38 @@ if args.mode not in ("tx", "rx", "both"):
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
+# Hardware-RRC GPIO: the FPGA applies RRC+4× interpolation iff the pluto_custom
+# GPIO is set. Software mode and GPIO state MUST match — mismatch means either
+# double-filtering (GPIO on + SW upsample) or no filtering at all, both of
+# which destroy the signal. Toggle it over SSH on the TX Pluto before we open
+# the iio context. RX never uses the FPGA RRC (removed from the RX path) so
+# skip the RX Pluto.
+# ---------------------------------------------------------------------------
+
+# Only drive the FPGA GPIO when the user actually asked for it. We leave
+# whatever state it's in otherwise — meaning you must pass --hardware-rrc
+# on every invocation after flashing the custom firmware, otherwise the
+# FPGA may still be in hardware-RRC mode from a previous run while TX
+# generates 4× upsampled samples → double-filtered signal.
+if args.hardware_rrc and args.mode in ("tx", "both"):
+    try:
+        _set_pluto_hardware_rrc(args.ip, True)
+        print(f"  [pluto@{args.ip}] hardware_rrc={'on' if _get_pluto_hardware_rrc(args.ip) else 'off'}")
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+# ---------------------------------------------------------------------------
 # Pipelines
 # ---------------------------------------------------------------------------
 
-pipe_cfg = PipelineConfig(hardware_rrc=False)
+pipe_cfg = PipelineConfig(hardware_rrc=args.hardware_rrc)
+# Over coax, real-packet fine peak ratios sit at ~10–12 while spurious
+# detections on the ~7 kB of silence at the tail of each TX buffer fire with
+# ratio ~4–5. Bumping the gate to 7 cleanly rejects the latter — otherwise
+# they still pass the default 3.0 gate, fail at header decode, and advance
+# search_from past the real packet that followed them.
+pipe_cfg.SYNC_CONFIG.fine_peak_ratio_min = np.float32(7.0)
 tx_pipe  = TXPipeline(pipe_cfg)
 rx_pipe  = RXPipeline(pipe_cfg)
 
@@ -105,10 +141,17 @@ rx_buf_size    = 16 * int(2 ** np.ceil(np.log2(frame_len)))
 if args.mode in ("rx", "both"):
     sdr.rx_buffer_size = rx_buf_size
 
+tx_buf_size = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
+
 print(f"Mode      : {args.mode}")
 print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
-print(f"Payload   : {args.payload} bytes  ({args.payload * 8} bits)")
+if args.variable:
+    print(f"Payload   : {args.min_payload}–{args.payload} bytes (variable)")
+else:
+    print(f"Payload   : {args.payload} bytes  ({args.payload * 8} bits)")
 print(f"Frame len : {frame_len} samples  ({frame_len / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
+if args.mode in ("tx", "both"):
+    print(f"TX buf    : {tx_buf_size} samples  ({tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
 if args.mode in ("rx", "both"):
     print(f"RX buf    : {rx_buf_size} samples  ({rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
 print(f"Gap       : {args.interval} ms")
@@ -119,102 +162,57 @@ print(f"TX gain   : {args.gain} dB\n")
 # TX helpers
 # ---------------------------------------------------------------------------
 
-def _build_batch(seq_start: int, count: int) -> np.ndarray:
-    """Build `count` packets starting at seq_start; return DAC-scaled samples."""
-    chunks = []
-    for i in range(count):
-        seq       = (seq_start + i) % (2**32)
-        seq_bytes = np.array([(seq >> 24) & 0xFF, (seq >> 16) & 0xFF,
+def _build_packet(seq: int, payload_bytes: int) -> np.ndarray:
+    """Build a single packet with the given seq number and payload size.
+
+    Returns DAC-scaled complex64 samples ready for TxStream.send().
+    """
+    seq = seq % (2**32)
+    seq_bytes     = np.array([(seq >> 24) & 0xFF, (seq >> 16) & 0xFF,
                                (seq >>  8) & 0xFF,  seq        & 0xFF], dtype=np.uint8)
-        sequence_bits = np.unpackbits(seq_bytes)
-        random_bits   = rng.integers(0, 2, args.payload * 8 - 32, dtype=np.uint8)
-        payload_bits  = np.concatenate([sequence_bits, random_bits])
-        pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=payload_bits)
-        samples = tx_pipe.transmit(pkt)
-        peak    = np.max(np.abs(samples))
-        if peak > 0:
-            samples = samples / peak
-        chunks.append((samples * DAC_SCALE).astype(np.complex64))
-    return np.concatenate(chunks)
+    sequence_bits = np.unpackbits(seq_bytes)
+    random_bits   = rng.integers(0, 2, payload_bytes * 8 - 32, dtype=np.uint8)
+    payload_bits  = np.concatenate([sequence_bits, random_bits])
+    pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=payload_bytes, payload=payload_bits)
+    samples = tx_pipe.transmit(pkt)
+    peak    = np.max(np.abs(samples))
+    if peak > 0:
+        samples = samples / peak
+    return (samples * DAC_SCALE).astype(np.complex64)
+
 
 # ---------------------------------------------------------------------------
-# TX mode — loop forever: send burst in batches, wait, repeat
+# TX mode — continuous streaming via TxStream
 # ---------------------------------------------------------------------------
 
 def run_tx():
-    burst_num  = 0
-    global_seq = 0
-    current    = None  # pre-built first batch handed over from previous burst
+    stream = TxStream(sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
+    stream.start()
+    print(f"  [TX] streaming (buf={tx_buf_size} samples / "
+          f"{tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms, "
+          f"variable={args.variable})")
 
-    # Ensure packets-per-burst is a multiple of batch_size.  If not, the last
-    # batch would be short and zero-padded to match the fixed DMA buffer length.
-    # That silence causes a false preamble detection at the silence boundary,
-    # which advances search_from past real packets in the next buffer → ~50% drops.
-    n_per_burst = args.packets
-    if n_per_burst % args.batch_size != 0:
-        n_per_burst = int(np.ceil(n_per_burst / args.batch_size)) * args.batch_size
-        print(f"  [TX] NOTE: --packets {args.packets} not divisible by "
-              f"--batch-size {args.batch_size}; adjusted to {n_per_burst} "
-              f"to avoid silence gaps")
+    global_seq = 0
+    burst_num  = 0
 
     while True:
-        burst_num   += 1
-        burst_start  = global_seq
-        n            = n_per_burst
-        batch_size   = args.batch_size
-        offsets      = list(range(0, n, batch_size))
-        chunk_len    = None
-        air_time     = None
-
-        # Lookahead: build first batch before entering the send loop,
-        # unless it was already pre-built during the previous burst's sleep.
-        if current is None:
-            current = _build_batch(burst_start, min(batch_size, n))
-
-        print(f"  [TX] burst {burst_num}: {n} packets "
-              f"(seq {burst_start}–{burst_start + n - 1}), "
-              f"{len(offsets)} batch(es) of {batch_size}")
-
+        burst_num  += 1
+        burst_start = global_seq
         t0 = time.perf_counter()
-        next_burst_first = None  # pre-built first batch of the *next* burst
-        for i, offset in enumerate(offsets):
-            # Lock buffer length to first batch; zero-pad shorter tail batches.
-            if chunk_len is None:
-                chunk_len = len(current)
-                air_time  = chunk_len / pipe_cfg.SAMPLE_RATE
-            if len(current) < chunk_len:
-                current = np.concatenate([current,
-                    np.zeros(chunk_len - len(current), dtype=np.complex64)])
 
-            t_tx_start = time.perf_counter()
-            sdr.tx(current)
-
-            # Overlap: build next batch while hardware is on air.
-            if i + 1 < len(offsets):
-                next_offset = offsets[i + 1]
-                current = _build_batch(burst_start + next_offset,
-                                       min(batch_size, n - next_offset))
+        for i in range(args.packets):
+            if args.variable:
+                pay_size = rng.integers(args.min_payload, args.payload + 1)
             else:
-                # Last batch of this burst — pre-build the next burst's first
-                # batch so sdr.tx() fires immediately after the sleep with no
-                # extra build gap between bursts.
-                next_burst_first = _build_batch(burst_start + n,
-                                                min(batch_size, n))
+                pay_size = args.payload
+            samples = _build_packet(global_seq, pay_size)
+            stream.send(samples)
+            global_seq += 1
 
-            elapsed   = time.perf_counter() - t_tx_start
-            remaining = air_time - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
-
-        global_seq += n
         t1 = time.perf_counter()
-        # Hand the pre-built batch to the next iteration so the while-loop
-        # body skips the build step and goes straight to sdr.tx().
-        if next_burst_first is not None:
-            current = next_burst_first
-
-        print(f"  [TX] burst {burst_num} done: {t1 - t0:.3f} s  "
-              f"({n * args.payload / (t1 - t0):.0f} B/s)")
+        print(f"  [TX] burst {burst_num}: {args.packets} packets "
+              f"(seq {burst_start}–{global_seq - 1}) queued in {t1 - t0:.3f} s  "
+              f"(pending={stream.pending}, bufs_sent={stream.bufs_sent})")
 
         time.sleep(args.interval / 1000.0)
 
@@ -395,16 +393,14 @@ else:  # "both" — original threaded loopback behaviour
     _decoded_seqs: set[int] = set()
     _all_decoded = threading.Event()
 
-    # Round up to the next full batch — the last batch is zero-padded to the
-    # full batch length, so actual air time includes that padding.
-    _padded_packets = int(np.ceil(args.packets / args.batch_size)) * args.batch_size
-    _air_time_ms   = int(frame_len * _padded_packets / pipe_cfg.SAMPLE_RATE * 1000)
+    # Estimate total air time for all packets (continuous stream, no batch padding).
+    # Add margin for TX buffer packing overhead (silence between packed packets).
+    _air_time_ms   = int(frame_len * args.packets / pipe_cfg.SAMPLE_RATE * 1000)
     _buf_ms        = int(rx_buf_size / pipe_cfg.SAMPLE_RATE * 1000)
     _BUFS_AFTER_TX = int(np.ceil(_air_time_ms / _buf_ms)) + 8
 
     print(f"Post-TX   : {_BUFS_AFTER_TX} bufs needed after tx_done  "
-          f"(air={_air_time_ms} ms / buf={_buf_ms} ms + 8 margin, "
-          f"padded {args.packets}→{_padded_packets} pkts)\n")
+          f"(air={_air_time_ms} ms / buf={_buf_ms} ms + 8 margin)\n")
 
     # -----------------------------------------------------------------------
     # TX thread
@@ -413,31 +409,28 @@ else:  # "both" — original threaded loopback behaviour
     def tx_thread():
         rx_ready.wait()
 
-        chunks = []
-        for seq in range(args.packets):
-            seq_bytes     = np.array([(seq >> 24) & 0xFF, (seq >> 16) & 0xFF,
-                                      (seq >>  8) & 0xFF,  seq        & 0xFF], dtype=np.uint8)
-            sequence_bits = np.unpackbits(seq_bytes)
-            random_bits   = rng.integers(0, 2, args.payload * 8 - 32, dtype=np.uint8)
-            payload_bits  = np.concatenate([sequence_bits, random_bits])
-            pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=payload_bits)
-            samples = tx_pipe.transmit(pkt)
-            peak = np.max(np.abs(samples))
-            if peak > 0:
-                samples = samples / peak
-            chunks.append((samples * DAC_SCALE).astype(np.complex64))
-
-        all_samples = np.concatenate(chunks)
-        air_time_s  = len(all_samples) / pipe_cfg.SAMPLE_RATE
+        stream = TxStream(sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
+        stream.start()
 
         t0 = time.perf_counter()
-        sdr.tx(all_samples)
-        remaining = air_time_s - (time.perf_counter() - t0)
-        if remaining > 0:
-            time.sleep(remaining)
-        t1 = time.perf_counter()
+        for seq in range(args.packets):
+            if args.variable:
+                pay_size = rng.integers(args.min_payload, args.payload + 1)
+            else:
+                pay_size = args.payload
+            samples = _build_packet(seq, pay_size)
+            stream.send(samples)
 
-        print(f"Took: {t1 - t0} seconds. Throughput: {args.packets * args.payload / (t1 - t0)} B/s")
+        # Wait for the stream to drain the queue
+        while stream.pending > 0:
+            time.sleep(0.01)
+        # One more air_time to let the last buffer finish transmitting
+        time.sleep(tx_buf_size / pipe_cfg.SAMPLE_RATE)
+
+        t1 = time.perf_counter()
+        stream.stop()
+
+        print(f"Took: {t1 - t0:.3f} seconds. Throughput: {args.packets * args.payload / (t1 - t0):.0f} B/s")
         tx_done.set()
         print("  [TX] done")
 

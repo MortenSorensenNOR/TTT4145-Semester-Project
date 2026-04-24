@@ -30,7 +30,7 @@ class PipelineConfig:
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.006) # Bn=0.008 empirically optimal for PSK8 over coax
+    COSTAS_CONFIG = CostasConfig(0.008) # Bn=0.008 empirically optimal for PSK8 over coax
     GARDNER_CONFIG = GardnerConfig(0.0025) #Probably needs more tuning
 
     pulse_shaping: bool = True
@@ -108,9 +108,14 @@ class TXPipeline:
         # construct signal
         tx_syms = np.concatenate([self.guard_syms,self.sync_syms, self.pre_header_guard_syms, header_syms, payload_syms,self.guard_syms])
 
-        # upsample and filter (skip SW RRC if hardware filter handles it)
+        # upsample and filter
+        # hardware_rrc=True: FPGA does 4× polyphase interpolation + RRC shaping,
+        # so we send raw baseband symbols (1 sample/symbol) with no upsampling.
+        # The DMA will drain at 1 MHz (symbol rate) rather than 4 MHz; buffer
+        # timing must be calculated in symbols, not samples.
+        # hardware_rrc=False: do full software upsample + RRC convolution.
         if self.config.hardware_rrc:
-            tx_signal = upsample_no_filter(tx_syms, self.config.SPS)
+            tx_signal = tx_syms
         else:
             tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
         return tx_signal
@@ -158,8 +163,9 @@ class RXPipeline:
         re-detecting packets that already failed decode.
         """
         search_buf = buffer[search_from:]
-        # Skip SW match-filter if hardware RRC already did it
-        filtered_buffer = search_buf if self.config.hardware_rrc else match_filter(search_buf, self.rrc_taps)
+        # RX always uses software matched filter; FPGA no longer has an RRC
+        # filter on the RX path (it was removed to save DSP resources).
+        filtered_buffer = match_filter(search_buf, self.rrc_taps)
         detections = self.detect(filtered_buffer)
         if not detections:
             return [], search_from
@@ -178,11 +184,17 @@ class RXPipeline:
                 packets.append(decoded_packet)
                 max_detection_sample = max(max_detection_sample, abs_payload_start)
             except IndexError as e:
-                # Tail cutoff: frame extends beyond buffer. Don't advance max_det so
-                # the preamble stays inside the search window on the next iteration,
-                # allowing a retry once the full frame is available.
+                # Tail cutoff: this frame extends beyond the buffer. Stop
+                # processing remaining detections so they stay eligible for
+                # retry on the next iteration (once more data is appended).
+                # Without this break, a shorter frame detected at a higher
+                # position could still decode and advance max_det past this
+                # cutoff — permanently losing it. Matters for variable-length
+                # payloads; with fixed lengths every later detection would
+                # also cut off, so the break is a no-op.
                 n_decode_errors += 1
                 logger.info(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
+                break
             except Exception as e:
                 max_detection_sample = max(max_detection_sample, abs_payload_start)
                 n_decode_errors += 1
