@@ -38,7 +38,9 @@ def main() -> None:
     args = parser.parse_args()
 
     sdr = adi.Pluto(uri=args.uri)
-    sdr.gain_control_mode_chan0 = args.gain_mode
+    # sdr.gain_control_mode_chan0 = args.gain_mode
+    sdr.gain_control_mode_chan0 = "manual"
+    sdr.rx_hardwaregain_chan0 = 70
     sdr.rx_lo = args.freq
     sdr.sample_rate = SAMPLE_RATE
     sdr.rx_rf_bandwidth = SAMPLE_RATE
