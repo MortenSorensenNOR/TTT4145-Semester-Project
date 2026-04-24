@@ -14,6 +14,7 @@
 #     sudo ./scripts/bridge_netns.sh up --shape-rate 2mbit   # custom shaping
 #     sudo ./scripts/bridge_netns.sh up --no-shape           # no qdisc
 #     sudo ./scripts/bridge_netns.sh up --window 5           # smaller ARQ window
+#     sudo ./scripts/bridge_netns.sh up --arq-queue-depth 64  # bigger ingress queue
 #     sudo ./scripts/bridge_netns.sh status                  # what's running?
 #     sudo ./scripts/bridge_netns.sh down                    # tear down
 #
@@ -45,6 +46,8 @@ TUN_NAME=pluto0
 TX_GAIN=-20
 MTU=1500
 WINDOW=7
+ARQ_QUEUE_DEPTH=32      # ARQ ingress queue; bump for bursty UDP (streaming, etc.)
+RETRANSMIT_TIMEOUT=0.15 # seconds before ARQ re-sends unacked frames (ping RTT × 2-3)
 SHAPE_RATE="1500kbit"   # "off" to skip; override with --shape-rate / --no-shape
 STARTUP_WAIT=6
 
@@ -65,6 +68,8 @@ while [[ $# -gt 0 ]]; do
         --tx-gain)    TX_GAIN=$2; shift 2 ;;
         --mtu)        MTU=$2; shift 2 ;;
         --window)     WINDOW=$2; shift 2 ;;
+        --arq-queue-depth) ARQ_QUEUE_DEPTH=$2; shift 2 ;;
+        --retransmit-timeout) RETRANSMIT_TIMEOUT=$2; shift 2 ;;
         --shape-rate) SHAPE_RATE=$2; shift 2 ;;
         --no-shape)   SHAPE_RATE="off"; shift ;;
         --startup-wait) STARTUP_WAIT=$2; shift 2 ;;
@@ -264,17 +269,21 @@ cmd_up() {
     : > "$LOG_A"; : > "$LOG_B"
     cd "$PROJ_ROOT"
 
-    echo "[info] Starting bridge A (window=$WINDOW, log: $LOG_A)…"
+    echo "[info] Starting bridge A (window=$WINDOW, arq-queue=$ARQ_QUEUE_DEPTH, log: $LOG_A)…"
     ip netns exec "$NS_A" "$PYTHON" -m pluto.bridge \
         --node A --tx-ip "$PLUTO_A_TX_IP" --rx-ip "$PLUTO_A_RX_IP" \
         --tx-gain "$TX_GAIN" --mtu "$MTU" --window "$WINDOW" \
+        --arq-queue-depth "$ARQ_QUEUE_DEPTH" \
+        --retransmit-timeout "$RETRANSMIT_TIMEOUT" \
         >"$LOG_A" 2>&1 &
     echo $! > "$PID_A"
 
-    echo "[info] Starting bridge B (window=$WINDOW, log: $LOG_B)…"
+    echo "[info] Starting bridge B (window=$WINDOW, arq-queue=$ARQ_QUEUE_DEPTH, log: $LOG_B)…"
     ip netns exec "$NS_B" "$PYTHON" -m pluto.bridge \
         --node B --tx-ip "$PLUTO_B_TX_IP" --rx-ip "$PLUTO_B_RX_IP" \
         --tx-gain "$TX_GAIN" --mtu "$MTU" --window "$WINDOW" \
+        --arq-queue-depth "$ARQ_QUEUE_DEPTH" \
+        --retransmit-timeout "$RETRANSMIT_TIMEOUT" \
         >"$LOG_B" 2>&1 &
     echo $! > "$PID_B"
 
