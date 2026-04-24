@@ -23,11 +23,18 @@ Options:
     --payload      Payload size in bytes         (default: 10)
     --packets      Number of packets per burst   (default: 20)
     --interval     Inter-burst gap in ms         (default: 200)
-    --ip           PlutoSDR IP address           (default: 192.168.2.1)
+    --node         Node identity (A or B)        (default: A)
+    --tx-ip        Override TX Pluto IP          (default: derived from --node)
+    --rx-ip        Override RX Pluto IP          (default: derived from --node)
     --mode         Operation mode: 'tx', 'rx', or 'both' (default: 'both')
     --variable     Randomize payload size per packet
     --min-payload  Min payload bytes (variable)  (default: 4)
     --tx-buf-mult  TX buf multiplier             (default: 8)
+
+Radio convention: each node runs a dedicated TX Pluto and a dedicated RX
+Pluto (a single USB-2 Pluto cannot sustain 4 Msps full-duplex). The 3rd
+octet N in 192.168.N.1 picks the node — even → A, odd → B. Defaults come
+from pluto.config.NODE_RADIO_IPS.
 """
 
 import argparse
@@ -46,7 +53,8 @@ import numpy as np
 import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
-from pluto.config import PIPELINE, DAC_SCALE, configure_rx, configure_tx
+from pluto.cfo_config import CFO_CONFIG_PATH, load as load_cfo_calibration
+from pluto.config import NODE_RADIO_IPS, PIPELINE, DAC_SCALE, configure_rx, configure_tx
 from pluto.rrc_ctrl import set_hardware_rrc as _set_pluto_hardware_rrc, get_hardware_rrc as _get_pluto_hardware_rrc
 from pluto.sdr_stream import RxStream, TxStream
 
@@ -62,9 +70,15 @@ parser.add_argument("--gain",     type=float, default=-30,           help="TX ga
 parser.add_argument("--payload",  type=int,   default=10,            help="Payload bytes (default: 10)")
 parser.add_argument("--packets",  type=int,   default=20,            help="Number of packets per TX burst (default: 20)")
 parser.add_argument("--interval", type=float, default=200,           help="Inter-burst gap in ms (default: 200)")
-parser.add_argument("--ip",       type=str,   default="192.168.2.1", help="PlutoSDR IP (default: 192.168.2.1)")
+parser.add_argument("--node",     type=str,   default="A",           help="Node identity A or B; picks default TX/RX IPs from NODE_RADIO_IPS")
+parser.add_argument("--tx-ip",    type=str,   default=None,          help="Override TX Pluto IP (default: derived from --node)")
+parser.add_argument("--rx-ip",    type=str,   default=None,          help="Override RX Pluto IP (default: derived from --node)")
 parser.add_argument("--mode",     type=str,   default="both",        help="Mode: 'tx', 'rx', or 'both' (default: both)")
-parser.add_argument("--cfo-offset", type=int, default=15200, help="CFO offset of RX relative to TX")
+parser.add_argument("--cfo-offset", type=int, default=None,
+                    help="Manual override for the RX-LO CFO correction in Hz. "
+                         "Default: value from pluto/cfo_calibration.json for "
+                         "--node (run scripts/cfo_calibrate.py to generate it), "
+                         "or 0 if no calibration file exists. Only affects RX.")
 parser.add_argument("--freq", type=float, default=PIPELINE.CENTER_FREQ, help="Center frequency")
 parser.add_argument("--constellation", action="store_true", help="Show live PSK8 constellation plot (RX mode only)")
 parser.add_argument("--variable", action="store_true", help="Randomize payload size per packet (between --min-payload and --payload)")
@@ -76,6 +90,34 @@ args = parser.parse_args()
 if args.mode not in ("tx", "rx", "both"):
     print(f"ERROR: --mode must be 'tx', 'rx', or 'both', got '{args.mode}'")
     sys.exit(1)
+
+if args.node not in NODE_RADIO_IPS:
+    print(f"ERROR: --node must be one of {sorted(NODE_RADIO_IPS)}, got '{args.node}'")
+    sys.exit(1)
+
+tx_ip = args.tx_ip or NODE_RADIO_IPS[args.node]["tx"]
+rx_ip = args.rx_ip or NODE_RADIO_IPS[args.node]["rx"]
+
+# Resolve RX-LO CFO offset: manual CLI override wins; otherwise pull the
+# measured value for this node from the calibration file; otherwise 0. TX
+# always emits at its natural LO (split-radio convention — the peer's RX
+# does the compensating).
+if args.cfo_offset is not None:
+    rx_cfo_hz = args.cfo_offset
+    cfo_src   = "cli"
+elif args.mode == "tx":
+    rx_cfo_hz = 0
+    cfo_src   = "n/a (tx-only)"
+else:
+    cal = load_cfo_calibration()
+    if cal is None:
+        rx_cfo_hz = 0
+        cfo_src   = "unset"
+        print(f"  [warn] no CFO calibration at {CFO_CONFIG_PATH} — using 0 Hz. "
+              f"Run 'uv run python scripts/cfo_calibrate.py' to generate one.")
+    else:
+        rx_cfo_hz = cal.rx_offset_for(args.node)
+        cfo_src   = f"calibration ({cal.measured_at or 'unknown date'})"
 
 # ---------------------------------------------------------------------------
 # Hardware-RRC GPIO: the FPGA applies RRC+4× interpolation iff the pluto_custom
@@ -93,8 +135,8 @@ if args.mode not in ("tx", "rx", "both"):
 # generates 4× upsampled samples → double-filtered signal.
 if args.hardware_rrc and args.mode in ("tx", "both"):
     try:
-        _set_pluto_hardware_rrc(args.ip, True)
-        print(f"  [pluto@{args.ip}] hardware_rrc={'on' if _get_pluto_hardware_rrc(args.ip) else 'off'}")
+        _set_pluto_hardware_rrc(tx_ip, True)
+        print(f"  [pluto@{tx_ip}] hardware_rrc={'on' if _get_pluto_hardware_rrc(tx_ip) else 'off'}")
     except RuntimeError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
@@ -116,17 +158,23 @@ rx_pipe  = RXPipeline(pipe_cfg)
 rng = np.random.default_rng(0)
 
 # ---------------------------------------------------------------------------
-# SDR setup — shared device (PlutoSDR supports simultaneous TX + RX)
+# SDR setup — per direction. Each node runs a dedicated TX Pluto and a
+# dedicated RX Pluto; we only open the device(s) that the current mode
+# actually needs, so tx/rx-only invocations don't require both radios to
+# be plugged in.
 # ---------------------------------------------------------------------------
 
-sdr = adi.Pluto("ip:" + args.ip)
+tx_sdr = None
+rx_sdr = None
 
 frequency = args.freq
 if args.mode in ("tx", "both"):
-    configure_tx(sdr, freq=frequency + args.cfo_offset, gain=args.gain, cyclic=False)
+    tx_sdr = adi.Pluto("ip:" + tx_ip)
+    configure_tx(tx_sdr, freq=frequency, gain=args.gain, cyclic=False)
 
 if args.mode in ("rx", "both"):
-    configure_rx(sdr, freq=frequency, gain_mode="slow_attack")
+    rx_sdr = adi.Pluto("ip:" + rx_ip)
+    configure_rx(rx_sdr, freq=frequency + rx_cfo_hz, gain_mode="slow_attack")
 
 # ---------------------------------------------------------------------------
 # RX buffer sizing (needed for RX and both modes, and for the TX probe)
@@ -139,11 +187,17 @@ frame_len      = len(_probe_samples)
 rx_buf_size    = 16 * int(2 ** np.ceil(np.log2(frame_len)))
 
 if args.mode in ("rx", "both"):
-    sdr.rx_buffer_size = rx_buf_size
+    rx_sdr.rx_buffer_size = rx_buf_size
 
 tx_buf_size = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
 
 print(f"Mode      : {args.mode}")
+print(f"Node      : {args.node}")
+if args.mode in ("tx", "both"):
+    print(f"TX radio  : {tx_ip}   @ {frequency / 1e6:.3f} MHz")
+if args.mode in ("rx", "both"):
+    print(f"RX radio  : {rx_ip}   @ {(frequency + rx_cfo_hz) / 1e6:.3f} MHz  "
+          f"(CFO {rx_cfo_hz:+d} Hz, {cfo_src})")
 print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
 if args.variable:
     print(f"Payload   : {args.min_payload}–{args.payload} bytes (variable)")
@@ -186,7 +240,7 @@ def _build_packet(seq: int, payload_bytes: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def run_tx():
-    stream = TxStream(sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
+    stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
     stream.start()
     print(f"  [TX] streaming (buf={tx_buf_size} samples / "
           f"{tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms, "
@@ -263,7 +317,7 @@ def _setup_constellation_plot():
 def run_rx():
     # Lossless stream: large queue so the hardware reader never stalls while
     # the decoder is busy.
-    stream = RxStream(sdr, maxsize=128, lossless=True)
+    stream = RxStream(rx_sdr, maxsize=128, lossless=True)
     stream.start(flush=16)
 
     print("  [RX] listening …")
@@ -409,7 +463,7 @@ else:  # "both" — original threaded loopback behaviour
     def tx_thread():
         rx_ready.wait()
 
-        stream = TxStream(sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
+        stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
         stream.start()
 
         t0 = time.perf_counter()
@@ -439,7 +493,7 @@ else:  # "both" — original threaded loopback behaviour
     # -----------------------------------------------------------------------
 
     def rx_thread():
-        stream = RxStream(sdr, maxsize=128, lossless=True)
+        stream = RxStream(rx_sdr, maxsize=128, lossless=True)
         stream.start(flush=16)
         rx_ready.set()
 
@@ -555,12 +609,14 @@ else:  # "both" — original threaded loopback behaviour
 # Cleanup
 # ---------------------------------------------------------------------------
 
-if args.mode in ("tx", "both"):
+if tx_sdr is not None:
     try:
-        sdr.tx_destroy_buffer()
+        tx_sdr.tx_destroy_buffer()
     except Exception:
         pass
-del sdr
+    del tx_sdr
+if rx_sdr is not None:
+    del rx_sdr
 
 sys.exit(0)
 

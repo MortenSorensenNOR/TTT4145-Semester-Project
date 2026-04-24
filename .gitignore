@@ -33,3 +33,6 @@ references/
 # images
 *.png
 *.jpg
+
+# Per-host CFO calibration (Pluto LO drift — hardware-specific)
+pluto/cfo_calibration.json

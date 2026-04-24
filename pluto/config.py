@@ -24,6 +24,14 @@ MAX_PACKET_SIZE_BYTES = 1500
 FREQ_A_TO_B = 2_400_000_000
 FREQ_B_TO_A = 2_410_000_000
 
+# Split-radio layout: each node dedicates one Pluto to TX and another to RX
+# because a single USB-2 Pluto cannot sustain 4 Msps full-duplex. Convention:
+# the 3rd octet N in 192.168.N.1 picks the node (even → A, odd → B).
+NODE_RADIO_IPS = {
+    "A": {"tx": "192.168.4.1", "rx": "192.168.2.1"},
+    "B": {"tx": "192.168.3.1", "rx": "192.168.5.1"},
+}
+
 PIPELINE = PipelineConfig()
 
 def configure_rx(

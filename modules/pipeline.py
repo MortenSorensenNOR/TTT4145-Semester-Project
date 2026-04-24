@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import IntEnum
 from math import ceil
 import numpy as np
 
@@ -46,12 +47,23 @@ class PipelineConfig:
     # hardware RRC filter is active between the AD9363 and DMA.
     hardware_rrc: bool = False
 
+class PacketType(IntEnum):
+    """Frame types carried in the 2-bit `frame_type` header field.
+
+    Values fit FrameHeaderConfig.frame_type_bits = 2 (range 0..3).
+    """
+    DATA = 0  # carries a TUN payload
+    ACK  = 1  # cumulative ACK; seq_num = last in-order DATA seq received
+    NAK  = 2  # reserved
+    CTRL = 3  # reserved (link control / probe)
+
+
 @dataclass
 class Packet:
     """Packet of data to/from TAP/TUN"""
     src_mac: int = -1
     dst_mac: int = -1
-    type: int = -1
+    type: int = -1                                # one of PacketType
     seq_num: int = -1
     length: int = -1
     payload: np.ndarray = field(default_factory=lambda: np.ndarray([]))
@@ -247,14 +259,18 @@ class RXPipeline:
         cfo_rad_per_symbol = np.float32(2 * np.pi * float(cfo) / self.config.SAMPLE_RATE * self.config.SPS)
 
         header, payload_start, current_phase_estimate, current_timing_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
-        if header.length == 0:
-            msg = "Payload length = 0"
-            raise ValueError(msg)
 
         if header.crc_passed:
             logger.debug(f"CRC Passed on header with payload length: {header.length} bytes")
 
-        payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate, current_timing_estimate)
+        # length=0 is legitimate for control frames (e.g. ARQ ACKs). Skip
+        # payload_decode for them — there is nothing but the 16-bit CRC to
+        # verify, and payload_decode would return an empty array anyway.
+        if header.length == 0:
+            payload = np.empty((0, 1), dtype=int)
+            rx_symbols = np.empty(0, dtype=np.complex64)
+        else:
+            payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate, current_timing_estimate)
         return Packet(
             src_mac=header.src,
             dst_mac=header.dst,
