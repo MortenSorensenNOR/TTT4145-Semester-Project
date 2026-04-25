@@ -314,8 +314,6 @@ class ARQNode:
             seq_num=seq,
             length=len(payload),
             payload=bits,
-            mod_scheme=ModulationSchemes.BPSK,
-            coding_rate=CodeRates.NONE,
             valid=True,
         )
         self.stats.data_tx += 1

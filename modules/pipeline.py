@@ -62,7 +62,7 @@ class PipelineConfig:
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.02) # Bn=0.008 empirically optimal for PSK8 over coax
+    COSTAS_CONFIG = CostasConfig(0.008) # Bn=0.008 empirically optimal for PSK8 over coax
     # NDA Gardner (Rice 2009) — see modules/gardner_ted/gardner.py.
     # BnTs must stay narrow: with LDPC the systematic-bits region holds 1500+
     # consecutive constant-symbol BPSK pad, which gives the NDA TED nothing to
@@ -359,7 +359,7 @@ class RXPipeline:
         # if header.crc_passed:
         #     logger.debug(f"HEADER: crc: {header.crc_passed}, header: length {header.length} bytes, coding rate: {header.coding_rate}, type: {header.frame_type}")
 
-        logger.info(f"HEADER: crc: {header.crc_passed}, header: length {header.length} bytes, coding rate: {header.coding_rate}, type: {header.frame_type}")
+        logger.info(f"HEADER: crc: {header.crc_passed}, header: length {header.length} bytes, mod scheme: {header.mod_scheme}, coding rate: {header.coding_rate}, type: {header.frame_type}")
 
         # length=0 is legitimate for control frames (e.g. ARQ ACKs). Skip
         # payload_decode for them — there is nothing but the 16-bit CRC to
