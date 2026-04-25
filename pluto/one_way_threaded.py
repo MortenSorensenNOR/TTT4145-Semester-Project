@@ -56,7 +56,23 @@ import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
 from pluto.cfo_config import CFO_CONFIG_PATH, load as load_cfo_calibration
-from pluto.config import NODE_RADIO_IPS, PIPELINE, DAC_SCALE, configure_rx, configure_tx
+from pluto.config import (
+    DAC_SCALE,
+    FREQ_A_TO_B,
+    FREQ_B_TO_A,
+    NODE_RADIO_IPS,
+    PIPELINE,
+    configure_rx,
+    configure_tx,
+)
+
+# FDD frequency plan: A transmits on FREQ_A_TO_B and listens on FREQ_B_TO_A;
+# B does the opposite. Mirrors pluto.bridge.NODE_CONFIGS so a node-A and
+# node-B process can run simultaneously without colliding on one channel.
+NODE_FREQS = {
+    "A": {"tx": FREQ_A_TO_B, "rx": FREQ_B_TO_A},
+    "B": {"tx": FREQ_B_TO_A, "rx": FREQ_A_TO_B},
+}
 from pluto.rrc_ctrl import set_hardware_rrc as _set_pluto_hardware_rrc, get_hardware_rrc as _get_pluto_hardware_rrc
 from pluto.sdr_stream import RxStream, TxStream
 
@@ -213,7 +229,8 @@ parser.add_argument("--cfo-offset", type=int, default=None,
                          "Default: value from pluto/cfo_calibration.json for "
                          "--node (run scripts/cfo_calibrate.py to generate it), "
                          "or 0 if no calibration file exists. Only affects RX.")
-parser.add_argument("--freq", type=float, default=PIPELINE.CENTER_FREQ, help="Center frequency")
+parser.add_argument("--tx-freq", type=float, default=None, help="TX center frequency in Hz (default: derived from --node via NODE_FREQS)")
+parser.add_argument("--rx-freq", type=float, default=None, help="RX center frequency in Hz (default: derived from --node via NODE_FREQS)")
 parser.add_argument("--constellation", action="store_true", help="Show live PSK8 constellation plot (RX mode only)")
 parser.add_argument("--variable", action="store_true", help="Randomize payload size per packet (between --min-payload and --payload)")
 parser.add_argument("--min-payload", type=int, default=4, help="Minimum payload bytes when --variable is set (default: 4, must hold seq number)")
@@ -301,14 +318,16 @@ rng = np.random.default_rng(0)
 tx_sdr = None
 rx_sdr = None
 
-frequency = args.freq
+tx_freq = int(args.tx_freq) if args.tx_freq is not None else NODE_FREQS[args.node]["tx"]
+rx_freq = int(args.rx_freq) if args.rx_freq is not None else NODE_FREQS[args.node]["rx"]
+
 if args.mode in ("tx", "both"):
     tx_sdr = adi.Pluto("ip:" + tx_ip)
-    configure_tx(tx_sdr, freq=frequency, gain=args.gain, cyclic=False)
+    configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
 
 if args.mode in ("rx", "both"):
     rx_sdr = adi.Pluto("ip:" + rx_ip)
-    configure_rx(rx_sdr, freq=frequency + rx_cfo_hz, gain_mode="slow_attack")
+    configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz, gain_mode="slow_attack")
 
 # ---------------------------------------------------------------------------
 # RX buffer sizing (needed for RX and both modes, and for the TX probe)
@@ -328,9 +347,9 @@ tx_buf_size = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
 print(f"Mode      : {args.mode}")
 print(f"Node      : {args.node}")
 if args.mode in ("tx", "both"):
-    print(f"TX radio  : {tx_ip}   @ {frequency / 1e6:.3f} MHz")
+    print(f"TX radio  : {tx_ip}   @ {tx_freq / 1e6:.3f} MHz")
 if args.mode in ("rx", "both"):
-    print(f"RX radio  : {rx_ip}   @ {(frequency + rx_cfo_hz) / 1e6:.3f} MHz  "
+    print(f"RX radio  : {rx_ip}   @ {(rx_freq + rx_cfo_hz) / 1e6:.3f} MHz  "
           f"(CFO {rx_cfo_hz:+d} Hz, {cfo_src})")
 print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
 if args.variable:
