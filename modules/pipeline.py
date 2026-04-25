@@ -36,6 +36,15 @@ def _on_air_payload_n_bits(pre_ldpc_n_bits: int, code_rate: CodeRates) -> tuple[
     n_cw = (pre_ldpc_n_bits + k - 1) // k
     return (n_cw, k, n_cw * n)
 
+
+# Pre-generated random LDPC pad. Padding the LDPC k-message with all zeros
+# produces long runs of identical symbols at the modulator (in PSK8 every
+# 000 triplet maps to the same constellation point), which the Costas/Gardner
+# loops can't track through. Random pad keeps the RX loops happy; the receiver
+# strips the pad bits based on pre_ldpc_n_bits so the content is irrelevant.
+_LDPC_PAD_RNG = np.random.default_rng(seed=0xA5A5A5A5)
+_LDPC_PAD_BITS = _LDPC_PAD_RNG.integers(0, 2, max(_LDPC_BLOCK_PARAMS.values(), key=lambda kn: kn[0])[0], dtype=np.uint8)
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -152,7 +161,7 @@ class TXPipeline:
         n_cw, k, n_air = _on_air_payload_n_bits(len(flat), code_rate)
         n = n_air // n_cw
         pad = n_cw * k - len(flat)
-        msg = np.concatenate([flat, np.zeros(pad, dtype=np.uint8)]) if pad else flat
+        msg = np.concatenate([flat, _LDPC_PAD_BITS[:pad]]) if pad else flat
         cfg = LDPCConfig(k=k, code_rate=code_rate)
         coded = np.empty(n_cw * n, dtype=np.uint8)
         for i in range(n_cw):
@@ -498,7 +507,7 @@ class RXPipeline:
                 max_iterations=self.config.LDPC_MAX_ITER,
             ).astype(np.uint8)
 
-        # Trim the zero-pad we appended on TX to align with LDPC k.
+        # Trim the random pad we appended on TX to align with LDPC k.
         payload_bits_pre_ldpc = decoded[:pre_ldpc_n_bits]
         payload_bits = self.frame_constructor.decode_payload(header, payload_bits_pre_ldpc)
         return payload_bits.reshape(-1, 1), rx_syms
