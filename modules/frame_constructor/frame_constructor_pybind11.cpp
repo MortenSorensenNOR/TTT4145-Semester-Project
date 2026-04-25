@@ -83,6 +83,7 @@ struct FrameHeader {
     int               frame_type = 0;
     ModulationSchemes mod_scheme = ModulationSchemes::BPSK;
     int               sequence_number = 0;
+    int               coding_rate = 3;  // CodeRates.FIVE_SIXTH_RATE.value
     int               crc = 0;
     bool              crc_passed = true;
 };
@@ -94,12 +95,14 @@ struct FrameHeaderConfig {
     int  frame_type_bits      = 2;
     int  mod_scheme_bits      = 2;
     int  sequence_number_bits = 4;
+    int  coding_rate_bits     = 2;
     int  crc_bits             = 8;
     bool use_golay            = false;
 
     int header_total_size() const {
         return payload_length_bits + src_bits + dst_bits + frame_type_bits
-             + mod_scheme_bits + sequence_number_bits + crc_bits;
+             + mod_scheme_bits + sequence_number_bits + coding_rate_bits
+             + crc_bits;
     }
 };
 
@@ -114,7 +117,7 @@ public:
         header_length_ = 2 * (int)std::ceil(raw / 2.0);
         data_field_bits_ = cfg.payload_length_bits + cfg.src_bits + cfg.dst_bits
                          + cfg.frame_type_bits + cfg.mod_scheme_bits
-                         + cfg.sequence_number_bits;
+                         + cfg.sequence_number_bits + cfg.coding_rate_bits;
     }
 
     int header_length() const { return header_length_; }
@@ -127,6 +130,7 @@ public:
         off = write_bits(hdr.frame_type,                   cfg_.frame_type_bits,      out, off);
         off = write_bits(static_cast<int>(hdr.mod_scheme), cfg_.mod_scheme_bits,      out, off);
         off = write_bits(hdr.sequence_number,              cfg_.sequence_number_bits, out, off);
+        off = write_bits(hdr.coding_rate,                  cfg_.coding_rate_bits,     out, off);
         uint8_t crc = crc8_from_bits(out, data_field_bits_);
         off = write_bits(crc, cfg_.crc_bits, out, off);
         return off;
@@ -146,6 +150,7 @@ public:
         int frame_type      = read_bits(raw, off, cfg_.frame_type_bits);
         int mod_val         = read_bits(raw, off, cfg_.mod_scheme_bits);
         int sequence_number = read_bits(raw, off, cfg_.sequence_number_bits);
+        int coding_rate     = read_bits(raw, off, cfg_.coding_rate_bits);
 
         int data_end = off;
         int crc = read_bits(raw, off, cfg_.crc_bits);
@@ -159,6 +164,7 @@ public:
         h.frame_type      = frame_type;
         h.mod_scheme      = static_cast<ModulationSchemes>(mod_val);
         h.sequence_number = sequence_number;
+        h.coding_rate     = coding_rate;
         h.crc             = crc;
         h.crc_passed      = (crc == (int)expected_crc);
         return h;
@@ -329,15 +335,19 @@ PYBIND11_MODULE(frame_constructor_ext, m) {
     py::class_<FrameHeader>(m, "FrameHeader")
         .def(py::init<>())
         .def(py::init([](int length, int src, int dst, int frame_type,
-                         ModulationSchemes mod, int seq, int crc, bool crc_ok) {
+                         ModulationSchemes mod, int seq, int coding_rate,
+                         int crc, bool crc_ok) {
             FrameHeader h;
             h.length = length; h.src = src; h.dst = dst;
             h.frame_type = frame_type; h.mod_scheme = mod;
-            h.sequence_number = seq; h.crc = crc; h.crc_passed = crc_ok;
+            h.sequence_number = seq; h.coding_rate = coding_rate;
+            h.crc = crc; h.crc_passed = crc_ok;
             return h;
         }), py::arg("length"), py::arg("src"), py::arg("dst"),
             py::arg("frame_type"), py::arg("mod_scheme"),
-            py::arg("sequence_number"), py::arg("crc") = 0,
+            py::arg("sequence_number"),
+            py::arg("coding_rate") = 3,
+            py::arg("crc") = 0,
             py::arg("crc_passed") = true)
         .def_readwrite("length",          &FrameHeader::length)
         .def_readwrite("src",             &FrameHeader::src)
@@ -345,6 +355,7 @@ PYBIND11_MODULE(frame_constructor_ext, m) {
         .def_readwrite("frame_type",      &FrameHeader::frame_type)
         .def_readwrite("mod_scheme",      &FrameHeader::mod_scheme)
         .def_readwrite("sequence_number", &FrameHeader::sequence_number)
+        .def_readwrite("coding_rate",     &FrameHeader::coding_rate)
         .def_readwrite("crc",             &FrameHeader::crc)
         .def_readwrite("crc_passed",      &FrameHeader::crc_passed)
         .def("__repr__", [](const FrameHeader& h) {
@@ -361,6 +372,7 @@ PYBIND11_MODULE(frame_constructor_ext, m) {
         .def_readwrite("frame_type_bits",      &FrameHeaderConfig::frame_type_bits)
         .def_readwrite("mod_scheme_bits",      &FrameHeaderConfig::mod_scheme_bits)
         .def_readwrite("sequence_number_bits", &FrameHeaderConfig::sequence_number_bits)
+        .def_readwrite("coding_rate_bits",     &FrameHeaderConfig::coding_rate_bits)
         .def_readwrite("crc_bits",             &FrameHeaderConfig::crc_bits)
         .def_readwrite("use_golay",            &FrameHeaderConfig::use_golay)
         .def("header_total_size",              &FrameHeaderConfig::header_total_size);

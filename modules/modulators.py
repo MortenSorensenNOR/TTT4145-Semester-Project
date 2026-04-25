@@ -20,6 +20,10 @@ class Modulator(Protocol):
         """Convert symbols to hard-decision bits."""
         ...
 
+    def symbols2llrs(self, symbols: np.ndarray) -> np.ndarray:
+        """Convert symbols to soft LLRs (positive ⇒ bit 0). Shape: (N, bits_per_symbol)."""
+        ...
+
 class BPSK(Modulator):
     def __init__(self) -> None:
         self.bits_per_symbol = 1
@@ -38,6 +42,12 @@ class BPSK(Modulator):
         bits = np.empty((symbols.size, 1), dtype=np.uint8)
         bits[:, 0] = symbols.real > 0
         return bits
+
+    def symbols2llrs(self, symbols: NDArray[np.complex64]) -> np.ndarray:
+        # bit=0 → real=-1, bit=1 → real=+1, so LLR(b=0) ∝ -real.
+        if symbols.size == 0:
+            return np.empty((0, 1), dtype=np.float32)
+        return (-2.0 * symbols.real).astype(np.float32).reshape(-1, 1)
 
 class QPSK(Modulator):
     def __init__(self) -> None:
@@ -62,6 +72,15 @@ class QPSK(Modulator):
         bits[:, 1] = symbols.imag > 0
         return bits
 
+    def symbols2llrs(self, symbols: NDArray[np.complex64]) -> np.ndarray:
+        # Gray-coded: bit0 ↔ sign(real), bit1 ↔ sign(imag).
+        if symbols.size == 0:
+            return np.empty((0, 2), dtype=np.float32)
+        out = np.empty((symbols.size, 2), dtype=np.float32)
+        out[:, 0] = -2.0 * symbols.real
+        out[:, 1] = -2.0 * symbols.imag
+        return out
+
 class PSK8(Modulator):
     def __init__(self) -> None:
         self.bits_per_symbol = 3
@@ -69,6 +88,16 @@ class PSK8(Modulator):
         self.symbol_mapping = np.array([-1 - 1j, -np.sqrt(2) + 0j, 0 + np.sqrt(2)*1j, -1 + 1j,
                                          0 - np.sqrt(2)*1j, 1 - 1j, 1 + 1j, np.sqrt(2)+ 0j], dtype=np.complex64) / np.sqrt(2)
         self._BIN_TO_IDX = np.array([7, 6, 2, 3, 1, 0, 4, 5], dtype=np.uint8)
+
+        # max-log LLR partitions: for each bit position b ∈ {0,1,2}, list the
+        # constellation points whose corresponding bit is 0 vs 1.  The mapping is
+        # idx = (b0<<2) | (b1<<1) | b2 (matches bits2symbols).
+        idx = np.arange(8)
+        bits_for_idx = np.stack([(idx >> 2) & 1, (idx >> 1) & 1, idx & 1], axis=1)
+        self._llr_c0 = [self.symbol_mapping[bits_for_idx[:, b] == 0].astype(np.complex64)
+                        for b in range(3)]
+        self._llr_c1 = [self.symbol_mapping[bits_for_idx[:, b] == 1].astype(np.complex64)
+                        for b in range(3)]
 
     def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
         if bitstream.size == 0:
@@ -93,6 +122,19 @@ class PSK8(Modulator):
         bits[:, 1] = (indices >> 1) & 1
         bits[:, 2] = indices & 1
         return bits
+
+    def symbols2llrs(self, symbols: np.ndarray) -> np.ndarray:
+        # max-log MAP: LLR(b) = min_{s∈C1} |r-s|² − min_{s∈C0} |r-s|²
+        # (positive ⇒ bit 0 closer ⇒ bit=0 more likely).
+        if symbols.size == 0:
+            return np.empty((0, 3), dtype=np.float32)
+        r = symbols.astype(np.complex64).reshape(-1, 1)
+        out = np.empty((r.shape[0], 3), dtype=np.float32)
+        for b in range(3):
+            d0 = np.abs(r - self._llr_c0[b][np.newaxis, :]) ** 2
+            d1 = np.abs(r - self._llr_c1[b][np.newaxis, :]) ** 2
+            out[:, b] = (d1.min(axis=1) - d0.min(axis=1)).astype(np.float32)
+        return out
 """
 
 LUT_SIZE = 128  # 128x128 grid for moderate accuracy

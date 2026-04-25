@@ -1,7 +1,10 @@
 """LDPC encoding/decoding using IEEE 802.11 base matrices."""
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 try:
     import numba
@@ -17,6 +20,16 @@ except ImportError:
 import numpy as np
 from scipy import sparse
 
+try:
+    from modules.ldpc import ldpc_ext as _ext
+    logger.info("Loaded ldpc_ext pybind11 C++ extension.")
+except ImportError:
+    _ext = None
+    logger.warning(
+        "ldpc_ext not found — falling back to pure-Python implementation. "
+        "Build it with: uv run python setup.py build_ext --inplace"
+    )
+
 # Minimum number of edges connected to a check node for meaningful BP update
 MIN_CHECK_DEGREE = 2
 
@@ -27,24 +40,6 @@ from .channel_coding import CodeRates
 # Source: IEEE Std 802.11-2020, Annex F, Tables F-1 through F-3
 
 # n=648, Z=27
-_N648_R12 = np.array(
-    [
-        [0, -1, -1, -1, 0, 0, -1, -1, 0, -1, -1, 0, 1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
-        [22, 0, -1, -1, 17, -1, 0, 0, 12, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1],
-        [6, -1, 0, -1, 10, -1, -1, -1, 24, -1, 0, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1],
-        [2, -1, -1, 0, 20, -1, -1, -1, 25, 0, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1],
-        [23, -1, -1, -1, 3, -1, -1, -1, 0, -1, 9, 11, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1],
-        [24, -1, 23, 1, 17, -1, 3, -1, 10, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1],
-        [25, -1, -1, -1, 8, -1, -1, -1, 7, 18, -1, -1, 0, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1],
-        [13, 24, -1, -1, 0, -1, 8, -1, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1],
-        [7, 20, -1, 16, 22, 10, -1, -1, 23, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1],
-        [11, -1, -1, -1, 19, -1, -1, -1, 13, -1, 3, 17, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1],
-        [25, -1, 8, -1, 23, 18, -1, 14, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0],
-        [3, -1, -1, -1, 16, -1, -1, 2, 25, 5, -1, -1, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0],
-    ],
-    dtype=int,
-)
-
 _N648_R23 = np.array(
     [
         [25, 26, 14, -1, 20, -1, 2, -1, 4, -1, -1, 8, -1, 16, -1, 18, 1, 0, -1, -1, -1, -1, -1, -1],
@@ -82,24 +77,6 @@ _N648_R56 = np.array(
 )
 
 # n=1296, Z=54
-_N1296_R12 = np.array(
-    [
-        [40, -1, -1, -1, 22, -1, 49, 23, 43, -1, -1, -1, 1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
-        [50, 1, -1, -1, 48, 35, -1, -1, 13, -1, 30, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1],
-        [39, 50, -1, -1, 4, -1, 2, -1, -1, -1, -1, 49, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1],
-        [33, -1, -1, 38, 37, -1, -1, 4, 1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1],
-        [45, -1, -1, -1, 0, 22, -1, -1, 20, 42, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1],
-        [51, -1, 48, 35, -1, -1, -1, 44, -1, 18, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1],
-        [47, 11, -1, -1, -1, 17, -1, -1, 51, -1, -1, -1, 0, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1],
-        [5, -1, 25, -1, 6, -1, 45, -1, 13, 40, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1],
-        [33, -1, -1, 34, 24, -1, -1, -1, 23, -1, -1, 46, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1],
-        [1, -1, 27, -1, 1, -1, -1, -1, 38, -1, 44, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1],
-        [-1, 18, -1, -1, 23, -1, -1, 8, 0, 35, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0],
-        [49, -1, 17, -1, 30, -1, -1, -1, 34, -1, 19, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0],
-    ],
-    dtype=int,
-)
-
 _N1296_R23 = np.array(
     [
         [39, 31, 22, 43, -1, 40, 4, -1, 11, -1, -1, 50, -1, -1, -1, 6, 1, 0, -1, -1, -1, -1, -1, -1],
@@ -137,24 +114,6 @@ _N1296_R56 = np.array(
 )
 
 # n=1944, Z=81
-_N1944_R12 = np.array(
-    [
-        [57, -1, -1, -1, 50, -1, 11, -1, 50, -1, 79, -1, 1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
-        [3, -1, 28, -1, 0, -1, -1, -1, 55, 7, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1],
-        [30, -1, -1, -1, 24, 37, -1, -1, 56, 14, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1],
-        [62, 53, -1, -1, 53, -1, -1, 3, 35, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1],
-        [40, -1, -1, 20, 66, -1, -1, 22, 28, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1],
-        [0, -1, -1, -1, 8, -1, 42, -1, 50, -1, -1, 8, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1, -1],
-        [69, 79, 79, -1, -1, 56, -1, 52, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1, -1],
-        [65, -1, -1, -1, 38, 57, -1, -1, 72, -1, 27, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1, -1],
-        [64, -1, -1, -1, 14, 52, -1, -1, 30, -1, -1, 32, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1, -1],
-        [-1, 45, -1, 70, 0, -1, -1, -1, 77, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, -1],
-        [2, 56, -1, 57, 35, -1, -1, -1, -1, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0],
-        [24, -1, 61, -1, 60, -1, -1, 27, 51, -1, -1, 16, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0],
-    ],
-    dtype=int,
-)
-
 _N1944_R23 = np.array(
     [
         [61, 75, 4, 63, 56, -1, -1, -1, -1, -1, -1, 8, -1, 2, 17, 25, 1, 0, -1, -1, -1, -1, -1, -1],
@@ -196,19 +155,16 @@ def get_ldpc_base_matrix(code_rate: CodeRates, n: int) -> np.ndarray:
     """Return the base matrix for the given code rate and block length."""
     matrices = {
         648: {
-            CodeRates.HALF_RATE: _N648_R12,
             CodeRates.TWO_THIRDS_RATE: _N648_R23,
             CodeRates.THREE_QUARTER_RATE: _N648_R34,
             CodeRates.FIVE_SIXTH_RATE: _N648_R56,
         },
         1296: {
-            CodeRates.HALF_RATE: _N1296_R12,
             CodeRates.TWO_THIRDS_RATE: _N1296_R23,
             CodeRates.THREE_QUARTER_RATE: _N1296_R34,
             CodeRates.FIVE_SIXTH_RATE: _N1296_R56,
         },
         1944: {
-            CodeRates.HALF_RATE: _N1944_R12,
             CodeRates.TWO_THIRDS_RATE: _N1944_R23,
             CodeRates.THREE_QUARTER_RATE: _N1944_R34,
             CodeRates.FIVE_SIXTH_RATE: _N1944_R56,
@@ -262,6 +218,8 @@ class LDPCConfig:
 _h_cache: dict[LDPCConfig, np.ndarray] = {}
 _encoding_cache: dict[LDPCConfig, tuple[np.ndarray, np.ndarray]] = {}
 _decode_cache: dict[LDPCConfig, tuple[sparse.csr_matrix, int, int, np.ndarray, np.ndarray, np.ndarray]] = {}
+# Bit-packed generator rows for the C++ encoder: shape (k, ceil(n/64)), uint64.
+_packed_g_cache: dict[LDPCConfig, np.ndarray] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +246,7 @@ def deinterleave(bits: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
-def ldpc_get_supported_payload_lengths(code_rate: CodeRates = CodeRates.HALF_RATE) -> np.ndarray:
+def ldpc_get_supported_payload_lengths(code_rate: CodeRates = CodeRates.FIVE_SIXTH_RATE) -> np.ndarray:
     """Return supported message lengths (k) for LDPC with the given code rate."""
     valid_n = [648, 1296, 1944]
     num, denom = code_rate.rate_fraction
@@ -307,6 +265,25 @@ def ldpc_clear_cache() -> None:
     _h_cache.clear()
     _encoding_cache.clear()
     _decode_cache.clear()
+    _packed_g_cache.clear()
+
+
+def _get_packed_g(config: LDPCConfig) -> np.ndarray:
+    """Pack G rows into uint64 words (LSB-first) for the C++ encoder."""
+    if config in _packed_g_cache:
+        return _packed_g_cache[config]
+    g_mat, _ = _get_encoding_structures(config)
+    k, n = g_mat.shape
+    n_words = (n + 63) // 64
+    packed = np.zeros((k, n_words), dtype=np.uint64)
+    g_bits = (g_mat & 1).astype(np.uint8)
+    for i in range(k):
+        bits = g_bits[i]
+        for j in range(n):
+            if bits[j]:
+                packed[i, j >> 6] |= np.uint64(1) << np.uint64(j & 63)
+    _packed_g_cache[config] = packed
+    return packed
 
 
 def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray:
@@ -315,6 +292,10 @@ def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray:
     if len(message) != k:
         msg = f"Message length {len(message)} != expected {k}"
         raise ValueError(msg)
+
+    if _ext is not None:
+        msg_u8 = np.ascontiguousarray(message, dtype=np.uint8)
+        return _ext.encode(msg_u8, _get_packed_g(config), config.n).astype(int)
 
     g_mat, _ = _get_encoding_structures(config)
     codeword = message @ g_mat % 2
@@ -382,6 +363,14 @@ def ldpc_decode(
         raise ValueError(msg)
 
     (h_sparse, _num_checks, _num_vars, edge_var, check_order, check_bounds) = _get_decode_structures(config)
+
+    if _ext is not None:
+        llr_f32 = np.ascontiguousarray(llr_channel, dtype=np.float32)
+        return _ext.decode(
+            llr_f32, edge_var.astype(np.int64, copy=False),
+            check_order, check_bounds,
+            int(k), int(max_iterations), float(alpha),
+        ).astype(int)
 
     llr = llr_channel.astype(np.float32)
     num_edges = len(edge_var)

@@ -2,20 +2,22 @@ from dataclasses import dataclass
 from enum import Enum
 
 class CodeRates(Enum):
-    """Supported channel coding rates."""
+    """Supported channel coding rates.
+
+    Enum values are chosen so each fits in 2 bits, allowing the rate to be
+    serialised in the frame header `coding_rate` field directly.
+    """
 
     NONE = 0
-    HALF_RATE = 1
-    TWO_THIRDS_RATE = 2
-    THREE_QUARTER_RATE = 3
-    FIVE_SIXTH_RATE = 4
+    TWO_THIRDS_RATE = 1
+    THREE_QUARTER_RATE = 2
+    FIVE_SIXTH_RATE = 3
 
     @property
     def rate_fraction(self) -> tuple[int, int]:
         """Return the (numerator, denominator) tuple for this code rate."""
         fractions = {
             CodeRates.NONE: (1, 1),
-            CodeRates.HALF_RATE: (1, 2),
             CodeRates.TWO_THIRDS_RATE: (2, 3),
             CodeRates.THREE_QUARTER_RATE: (3, 4),
             CodeRates.FIVE_SIXTH_RATE: (5, 6),

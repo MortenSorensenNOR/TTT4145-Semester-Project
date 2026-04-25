@@ -41,6 +41,8 @@ class ModulationSchemes(Enum):
     PSK8 = 2
 
 
+DEFAULT_CODING_RATE = 3  # CodeRates.FIVE_SIXTH_RATE.value — kept as int to avoid an import cycle
+
 @dataclass
 class FrameHeader:
     """Frame header with metadata."""
@@ -50,6 +52,7 @@ class FrameHeader:
     frame_type: int
     mod_scheme: ModulationSchemes
     sequence_number: int
+    coding_rate: int = DEFAULT_CODING_RATE  # 2-bit field carrying CodeRates.value
     crc: int = field(default=0, compare=False)
     crc_passed: bool = True
 
@@ -63,6 +66,7 @@ class FrameHeader:
             frame_type=ext_hdr.frame_type,
             mod_scheme=ModulationSchemes(int(ext_hdr.mod_scheme)),
             sequence_number=ext_hdr.sequence_number,
+            coding_rate=ext_hdr.coding_rate,
             crc=ext_hdr.crc,
             crc_passed=ext_hdr.crc_passed,
         )
@@ -76,6 +80,7 @@ class FrameHeader:
             frame_type=self.frame_type,
             mod_scheme=_ext.ModulationSchemes(self.mod_scheme.value),
             sequence_number=self.sequence_number,
+            coding_rate=self.coding_rate,
             crc=self.crc,
             crc_passed=self.crc_passed,
         )
@@ -90,6 +95,7 @@ class FrameHeaderConfig:
     frame_type_bits: int = 2
     mod_scheme_bits: int = 2
     sequence_number_bits: int = 4
+    coding_rate_bits: int = 2
     crc_bits: int = 8
     header_total_size: int = field(init=False)
 
@@ -104,6 +110,7 @@ class FrameHeaderConfig:
             + self.frame_type_bits
             + self.mod_scheme_bits
             + self.sequence_number_bits
+            + self.coding_rate_bits
             + self.crc_bits
         )
 
@@ -116,6 +123,7 @@ class FrameHeaderConfig:
         cfg.frame_type_bits       = self.frame_type_bits
         cfg.mod_scheme_bits       = self.mod_scheme_bits
         cfg.sequence_number_bits  = self.sequence_number_bits
+        cfg.coding_rate_bits      = self.coding_rate_bits
         cfg.crc_bits              = self.crc_bits
         cfg.use_golay             = self.use_golay
         return cfg
@@ -139,6 +147,7 @@ class FrameHeaderConstructor:
         self.frame_type_bits      = config.frame_type_bits
         self.mod_scheme_bits      = config.mod_scheme_bits
         self.sequence_number_bits = config.sequence_number_bits
+        self.coding_rate_bits     = config.coding_rate_bits
         self.crc_bits             = config.crc_bits
 
         raw_length = config.header_total_size
@@ -166,6 +175,7 @@ class FrameHeaderConstructor:
         frame_type_bits = int_to_bits(header.frame_type, self.frame_type_bits)
         mod_scheme_bits = int_to_bits(header.mod_scheme.value, self.mod_scheme_bits)
         sequence_number_bits = int_to_bits(header.sequence_number, self.sequence_number_bits)
+        coding_rate_bits = int_to_bits(header.coding_rate, self.coding_rate_bits)
 
         data_bits = (
             length_bits
@@ -174,6 +184,7 @@ class FrameHeaderConstructor:
             + frame_type_bits
             + mod_scheme_bits
             + sequence_number_bits
+            + coding_rate_bits
         )
         crc = self._crc_calc("".join(str(b) for b in data_bits))
         data_bits += int_to_bits(crc, self.crc_bits)
@@ -194,6 +205,7 @@ class FrameHeaderConstructor:
             self.frame_type_bits,
             self.mod_scheme_bits,
             self.sequence_number_bits,
+            self.coding_rate_bits,
         ]
         fields: list[list[int]] = []
         for width in field_widths:
@@ -201,7 +213,8 @@ class FrameHeaderConstructor:
             fields.append(bits.tolist() if isinstance(bits, np.ndarray) else bits)
             offset += width
 
-        (length_bits, src_bits, dst_bits, frame_type_bits, mod_scheme_bits, sequence_number_bits) = fields
+        (length_bits, src_bits, dst_bits, frame_type_bits,
+         mod_scheme_bits, sequence_number_bits, coding_rate_bits) = fields
 
         crc_field = header[offset : offset + self.crc_bits]
         crc_bits = crc_field.tolist() if isinstance(crc_field, np.ndarray) else crc_field
@@ -212,6 +225,7 @@ class FrameHeaderConstructor:
         frame_type = _bits_to_int(frame_type_bits)
         mod_scheme = ModulationSchemes(_bits_to_int(mod_scheme_bits))
         sequence_number = _bits_to_int(sequence_number_bits)
+        coding_rate = _bits_to_int(coding_rate_bits)
         crc = _bits_to_int(crc_bits)
 
         data_str = "".join(
@@ -223,13 +237,14 @@ class FrameHeaderConstructor:
                 + frame_type_bits
                 + mod_scheme_bits
                 + sequence_number_bits
+                + coding_rate_bits
             )
         )
         expected_crc_bits = int_to_bits(self._crc_calc(data_str), self.crc_bits)
 
         return FrameHeader(
             length, src, dst, frame_type, mod_scheme, sequence_number,
-            crc, crc_passed=(crc_bits == expected_crc_bits),
+            coding_rate, crc, crc_passed=(crc_bits == expected_crc_bits),
         )
 
 

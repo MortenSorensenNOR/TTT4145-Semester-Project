@@ -9,24 +9,46 @@ from modules.frame_constructor.frame_constructor import *
 from modules.golay import *
 from modules.frame_sync.frame_sync import *
 from modules.costas_loop.costas import *
-# from modules.ldpc.ldpc import *
+from modules.ldpc.ldpc import LDPCConfig, ldpc_encode, ldpc_decode
 from modules.ldpc.channel_coding import *
 from modules.gardner_ted.gardner import *
 
 from utils.plotting import *
+
+
+# LDPC block sizes per code rate. We fix n=1944 (best coding gain in the
+# 802.11 set, divides cleanly by 1/2/3 bits-per-symbol). k follows from rate.
+_LDPC_BLOCK_PARAMS: dict[CodeRates, tuple[int, int]] = {
+    CodeRates.TWO_THIRDS_RATE:   (1296, 1944),
+    CodeRates.THREE_QUARTER_RATE:(1458, 1944),
+    CodeRates.FIVE_SIXTH_RATE:   (1620, 1944),
+}
+
+
+def _on_air_payload_n_bits(pre_ldpc_n_bits: int, code_rate: CodeRates) -> tuple[int, int, int]:
+    """For a given pre-LDPC payload length, return (n_codewords, k, n).
+
+    For NONE: returns (0, 0, pre_ldpc_n_bits) — caller treats this as passthrough.
+    """
+    if code_rate == CodeRates.NONE:
+        return (0, 0, pre_ldpc_n_bits)
+    k, n = _LDPC_BLOCK_PARAMS[code_rate]
+    n_cw = (pre_ldpc_n_bits + k - 1) // k
+    return (n_cw, k, n_cw * n)
 
 import logging
 logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineConfig:
-    SAMPLE_RATE: int = 4_000_000
+    SAMPLE_RATE: int = 6_000_000
     CENTER_FREQ: int = 2_410_000_000
     SPS: int = 4
     SPAN: int = 8
     RRC_ALPHA: np.float32 = np.float32(0.25)
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
-    CODING_RATE: CodeRates = CodeRates.NONE
+    CODING_RATE: CodeRates = CodeRates.FIVE_SIXTH_RATE
+    LDPC_MAX_ITER: int = 20
     PRE_HEADER_GUARD_BITS: int = 8
     GUARD_SYMS_LENGTH: int = 16
 
@@ -38,7 +60,6 @@ class PipelineConfig:
     pilots: bool = False
     costas_loop: bool = True
     gardner_ted: bool = False
-    channnel_coding: bool = False
     interleaving: bool = False
     cfo_correction: bool = True
     use_golay: bool = False
@@ -101,7 +122,29 @@ class TXPipeline:
         else:
             self.pre_header_guard_syms = np.array([])
 
+    def _maybe_ldpc_encode(self, payload_bits: np.ndarray, code_rate: CodeRates) -> np.ndarray:
+        """Pad payload to a multiple of k and emit n_cw concatenated codewords."""
+        flat = payload_bits.ravel().astype(np.uint8)
+        if code_rate == CodeRates.NONE:
+            return flat
+        n_cw, k, n_air = _on_air_payload_n_bits(len(flat), code_rate)
+        n = n_air // n_cw
+        pad = n_cw * k - len(flat)
+        msg = np.concatenate([flat, np.zeros(pad, dtype=np.uint8)]) if pad else flat
+        cfg = LDPCConfig(k=k, code_rate=code_rate)
+        coded = np.empty(n_cw * n, dtype=np.uint8)
+        for i in range(n_cw):
+            coded[i*n:(i+1)*n] = ldpc_encode(msg[i*k:(i+1)*k], cfg).astype(np.uint8)
+        return coded
+
     def transmit(self, packet: Packet) -> np.ndarray:
+        # Empty-payload control frames (e.g. ARQ ACKs) skip LDPC: there's
+        # nothing but the 16-bit CRC to protect, so the codeword overhead
+        # is wasteful — keep them uncoded by forcing CodeRates.NONE.
+        coding_rate = (
+            self.config.CODING_RATE if packet.length > 0 else CodeRates.NONE
+        )
+
         # construct bits
         header = FrameHeader(
             length=packet.length,
@@ -110,12 +153,16 @@ class TXPipeline:
             frame_type=packet.type,
             mod_scheme=self.config.MOD_SCHEME,
             sequence_number=packet.seq_num,
+            coding_rate=coding_rate.value,
         )
         (header_bits, payload_bits) = self.frame_constructor.encode(header, packet.payload)
 
+        # LDPC encode payload (data + CRC + pad-to-12) into n-bit codewords.
+        payload_for_mod = self._maybe_ldpc_encode(payload_bits, coding_rate)
+
         # modulate
         header_syms = self.bpsk.bits2symbols(header_bits)
-        payload_syms = self.payload_modulator.bits2symbols(payload_bits.reshape(-1, header.mod_scheme.value+1))#.reshape(-1, header.mod_scheme.value+1))
+        payload_syms = self.payload_modulator.bits2symbols(payload_for_mod.reshape(-1, header.mod_scheme.value+1))
 
         # construct signal
         tx_syms = np.concatenate([self.guard_syms,self.sync_syms, self.pre_header_guard_syms, header_syms, payload_syms,self.guard_syms])
@@ -328,12 +375,19 @@ class RXPipeline:
         return header, header_end, np.float32(phase_est[-1] % (2 * np.pi)), np.float32(timing_est[-1])
 
     def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32, current_timing_estimate: np.float32) -> tuple[np.ndarray, np.ndarray]:
-        payload_end = payload_start + ceil((header.length*8 + self.frame_constructor.PAYLOAD_CRC_BITS)/(header.mod_scheme.value+1)) # header.mod_scheme.value+1 is same as bits per symbol of modulator
-        
+        bps = header.mod_scheme.value + 1
+        code_rate = CodeRates(header.coding_rate)
+
+        # Symbol count = on-air bit count / bits-per-symbol.  With LDPC the
+        # on-air count is (codewords × n) instead of just (data + CRC).
+        pre_ldpc_n_bits = header.length * 8 + self.frame_constructor.PAYLOAD_CRC_BITS
+        _n_cw, _k, n_air_bits = _on_air_payload_n_bits(pre_ldpc_n_bits, code_rate)
+        payload_end = payload_start + ceil(n_air_bits / bps)
+
         if payload_end*self.config.SPS > len(buffer):
             msg = "payload end is outside of buffer"
             raise IndexError(msg)
-        
+
         if self.config.gardner_ted:
             guard = self.config.SPS
             rx_syms, timing_est = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, header.mod_scheme, self.config.SPS, current_timing_offset=current_timing_estimate)
@@ -345,17 +399,35 @@ class RXPipeline:
         else:
             rx_syms = rx_syms[:payload_end-payload_start]*np.exp(-1j*current_phase_estimate)
 
-        # demodulate
-        match (header.mod_scheme):
-            case ModulationSchemes.BPSK:
-                payload_bits_encoded = self.bpsk.symbols2bits(rx_syms)
-            case ModulationSchemes.QPSK:
-                payload_bits_encoded = self.qpsk.symbols2bits(rx_syms)
-            case ModulationSchemes.PSK8:
-                payload_bits_encoded = self.psk8.symbols2bits(rx_syms)
+        match header.mod_scheme:
+            case ModulationSchemes.BPSK: mod = self.bpsk
+            case ModulationSchemes.QPSK: mod = self.qpsk
+            case ModulationSchemes.PSK8: mod = self.psk8
         logger.debug(f"Modulation scheme: {header.mod_scheme}")
 
-        payload_bits = self.frame_constructor.decode_payload(header, payload_bits_encoded.ravel())
+        if code_rate == CodeRates.NONE:
+            # Hard-decision path (matches pre-LDPC behaviour).
+            payload_bits_encoded = mod.symbols2bits(rx_syms).ravel()
+            payload_bits = self.frame_constructor.decode_payload(header, payload_bits_encoded)
+            return payload_bits.reshape(-1, 1), rx_syms
+
+        # Soft demap → LDPC decode → strip LDPC pad → frame_constructor.decode_payload.
+        llrs_per_sym = mod.symbols2llrs(rx_syms)              # (n_syms, bps)
+        llrs = llrs_per_sym.ravel()[:n_air_bits]              # (n_air_bits,)
+        n_cw = _n_cw
+        k = _k
+        n = n_air_bits // n_cw
+        cfg = LDPCConfig(k=k, code_rate=code_rate)
+        decoded = np.empty(n_cw * k, dtype=np.uint8)
+        for i in range(n_cw):
+            decoded[i*k:(i+1)*k] = ldpc_decode(
+                llrs[i*n:(i+1)*n], cfg,
+                max_iterations=self.config.LDPC_MAX_ITER,
+            ).astype(np.uint8)
+
+        # Trim the zero-pad we appended on TX to align with LDPC k.
+        payload_bits_pre_ldpc = decoded[:pre_ldpc_n_bits]
+        payload_bits = self.frame_constructor.decode_payload(header, payload_bits_pre_ldpc)
         return payload_bits.reshape(-1, 1), rx_syms
 
 if __name__ == "__main__":

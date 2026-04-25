@@ -57,6 +57,7 @@ _EXTENSIONS = [
     ("modules.frame_sync.frame_sync_ext", "modules/frame_sync/frame_sync_ext.cpp"),
     ("modules.frame_constructor.frame_constructor_ext", "modules/frame_constructor/frame_constructor_pybind11.cpp"),
     ("modules.pulse_shaping.pulse_shaping_ext", "modules/pulse_shaping/pulse_shaping_ext.cpp"),
+    ("modules.ldpc.ldpc_ext", "modules/ldpc/ldpc_ext.cpp"),
 ]
 
 setup(
