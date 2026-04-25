@@ -53,7 +53,7 @@ class PipelineConfig:
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.008) # Bn=0.008 empirically optimal for PSK8 over coax
+    COSTAS_CONFIG = CostasConfig(0.02) # Bn=0.008 empirically optimal for PSK8 over coax
     # NDA Gardner (Rice 2009) — see modules/gardner_ted/gardner.py.
     # BnTs must stay narrow: with LDPC the systematic-bits region holds 1500+
     # consecutive constant-symbol BPSK pad, which gives the NDA TED nothing to
