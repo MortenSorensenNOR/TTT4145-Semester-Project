@@ -54,6 +54,8 @@ from typing import Callable
 
 import numpy as np
 
+from modules.frame_constructor.frame_constructor import ModulationSchemes
+from modules.ldpc.channel_coding import CodeRates
 from modules.pipeline import Packet, PacketType
 
 logger = logging.getLogger(__name__)
@@ -312,6 +314,8 @@ class ARQNode:
             seq_num=seq,
             length=len(payload),
             payload=bits,
+            mod_scheme=ModulationSchemes.BPSK,
+            coding_rate=CodeRates.NONE,
             valid=True,
         )
         self.stats.data_tx += 1
@@ -329,6 +333,8 @@ class ARQNode:
             seq_num=cumul,
             length=2,
             payload=bits,
+            mod_scheme=ModulationSchemes.BPSK,
+            coding_rate=CodeRates.NONE,
             valid=True,
         )
         self.stats.ack_tx += 1

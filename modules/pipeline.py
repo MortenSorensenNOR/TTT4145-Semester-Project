@@ -102,6 +102,12 @@ class Packet:
     length: int = -1
     payload: np.ndarray = field(default_factory=lambda: np.ndarray([]))
 
+    # Per-packet overrides for the TX path. ``None`` falls back to the pipeline
+    # config defaults. ARQ sets these to BPSK + NONE so its control frames are
+    # robust regardless of how the user pipeline is configured.
+    mod_scheme: ModulationSchemes | None = None
+    coding_rate: CodeRates | None = None
+
     valid: bool = False
     err_reason: str = ""
     sample_start: int = -1   # payload_start within the buffer passed to receive()
@@ -113,14 +119,17 @@ class TXPipeline:
         self.frame_constructor = FrameConstructor()
         self.frame_constructor.header_config.use_golay = config.use_golay
 
+        # All three modulators always live on the TX pipeline so packets can
+        # override the default per-frame (e.g. ARQ pins itself to BPSK).
         self.bpsk = BPSK()
-        match (self.config.MOD_SCHEME):
-            case ModulationSchemes.BPSK:
-                self.payload_modulator = BPSK()
-            case ModulationSchemes.QPSK:
-                self.payload_modulator = QPSK()
-            case ModulationSchemes.PSK8:
-                self.payload_modulator = PSK8()
+        self.qpsk = QPSK()
+        self.psk8 = PSK8()
+        self._modulators = {
+            ModulationSchemes.BPSK: self.bpsk,
+            ModulationSchemes.QPSK: self.qpsk,
+            ModulationSchemes.PSK8: self.psk8,
+        }
+        self.payload_modulator = self._modulators[self.config.MOD_SCHEME]
 
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
@@ -151,12 +160,14 @@ class TXPipeline:
         return coded
 
     def transmit(self, packet: Packet) -> np.ndarray:
-        # Empty-payload control frames (e.g. ARQ ACKs) skip LDPC: there's
-        # nothing but the 16-bit CRC to protect, so the codeword overhead
-        # is wasteful — keep them uncoded by forcing CodeRates.NONE.
-        coding_rate = (
-            self.config.CODING_RATE if packet.length > 0 else CodeRates.NONE
-        )
+        # Per-packet overrides win, otherwise fall back to config. Empty-payload
+        # control frames default to CodeRates.NONE since there's nothing but the
+        # 16-bit CRC to protect — the codeword overhead would be wasteful.
+        mod_scheme = packet.mod_scheme if packet.mod_scheme is not None else self.config.MOD_SCHEME
+        if packet.coding_rate is not None:
+            coding_rate = packet.coding_rate
+        else:
+            coding_rate = self.config.CODING_RATE if packet.length > 0 else CodeRates.NONE
 
         # construct bits
         header = FrameHeader(
@@ -164,7 +175,7 @@ class TXPipeline:
             src=packet.src_mac,
             dst=packet.dst_mac,
             frame_type=packet.type,
-            mod_scheme=self.config.MOD_SCHEME,
+            mod_scheme=mod_scheme,
             sequence_number=packet.seq_num,
             coding_rate=coding_rate.value,
         )
@@ -174,8 +185,9 @@ class TXPipeline:
         payload_for_mod = self._maybe_ldpc_encode(payload_bits, coding_rate)
 
         # modulate
+        payload_modulator = self._modulators[mod_scheme]
         header_syms = self.bpsk.bits2symbols(header_bits)
-        payload_syms = self.payload_modulator.bits2symbols(payload_for_mod.reshape(-1, header.mod_scheme.value+1))
+        payload_syms = payload_modulator.bits2symbols(payload_for_mod.reshape(-1, mod_scheme.value+1))
 
         # construct signal
         tx_syms = np.concatenate([self.guard_syms,self.sync_syms, self.pre_header_guard_syms, header_syms, payload_syms,self.guard_syms])
