@@ -61,7 +61,6 @@ from modules.pipeline import Packet, PipelineConfig, RXPipeline, TXPipeline
 from pluto.cfo_config import CFO_CONFIG_PATH, load as load_cfo_calibration
 from pluto.config import (
     DAC_SCALE,
-    DEFAULT_TX_GAIN,
     FREQ_A_TO_B,
     FREQ_B_TO_A,
     MAX_PACKET_SIZE_BYTES,
@@ -231,8 +230,8 @@ def main() -> None:
     parser.add_argument("--tun",        default="pluto0",   help="TUN interface name")
     parser.add_argument("--mtu",        type=int, default=MAX_PACKET_SIZE_BYTES,
                         help="TUN MTU in bytes")
-    parser.add_argument("--tx-gain",    type=float, default=DEFAULT_TX_GAIN,
-                        help="TX hardware gain in dB")
+    parser.add_argument("--tx-gain",    type=float, default=-20,
+                        help="TX hardware gain in dB (default: -20)")
     parser.add_argument("--cfo-offset", type=int, default=None,
                         help="Manual override for the RX-LO CFO correction in "
                              "Hz. Default: value from pluto/cfo_calibration.json "
@@ -256,11 +255,11 @@ def main() -> None:
     parser.add_argument("--rx-queue-depth", type=int, default=2,
                         help="Raw-buffer prefetch depth between the SDR DMA and "
                              "the RX DSP pipeline. (default: 2)")
-    parser.add_argument("--window",     type=int, default=3,
+    parser.add_argument("--window",     type=int, default=15,
                         help="ARQ window size (< SEQ_SPACE/2 = 16). Smaller = "
                              "cleaner ping latency and less retransmit "
                              "cascade; larger = better iperf throughput on a "
-                             "healthy link. (default: 3)")
+                             "healthy link. (default: 15)")
     parser.add_argument("--retransmit-timeout", type=float, default=0.5,
                         help="ARQ retransmit timeout in seconds. Should sit "
                              "~2× above steady-state RTT: too short → false "

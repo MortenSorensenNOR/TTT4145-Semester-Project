@@ -268,12 +268,13 @@ class RXPipeline:
                 # payloads; with fixed lengths every later detection would
                 # also cut off, so the break is a no-op.
                 n_decode_errors += 1
-                logger.info(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
+                logger.debug(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
                 break
             except Exception as e:
                 max_detection_sample = max(max_detection_sample, abs_payload_start)
                 n_decode_errors += 1
-                logger.info(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
+                logger.debug(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
+            logger.debug(f"DECODE SUCCESS (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f})")
 
         if n_decode_errors:
             logger.info(f"{n_decode_errors}/{len(detections)} detections failed decode")
@@ -334,8 +335,10 @@ class RXPipeline:
 
         header, payload_start, current_phase_estimate, current_timing_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
 
-        if header.crc_passed:
-            logger.debug(f"CRC Passed on header with payload length: {header.length} bytes")
+        # if header.crc_passed:
+        #     logger.debug(f"HEADER: crc: {header.crc_passed}, header: length {header.length} bytes, coding rate: {header.coding_rate}, type: {header.frame_type}")
+
+        logger.info(f"HEADER: crc: {header.crc_passed}, header: length {header.length} bytes, coding rate: {header.coding_rate}, type: {header.frame_type}")
 
         # length=0 is legitimate for control frames (e.g. ARQ ACKs). Skip
         # payload_decode for them — there is nothing but the 16-bit CRC to
@@ -345,6 +348,7 @@ class RXPipeline:
             rx_symbols = np.empty(0, dtype=np.complex64)
         else:
             payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate, current_timing_estimate)
+
         return Packet(
             src_mac=header.src,
             dst_mac=header.dst,
