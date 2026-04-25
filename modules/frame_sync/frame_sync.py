@@ -49,7 +49,7 @@ class SynchronizerConfig:
     zc_root_long: int = 13
 
     short_preamble_nsym: int = 43   # prime; ≥43 for L > RRC filter length at full rate
-    short_preamble_nreps: int = 4   # 4 reps for Minn/Park [+,+,-,-] sign pattern
+    short_preamble_nreps: int = 2   # 2 reps for Minn/Park [+,-] sign pattern (4 also supported with [+,+,-,-])
 
     long_preamble_nsym: int = 89    # prime; longer ZC → higher fine-timing peak-to-mean
     long_margin_nsym: int = 20     # ≥ GUARD_SYMS_LENGTH/2 + RRC_SPAN to cover early d_hat
@@ -65,12 +65,22 @@ class SynchronizerConfig:
     # ratios > 4.0; LO leakage and colored noise sit at 1.5–2.3.  Set to 0.0
     # to disable (reverts to coarse-only gating).
     fine_peak_ratio_min: np.float32 = np.float32(3.0)
-    # Minn/Park sign pattern [+,+,-,-] on short repetitions.
-    # Adds a CFO-independent sign-flip check after Schmidl-Cox detection to
-    # suppress LO-leakage false positives: for any tone r[n]=A·e^{jω₀n},
-    # P(d+L)·conj(P(d)) is always positive-real; for the [+,+,-,-] preamble
-    # it is always negative-real regardless of CFO.  Requires nreps==4.
+    # Minn/Park sign pattern on short repetitions.
+    # nreps==4: pattern [+,+,-,-]; LO check is the CFO-independent
+    #   Re(P(d+L)·conj(P(d))) < 0 (any pure tone yields positive-real).
+    # nreps==2: pattern [+,-]; only one P window exists, so the cross-product
+    #   check no longer applies.  The sign pattern still flips P(d₀) by π
+    #   (handled in CFO calc); LO rejection is left to the fine-timing
+    #   peak-ratio gate downstream.
     minn_park: bool = True
+    # Single-stage detector NCC threshold (full_buffer_xcorr_sync).
+    # Normalized cross-correlation against the long ZC: bounded in [0,1], where
+    # a clean preamble yields ~0.99.  CFO smears the peak by sinc²(cfo·N/fs),
+    # so at ±5 kHz CFO (N=356, fs=4 MHz) the peak drops to ~0.49.  Payload
+    # sidelobes in dense back-to-back bursts sit at <0.1.  0.3 leaves margin
+    # for CFO smearing + AWGN while still rejecting sidelobes cleanly; raise
+    # for stricter rejection or lower if you need wider CFO acquisition.
+    single_stage_ncc_threshold: np.float32 = np.float32(0.3)
 
 
 @dataclass
@@ -112,18 +122,21 @@ def generate_zadoff_chu(u: int, n_zc: int) -> np.ndarray:
 def generate_preamble(config: SynchronizerConfig) -> np.ndarray:
     """Build the full preamble: repeated short ZC followed by long ZC.
 
-    When ``config.minn_park`` is True and ``short_preamble_nreps == 4``, the
-    four short repetitions carry a Minn/Park sign pattern [+1, +1, -1, -1].
-    This makes the Schmidl-Cox cross-product P(d+L)·conj(P(d)) negative-real
-    at the preamble start for any CFO, while any pure tone yields a positive-
-    real product — enabling LO-leakage rejection at the coarse-sync stage.
+    When ``config.minn_park`` is True the short repetitions carry a Minn/Park
+    sign pattern: [+1, -1] for nreps==2 or [+1, +1, -1, -1] for nreps==4.
+    Both patterns flip P(d₀) to negative-real at the preamble start (any CFO
+    cancels for nreps==4; for nreps==2 only |φ|<π/2 cancels), enabling
+    LO-leakage rejection at the coarse-sync stage.
     """
     zc_short = generate_zadoff_chu(config.zc_root_short, config.short_preamble_nsym)
     zc_long = generate_zadoff_chu(config.zc_root_long, config.long_preamble_nsym)
-    if config.minn_park and config.short_preamble_nreps == 4:
-        signs = np.array([+1.0, +1.0, -1.0, -1.0], dtype=np.complex64)
+    if config.minn_park and config.short_preamble_nreps in (2, 4):
+        if config.short_preamble_nreps == 2:
+            signs = np.array([+1.0, -1.0], dtype=np.complex64)
+        else:
+            signs = np.array([+1.0, +1.0, -1.0, -1.0], dtype=np.complex64)
         sign_pattern = np.repeat(signs, len(zc_short))
-        short_rep = np.tile(zc_short, 4) * sign_pattern
+        short_rep = (np.tile(zc_short, config.short_preamble_nreps) * sign_pattern).astype(np.complex64)
     else:
         short_rep = np.tile(zc_short, config.short_preamble_nreps)
     return np.concatenate([short_rep, zc_long])
@@ -283,16 +296,17 @@ def coarse_sync(
                 if r_d[before_pos] < r_d[next_cand] * energy_ratio_thr:
                     continue
 
-            # Minn/Park sign-flip check (CFO-independent).
+            # Minn/Park sign-flip check (nreps==4 only).
             #
-            # For preamble [+ZC, +ZC, -ZC, -ZC] with any CFO φ per lag:
+            # Pattern [+,+,-,-], any CFO φ per lag:
             #   P(d₀)   ≈ +L·e^{jφ}   (rep1→rep2, same sign)
             #   P(d₀+L) ≈ −L·e^{jφ}   (rep2→rep3, sign flip)
-            # ⇒  P(d₀+L)·conj(P(d₀)) ≈ −L²   (real-negative, φ cancels)
+            # ⇒ Re(P(d₀+L)·conj(P(d₀))) < 0 for any CFO; pure tone → positive.
             #
-            # For any pure tone or payload data triggering above threshold:
-            #   Re(P(d+L)·conj(P(d))) >= 0  → rejected
-            if cfg.minn_park:
+            # nreps==2 only has one P window (at d+L the second window straddles
+            # the long-ZC tail, so the product is small/random and would reject
+            # real preambles).  LO rejection is deferred to fine_peak_ratio_min.
+            if cfg.minn_park and cfg.short_preamble_nreps == 4:
                 mp_idx = min(cand + sample_cnt, len(p_d) - 1)
                 if np.real(p_d[mp_idx] * np.conj(p_d[cand])) >= 0:
                     continue
@@ -311,17 +325,151 @@ def coarse_sync(
     m_peaks = np.array(m_peaks_list)
 
     if cfg.minn_park:
-        # CFO: combine P(d) and P(d+L) constructively.
-        # P(d₀) − P(d₀+L) = +L·e^{jφ} − (−L·e^{jφ}) = 2L·e^{jφ}  → 2× stronger.
-        mp_idx    = np.minimum(d_hats + sample_cnt, len(p_d) - 1)
-        p_combined = p_d[d_hats] - p_d[mp_idx]
-        cfo_hats  = np.angle(p_combined) * fs / (2 * np.pi * sample_cnt)
+        if cfg.short_preamble_nreps == 2:
+            # P(d₀) ≈ −L·e^{jφ}: flip sign before extracting angle so the π
+            # offset from the [+,-] pattern doesn't bias the CFO estimate.
+            cfo_hats = np.angle(-p_d[d_hats]) * fs / (2 * np.pi * sample_cnt)
+        else:
+            # CFO: combine P(d) and P(d+L) constructively.
+            # P(d₀) − P(d₀+L) = +L·e^{jφ} − (−L·e^{jφ}) = 2L·e^{jφ}  → 2× stronger.
+            mp_idx    = np.minimum(d_hats + sample_cnt, len(p_d) - 1)
+            p_combined = p_d[d_hats] - p_d[mp_idx]
+            cfo_hats  = np.angle(p_combined) * fs / (2 * np.pi * sample_cnt)
     else:
         plateau_sum = np.add.reduceat(p_d[above], splits)
         plateau_cnt = np.diff(np.r_[splits, above.size])
         cfo_hats = np.angle(plateau_sum / plateau_cnt) * fs / (2 * np.pi * sample_cnt)
 
     return CoarseResult(d_hats, cfo_hats, m_peaks)
+
+
+def build_long_ref_rev(long_ref: np.ndarray) -> np.ndarray:
+    """Time-reversed conjugate of long_ref for full-buffer cross-correlation.
+
+    Used by ``full_buffer_xcorr_sync`` (single-stage detector). Cross-correlation
+    of x with long_ref equals convolution of x with conj(long_ref[::-1]).
+    """
+    return np.conj(long_ref[::-1]).astype(np.complex64)
+
+
+def full_buffer_xcorr_sync(
+    samples: np.ndarray,
+    long_ref: np.ndarray,
+    long_ref_rev: np.ndarray,
+    ncc_threshold: float,
+    fs: int,
+) -> tuple[FineResult, np.ndarray]:
+    """Single-stage detector: full-buffer normalized cross-correlation against the long ZC.
+
+    Skips Schmidl-Cox coarse sync entirely.  Computes the normalized
+    cross-correlation (NCC) of the receive buffer against the long-ZC reference:
+
+        NCC(k) = |sum_m s[k+m]·conj(ref[m])|² / (||s[k:k+N]||² · ||ref||²)
+
+    NCC is bounded in [0, 1] and is independent of buffer composition, so
+    multi-frame bursts don't dilute the metric the way a global mean does.
+    Picks peaks above ``ncc_threshold`` (clean preamble ≈ 0.99) and extracts
+    a CFO estimate per peak from a half-window split of the derotated preamble.
+
+    Use only when CFO is small enough that the long-ZC autocorrelation peak
+    stays sharp; rule of thumb |CFO|·len(long_ref)/fs well below 1 rad of
+    total rotation across the reference.
+
+    Returns ``(FineResult, cfo_hats)`` so the downstream pipeline path is
+    identical to the two-stage flow.  ``peak_ratios`` carries the NCC value
+    (in [0,1]); the pipeline's ``fine_peak_ratio_min`` gate is unrelated and
+    must be bypassed when single-stage is in use.
+    """
+    from scipy.signal import oaconvolve
+
+    if not np.iscomplexobj(samples):
+        msg = "samples must be complex"
+        raise TypeError(msg)
+
+    empty = (
+        FineResult(np.empty(0, np.intp), np.empty(0, np.float32), np.empty(0, np.float32)),
+        np.empty(0, np.float32),
+    )
+
+    n_ref = len(long_ref)
+    if len(samples) < n_ref:
+        return empty
+
+    z = oaconvolve(samples, long_ref_rev, mode="valid").astype(np.complex64)
+    n_z = len(z)
+    if n_z == 0:
+        return empty
+
+    z_mag2 = (z.real.astype(np.float64) ** 2 + z.imag.astype(np.float64) ** 2)
+
+    # Sliding window |s|² energy aligned with z indexing.
+    sig_pwr = (samples.real.astype(np.float64) ** 2 + samples.imag.astype(np.float64) ** 2)
+    csum = np.empty(len(sig_pwr) + 1, dtype=np.float64)
+    csum[0] = 0.0
+    np.cumsum(sig_pwr, out=csum[1:])
+    sig_energy = csum[n_ref:n_ref + n_z] - csum[:n_z]
+
+    ref_energy = float(np.sum((long_ref.real.astype(np.float64)) ** 2
+                              + (long_ref.imag.astype(np.float64)) ** 2))
+    denom = sig_energy * ref_energy
+    ncc = z_mag2 / np.maximum(denom, np.finfo(np.float64).tiny)
+
+    # Silent gaps make sig_energy tiny — any numerical noise in z then yields
+    # an undefined NCC that overflows.  Force NCC=0 wherever the windowed
+    # signal energy is below 5% of the buffer's peak; this is well below any
+    # real preamble window and well above pure-zero / silence regions.
+    max_sig_energy = float(sig_energy.max()) if n_z > 0 else 0.0
+    if max_sig_energy > 0:
+        ncc[sig_energy < 0.05 * max_sig_energy] = 0.0
+    else:
+        return empty
+
+    above = np.flatnonzero(ncc > ncc_threshold)
+    if above.size == 0:
+        return empty
+
+    # Cluster peaks within one long_ref length — those belong to the same frame
+    # (sidelobes / pulse-shape smearing).  Real frames are at least one payload
+    # + preamble apart, so this gap is safe.
+    half = n_ref // 2
+    long_ref_conj = np.conj(long_ref).astype(np.complex64)
+
+    splits = np.r_[0, np.flatnonzero(np.diff(above) > n_ref) + 1, above.size]
+    sample_idxs, peak_ratios, phase_estimates, cfo_hats = [], [], [], []
+    for i in range(len(splits) - 1):
+        cluster = above[splits[i]:splits[i + 1]]
+        peak = int(cluster[np.argmax(ncc[cluster])])
+        if peak + n_ref > len(samples):
+            continue  # window runs off the buffer end
+
+        # CFO via half-window phase difference.  Multiplying samples by
+        # conj(long_ref) cancels the ZC modulation, leaving exp(jωn+jθ).  The
+        # phase diff between the two halves is ω·N/2 → CFO = angle(P)·fs/(π·N).
+        window = samples[peak:peak + n_ref] * long_ref_conj
+        p = np.vdot(window[:half], window[half:half * 2])  # sum conj(h1)·h2
+        cfo_hat = float(np.angle(p)) * fs / (np.pi * n_ref)
+
+        sample_idxs.append(peak)
+        peak_ratios.append(float(ncc[peak]))
+        # angle(z[peak]) is the channel phase at the middle of long_ref (CFO
+        # rotates symmetrically across the correlator window).  Project forward
+        # to payload start by adding CFO phase over the back-half.
+        phase_mid = float(np.angle(z[peak]))
+        phase_at_payload = phase_mid + 2 * np.pi * cfo_hat / fs * (n_ref / 2)
+        phase_estimates.append(phase_at_payload % (2 * np.pi))
+        cfo_hats.append(cfo_hat)
+
+    if not sample_idxs:
+        return empty
+
+    return (
+        FineResult(
+            sample_idxs=np.array(sample_idxs, dtype=np.intp),
+            peak_ratios=np.array(peak_ratios, dtype=np.float32),
+            phase_estimates=np.array(phase_estimates, dtype=np.float32),
+        ),
+        np.array(cfo_hats, dtype=np.float32),
+    )
 
 
 def build_fine_ref(long_ref: np.ndarray, cfg: SynchronizerConfig, sps: int) -> np.ndarray:

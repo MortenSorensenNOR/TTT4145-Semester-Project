@@ -41,15 +41,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineConfig:
-    SAMPLE_RATE: int = 6_000_000
+    SAMPLE_RATE: int = 4_000_000
     CENTER_FREQ: int = 2_410_000_000
     SPS: int = 4
     SPAN: int = 8
     RRC_ALPHA: np.float32 = np.float32(0.25)
-    MOD_SCHEME: ModulationSchemes = ModulationSchemes.QPSK
+    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
     CODING_RATE: CodeRates = CodeRates.FIVE_SIXTH_RATE
     LDPC_MAX_ITER: int = 20
-    PRE_HEADER_GUARD_BITS: int = 8
+    PRE_HEADER_GUARD_BITS: int = 0
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
@@ -70,6 +70,12 @@ class PipelineConfig:
     interleaving: bool = False
     cfo_correction: bool = True
     use_golay: bool = False
+    # Two-stage sync: Schmidl-Cox coarse + long-ZC fine (default).
+    # Set False to skip coarse_sync and detect frames via a single full-buffer
+    # cross-correlation against the long ZC.  Cheaper preamble (no short reps),
+    # ~9× more compute on x86, no CFO estimate (Costas must capture residual).
+    # Only safe when CFO is small enough that the long-ZC peak stays sharp.
+    two_stage_sync: bool = False
     # When True: TX skips software RRC convolution (just zero-inserts),
     # RX skips software match-filter — both assume the Pluto FPGA's
     # hardware RRC filter is active between the AD9363 and DMA.
@@ -216,6 +222,9 @@ class RXPipeline:
         self.long_ref_dec = decimate(self.long_ref, self.config.SPS)
         self.ref_f_dec = build_fine_ref(self.long_ref_dec, self.config.SYNC_CONFIG, 1)
 
+        # Time-reversed conjugate ref for the single-stage detector path.
+        self.long_ref_rev = build_long_ref_rev(self.long_ref)
+
     def receive(self, buffer: np.ndarray, search_from: int = 0) -> tuple[list[Packet], int]:
         """Detect and decode all frames in buffer.
 
@@ -272,27 +281,38 @@ class RXPipeline:
         return packets, max_detection_sample
 
     def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:
-        """Detect frames in a match-filtered buffer. Both coarse and fine sync run post-RRC
-        on the full-rate (undecimated) filtered buffer.
+        """Detect frames in a match-filtered buffer.
 
-        Fine timing runs on the same full-rate buffer to preserve sub-symbol timing
-        precision needed for correct decimation in decode().
+        two_stage_sync=True (default): Schmidl-Cox coarse + long-ZC fine.  Both
+            stages run on the full-rate filtered buffer; fine timing preserves
+            sub-symbol precision needed for correct decimation in decode().
+        two_stage_sync=False: skip coarse, just convolve the buffer with the
+            long-ZC reference and pick peaks.  No CFO estimate — Costas captures.
         """
         cfg = self.config.SYNC_CONFIG
         sps = self.config.SPS
 
         try:
-            coarse = coarse_sync(filtered_buffer, self.config.SAMPLE_RATE, sps, cfg)
-        except Exception as e:
-            logger.info(e)
-            return []
-
-        if coarse.m_peaks.size == 0:
-            return []
-
-        try:
-            fine = fine_timing(filtered_buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
-                               self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
+            if self.config.two_stage_sync:
+                coarse = coarse_sync(filtered_buffer, self.config.SAMPLE_RATE, sps, cfg)
+                if coarse.m_peaks.size == 0:
+                    return []
+                fine = fine_timing(filtered_buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
+                                   self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
+                cfo_hats = coarse.cfo_hats
+                # peak_ratio is a peak-to-mean ratio over a small fine_timing
+                # window — gate via fine_peak_ratio_min (default 3.0).
+                gate = lambda r: cfg.fine_peak_ratio_min <= 0 or r >= cfg.fine_peak_ratio_min
+            else:
+                fine, cfo_hats = full_buffer_xcorr_sync(
+                    filtered_buffer, self.long_ref, self.long_ref_rev,
+                    float(cfg.single_stage_ncc_threshold), self.config.SAMPLE_RATE,
+                )
+                if fine.sample_idxs.size == 0:
+                    return []
+                # peak_ratio is the NCC ∈ [0,1]; threshold is already applied
+                # inside the helper, so no extra gate here.
+                gate = lambda r: True
         except Exception as e:
             logger.info(e)
             return []
@@ -301,12 +321,12 @@ class RXPipeline:
         return [
             DetectionResult(
                 payload_start=int(payload_starts[i]),
-                cfo_estimate=np.float32(coarse.cfo_hats[i]),
+                cfo_estimate=np.float32(cfo_hats[i]),
                 phase_estimate=np.float32(fine.phase_estimates[i]),
                 confidence=np.float32(fine.peak_ratios[i]),
             )
             for i in range(len(payload_starts))
-            if cfg.fine_peak_ratio_min <= 0 or fine.peak_ratios[i] >= cfg.fine_peak_ratio_min
+            if gate(fine.peak_ratios[i])
         ]
 
     def decode(self, buffer: np.ndarray, cfo: np.float32, phase_estimate: np.float32) -> Packet:

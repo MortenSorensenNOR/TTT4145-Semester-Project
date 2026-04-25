@@ -35,7 +35,7 @@ using f32 = float;
 // 256 entries = 2 KB, comfortably within A9 32 KB L1 data cache.
 // 256 steps gives ~1.4 degree resolution which is sufficient for a Costas loop.
 // ---------------------------------------------------------------------------
-static constexpr int   LUT_SIZE  = 256;
+static constexpr int   LUT_SIZE  = 1024;
 static constexpr f32   TWO_PI    = 2.0f * static_cast<f32>(M_PI);
 static constexpr f32   LUT_SCALE = LUT_SIZE / TWO_PI;  // precomputed: avoids divide in hot path
 

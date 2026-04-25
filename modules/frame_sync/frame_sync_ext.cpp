@@ -226,8 +226,8 @@ CoarseResult coarse_sync_ext(
                     continue;
             }
 
-            if (use_minn_park) {
-                // Minn/Park sign-flip check (CFO-independent):
+            if (use_minn_park && short_nreps == 4) {
+                // nreps==4, pattern [+,+,-,-] — CFO-independent sign flip:
                 //   P(d₀)   ≈ +L·e^{jφ}  (rep1→rep2, same sign)
                 //   P(d₀+L) ≈ −L·e^{jφ}  (rep2→rep3, sign flip)
                 // ⇒ Re(P(d₀+L)·conj(P(d₀))) < 0 for preamble (any CFO).
@@ -240,6 +240,15 @@ CoarseResult coarse_sync_ext(
                 // CFO: P(d₀) − P(d₀+L) = 2L·e^{jφ}  (constructive combination)
                 c64 p_combined = p_d[cand] - p_d[mp_pos];
                 cfo_hat = std::atan2(p_combined.imag(), p_combined.real())
+                          * static_cast<f32>(fs)
+                          / (2.0f * f32(M_PI) * static_cast<f32>(L));
+            } else if (use_minn_park && short_nreps == 2) {
+                // nreps==2, pattern [+,-]: only one P window, no CFO-cancelling
+                // cross-product check.  CFO comes from -P(d) so the π offset
+                // from the sign pattern doesn't bias the angle estimate.
+                // LO rejection is left to fine_peak_ratio_min downstream.
+                c64 p_neg = -p_d[cand];
+                cfo_hat = std::atan2(p_neg.imag(), p_neg.real())
                           * static_cast<f32>(fs)
                           / (2.0f * f32(M_PI) * static_cast<f32>(L));
             } else {

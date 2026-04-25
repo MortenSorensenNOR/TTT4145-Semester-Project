@@ -38,7 +38,9 @@ from pluto.config.NODE_RADIO_IPS.
 """
 
 import argparse
+import collections
 import queue
+import shutil
 import sys
 import threading
 import time
@@ -60,6 +62,138 @@ from pluto.sdr_stream import RxStream, TxStream
 
 import logging
 logging.basicConfig(level=logging.INFO)
+
+
+# ---------------------------------------------------------------------------
+# Live status UI: pinned status line(s) at the bottom, scrolling logs above.
+# Falls back to plain prints when stdout is not a TTY.
+# ---------------------------------------------------------------------------
+
+class RateMeter:
+    """Sliding-window throughput meter (bytes / sec)."""
+
+    def __init__(self, window_s: float = 2.0) -> None:
+        self.window_s = window_s
+        self._events: collections.deque = collections.deque()
+        self._t_start = time.perf_counter()
+        self.total_bytes = 0
+
+    def add(self, n_bytes: int) -> None:
+        now = time.perf_counter()
+        self._events.append((now, n_bytes))
+        self.total_bytes += n_bytes
+        cutoff = now - self.window_s
+        while self._events and self._events[0][0] < cutoff:
+            self._events.popleft()
+
+    @property
+    def rate_bps(self) -> float:
+        if not self._events:
+            return 0.0
+        b   = sum(n for _, n in self._events)
+        win = max(time.perf_counter() - self._events[0][0], 1e-3)
+        return b / win
+
+    @property
+    def avg_bps(self) -> float:
+        elapsed = time.perf_counter() - self._t_start
+        return self.total_bytes / elapsed if elapsed > 0 else 0.0
+
+
+def _fmt_rate(bps: float) -> str:
+    for unit in ("B/s", "KB/s", "MB/s", "GB/s"):
+        if bps < 1024 or unit == "GB/s":
+            return f"{bps:7.1f} {unit}"
+        bps /= 1024
+    return f"{bps:7.1f} GB/s"
+
+
+def _fmt_bytes(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:6.1f} {unit}"
+        n /= 1024
+    return f"{n:6.1f} GB"
+
+
+class LiveStatus:
+    """Multi-line status pinned at the bottom; logs scroll above.
+
+    On a TTY, uses ANSI cursor-up + clear-line so :meth:`log` can print
+    above the status without clobbering it.  On a non-TTY (pipe / file),
+    :meth:`set` is silent and :meth:`log` is a plain ``print``.
+    """
+
+    def __init__(self, n_lines: int = 1, stream=None) -> None:
+        self.n_lines = n_lines
+        self.lines = [""] * n_lines
+        self.stream = stream if stream is not None else sys.stdout
+        self.is_tty = self.stream.isatty()
+        self._rendered = False
+        self._lock = threading.Lock()
+
+    def set(self, idx: int, text: str) -> None:
+        with self._lock:
+            self.lines[idx] = text
+            if self.is_tty:
+                self._refresh_locked()
+
+    def log(self, msg: str) -> None:
+        with self._lock:
+            if self.is_tty and self._rendered:
+                self._clear_locked()
+            self.stream.write(str(msg) + "\n")
+            self.stream.flush()
+            if self.is_tty:
+                self._refresh_locked()
+
+    def stop(self) -> None:
+        """Release the terminal — leaves the last status visible above the cursor."""
+        with self._lock:
+            if self.is_tty and self._rendered:
+                self.stream.write("\n")
+                self.stream.flush()
+            self._rendered = False
+
+    def _clear_locked(self) -> None:
+        for _ in range(self.n_lines):
+            self.stream.write("\033[F\033[K")
+        self._rendered = False
+
+    def _refresh_locked(self) -> None:
+        if self._rendered:
+            self._clear_locked()
+        cols = shutil.get_terminal_size((120, 24)).columns
+        for line in self.lines:
+            line_trim = line if len(line) <= cols else line[: cols - 1] + "…"
+            self.stream.write(line_trim + "\n")
+        self.stream.flush()
+        self._rendered = True
+
+
+class _StatusLogHandler(logging.Handler):
+    """Routes log records through LiveStatus.log so they scroll above the
+    pinned status without disturbing it."""
+    def __init__(self, status: LiveStatus) -> None:
+        super().__init__()
+        self.status = status
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.status.log(self.format(record))
+        except Exception:  # never let a logging error kill the run
+            self.handleError(record)
+
+
+def _install_live_logging(status: LiveStatus, level=logging.INFO) -> None:
+    """Replace any default basicConfig handlers with one that writes through `status`."""
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    handler = _StatusLogHandler(status)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root.addHandler(handler)
+    root.setLevel(level)
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -240,35 +374,46 @@ def _build_packet(seq: int, payload_bytes: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def run_tx():
+    status = LiveStatus(n_lines=1)
+    _install_live_logging(status)
+
     stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
     stream.start()
-    print(f"  [TX] streaming (buf={tx_buf_size} samples / "
-          f"{tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms, "
-          f"variable={args.variable})")
+    status.log(f"  [TX] streaming (buf={tx_buf_size} samples / "
+               f"{tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms, "
+               f"variable={args.variable})")
 
+    rate       = RateMeter()
     global_seq = 0
     burst_num  = 0
 
-    while True:
-        burst_num  += 1
-        burst_start = global_seq
-        t0 = time.perf_counter()
+    try:
+        while True:
+            burst_num  += 1
+            burst_start = global_seq
+            t0 = time.perf_counter()
 
-        for i in range(args.packets):
-            if args.variable:
-                pay_size = rng.integers(args.min_payload, args.payload + 1)
-            else:
-                pay_size = args.payload
-            samples = _build_packet(global_seq, pay_size)
-            stream.send(samples)
-            global_seq += 1
+            for i in range(args.packets):
+                if args.variable:
+                    pay_size = int(rng.integers(args.min_payload, args.payload + 1))
+                else:
+                    pay_size = args.payload
+                samples = _build_packet(global_seq, pay_size)
+                stream.send(samples)
+                rate.add(pay_size)
+                global_seq += 1
+                status.set(0, f"  [TX] seq={global_seq:>10d}  burst={burst_num:>4d}  "
+                              f"pending={stream.pending:>3d}  rate={_fmt_rate(rate.rate_bps)}  "
+                              f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
 
-        t1 = time.perf_counter()
-        print(f"  [TX] burst {burst_num}: {args.packets} packets "
-              f"(seq {burst_start}–{global_seq - 1}) queued in {t1 - t0:.3f} s  "
-              f"(pending={stream.pending}, bufs_sent={stream.bufs_sent})")
+            t1 = time.perf_counter()
+            status.log(f"  [TX] burst {burst_num}: {args.packets} pkts "
+                       f"(seq {burst_start}–{global_seq - 1}) queued in {t1 - t0:.3f}s  "
+                       f"(pending={stream.pending}, bufs_sent={stream.bufs_sent})")
 
-        time.sleep(args.interval / 1000.0)
+            time.sleep(args.interval / 1000.0)
+    finally:
+        status.stop()
 
 # ---------------------------------------------------------------------------
 # RX mode — run forever, print every decoded packet
@@ -315,12 +460,15 @@ def _setup_constellation_plot():
 
 
 def run_rx():
+    status = LiveStatus(n_lines=1)
+    _install_live_logging(status)
+
     # Lossless stream: large queue so the hardware reader never stalls while
     # the decoder is busy.
     stream = RxStream(rx_sdr, maxsize=128, lossless=True)
     stream.start(flush=16)
 
-    print("  [RX] listening …")
+    status.log("  [RX] listening …")
 
     # --- optional constellation plot ---
     _fig = _ax = _scat = None
@@ -331,6 +479,7 @@ def run_rx():
         import matplotlib.pyplot as plt
         _fig, _ax, _scat = _setup_constellation_plot()
 
+    rate        = RateMeter()
     n_total     = 0
     n_valid     = 0
     n_dropped   = 0
@@ -338,7 +487,7 @@ def run_rx():
     prev_buf    = None
     search_from = 0
 
-    # Processing time stats (printed every 500 buffers)
+    # Processing time stats (logged every 500 buffers)
     _proc_times: list[float] = []
     _buf_count  = 0
 
@@ -362,9 +511,9 @@ def run_rx():
             _buf_count += 1
             if _buf_count % 500 == 0:
                 buf_dur_ms = rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3
-                print(f"  [RX perf] proc={np.mean(_proc_times):.2f} ms avg / "
-                      f"{max(_proc_times):.2f} ms max  (buf={buf_dur_ms:.2f} ms, "
-                      f"queue≈{stream._q.qsize()}/{stream._q.maxsize})")
+                status.log(f"  [RX perf] proc={np.mean(_proc_times):.2f} ms avg / "
+                           f"{max(_proc_times):.2f} ms max  (buf={buf_dur_ms:.2f} ms, "
+                           f"queue≈{stream._q.qsize()}/{stream._q.maxsize})")
                 _proc_times.clear()
 
             prev_buf = curr_buf
@@ -381,6 +530,7 @@ def run_rx():
                     b        = np.packbits(seq_bits)
                     seq      = (int(b[0]) << 24) | (int(b[1]) << 16) | (int(b[2]) << 8) | int(b[3])
                     n_valid += 1
+                    rate.add(pkt.length)
 
                     gap = 0
                     if last_seq is not None:
@@ -389,9 +539,13 @@ def run_rx():
                             n_dropped += gap
                     last_seq = seq
 
-                    gap_str = f"  *** GAP: {gap} dropped ***" if gap > 0 else ""
-                    print(f"  [RX] #{n_total}  seq={seq:10d}  valid=True   "
-                          f"(ok={n_valid}, dropped≈{n_dropped}){gap_str}")
+                    if gap > 0:
+                        status.log(f"  [RX] *** GAP: {gap} dropped before seq={seq} ***")
+
+                    status.set(0, f"  [RX] #{n_total:>6d}  seq={seq:>10d}  valid=True   "
+                                  f"(ok={n_valid}, dropped≈{n_dropped})  "
+                                  f"rate={_fmt_rate(rate.rate_bps)}  "
+                                  f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
 
                     # Collect symbols for constellation plot
                     if args.constellation and pkt.rx_symbols is not None:
@@ -410,12 +564,13 @@ def run_rx():
                             _sym_buf.clear()
                             _pkt_count = 0
                 else:
-                    print(f"  [RX] #{n_total}  header CRC failed  "
-                          f"(ok={n_valid}, dropped≈{n_dropped})")
+                    status.log(f"  [RX] #{n_total}  header CRC failed  "
+                               f"(ok={n_valid}, dropped≈{n_dropped})")
 
     except KeyboardInterrupt:
-        print(f"\n  [RX] interrupted — decoded {n_valid} valid / {n_total} total frames, ~{n_dropped} dropped by seq gap")
+        status.log(f"  [RX] interrupted — decoded {n_valid} valid / {n_total} total frames, ~{n_dropped} dropped by seq gap")
     finally:
+        status.stop()
         stream.stop()
         if args.constellation and _fig is not None:
             import matplotlib.pyplot as plt
@@ -456,6 +611,13 @@ else:  # "both" — original threaded loopback behaviour
     print(f"Post-TX   : {_BUFS_AFTER_TX} bufs needed after tx_done  "
           f"(air={_air_time_ms} ms / buf={_buf_ms} ms + 8 margin)\n")
 
+    # Two-line live status: line 0 = TX, line 1 = RX. Pipeline log records
+    # (DECODE ERROR, etc.) scroll above via _install_live_logging.
+    status   = LiveStatus(n_lines=2)
+    tx_rate  = RateMeter()
+    rx_rate  = RateMeter()
+    _install_live_logging(status)
+
     # -----------------------------------------------------------------------
     # TX thread
     # -----------------------------------------------------------------------
@@ -469,11 +631,17 @@ else:  # "both" — original threaded loopback behaviour
         t0 = time.perf_counter()
         for seq in range(args.packets):
             if args.variable:
-                pay_size = rng.integers(args.min_payload, args.payload + 1)
+                pay_size = int(rng.integers(args.min_payload, args.payload + 1))
             else:
                 pay_size = args.payload
             samples = _build_packet(seq, pay_size)
             stream.send(samples)
+            tx_rate.add(pay_size)
+            status.set(0, f"  [TX] seq={seq+1:>10d}/{args.packets}  "
+                          f"pending={stream.pending:>3d}  "
+                          f"rate={_fmt_rate(tx_rate.rate_bps)}  "
+                          f"avg={_fmt_rate(tx_rate.avg_bps)}  "
+                          f"total={_fmt_bytes(tx_rate.total_bytes)}")
 
         # Wait for the stream to drain the queue
         while stream.pending > 0:
@@ -484,9 +652,9 @@ else:  # "both" — original threaded loopback behaviour
         t1 = time.perf_counter()
         stream.stop()
 
-        print(f"Took: {t1 - t0:.3f} seconds. Throughput: {args.packets * args.payload / (t1 - t0):.0f} B/s")
+        status.log(f"  [TX] done in {t1 - t0:.3f}s — sent {args.packets} pkts, "
+                   f"avg {_fmt_rate(tx_rate.avg_bps)}")
         tx_done.set()
-        print("  [TX] done")
 
     # -----------------------------------------------------------------------
     # RX thread
@@ -500,6 +668,8 @@ else:  # "both" — original threaded loopback behaviour
         prev_buf    = None
         search_from = 0
         n_after_tx  = 0
+        n_total     = 0
+        n_valid     = 0
 
         while not _all_decoded.is_set():
             if tx_done.is_set() and n_after_tx >= _BUFS_AFTER_TX:
@@ -525,17 +695,23 @@ else:  # "both" — original threaded loopback behaviour
                 search_from = max(0, max_det - prev_len)
 
             for pkt in packets:
+                n_total += 1
                 if pkt.valid:
                     seq_bits = pkt.payload[:32]
                     b        = np.packbits(seq_bits)
                     seq      = (int(b[0]) << 24) | (int(b[1]) << 16) | (int(b[2]) << 8) | int(b[3])
+                    n_valid += 1
+                    rx_rate.add(pkt.length)
+                    status.set(1, f"  [RX] #{n_total:>6d}  seq={seq:>10d}  valid=True   "
+                                  f"(ok={n_valid})  "
+                                  f"rate={_fmt_rate(rx_rate.rate_bps)}  "
+                                  f"avg={_fmt_rate(rx_rate.avg_bps)}  "
+                                  f"total={_fmt_bytes(rx_rate.total_bytes)}")
                 else:
                     seq = -1
-                entry    = {"seq_num": seq, "valid": pkt.valid, "time": time.perf_counter()}
-                if pkt.valid:
-                    print(f"  [RX] decoded seq={seq:10d}, valid={pkt.valid}")
-                else:
-                    print(f"  [RX] frame found but header CRC failed")
+                    status.log(f"  [RX] #{n_total}  header CRC failed (ok={n_valid})")
+
+                entry = {"seq_num": seq, "valid": pkt.valid, "time": time.perf_counter()}
                 with rx_lock:
                     rx_results.append(entry)
                     if pkt.valid:
@@ -544,7 +720,7 @@ else:  # "both" — original threaded loopback behaviour
                             _all_decoded.set()
 
         stream.stop()
-        print("  [RX] done")
+        status.log(f"  [RX] done — decoded {n_valid}/{n_total} (avg {_fmt_rate(rx_rate.avg_bps)})")
 
     # -----------------------------------------------------------------------
     # Launch threads
@@ -558,6 +734,8 @@ else:  # "both" — original threaded loopback behaviour
 
     t_tx.join()
     t_rx.join(timeout=args.packets * args.interval / 1000.0 + _air_time_ms * 4 / 1000.0 + 15.0)
+
+    status.stop()
 
     # -----------------------------------------------------------------------
     # Report
