@@ -54,7 +54,10 @@ class PipelineConfig:
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.008) # Bn=0.008 empirically optimal for PSK8 over coax
-    GARDNER_CONFIG = GardnerConfig(0.0025) #Probably needs more tuning
+    # NDA Gardner (Rice 2009) — see modules/gardner_ted/gardner.py
+    GARDNER_BN_TS: float = 0.0025  # normalised loop bandwidth (probably needs more tuning)
+    GARDNER_ZETA: float = 0.707
+    GARDNER_L: int = 2             # TED smoothing half-length (window = 2L+1 symbols)
 
     pulse_shaping: bool = True
     pilots: bool = False
@@ -339,7 +342,14 @@ class RXPipeline:
 
         if self.config.gardner_ted:
             guard = self.config.SPS
-            header_syms, timing_est = apply_gardner_ted(buffer[:header_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, ModulationSchemes.BPSK, self.config.SPS)
+            header_syms = apply_gardner_ted(
+                buffer[:header_end*self.config.SPS+guard],
+                self.config.SPS,
+                BnTs=self.config.GARDNER_BN_TS,
+                zeta=self.config.GARDNER_ZETA,
+                L=self.config.GARDNER_L,
+            )
+            timing_est = [0.0]  # new NDA gardner does not expose state for handoff
         else:
             header_syms, timing_est = decimate(buffer[:header_end*self.config.SPS], self.config.SPS), [0.0]
 
@@ -390,7 +400,14 @@ class RXPipeline:
 
         if self.config.gardner_ted:
             guard = self.config.SPS
-            rx_syms, timing_est = apply_gardner_ted(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard], self.config.GARDNER_CONFIG, header.mod_scheme, self.config.SPS, current_timing_offset=current_timing_estimate)
+            rx_syms = apply_gardner_ted(
+                buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard],
+                self.config.SPS,
+                BnTs=self.config.GARDNER_BN_TS,
+                zeta=self.config.GARDNER_ZETA,
+                L=self.config.GARDNER_L,
+            )
+            timing_est = [0.0]  # new NDA gardner does not expose state for handoff
         else:
             rx_syms, timing_est = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS), [0.0]
 

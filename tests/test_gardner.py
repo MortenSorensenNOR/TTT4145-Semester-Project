@@ -1,7 +1,7 @@
 from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
-from modules.gardner_ted.gardner import apply_gardner_ted, GardnerConfig
+from modules.gardner_ted.gardner import apply_gardner_ted
 from modules.modulators import BPSK, QPSK, PSK8, Modulator
 from modules.frame_constructor.frame_constructor import ModulationSchemes
 from modules.pulse_shaping.pulse_shaping import decimate, rrc_filter
@@ -44,9 +44,8 @@ Usage
     # Inject 0.3 symbol-period delay at sps=8
     x_delayed = apply_timing_offset(x, offset_symbols=0.3, sps=8)
 
-    # Run Gardner TED — mu should converge to ≈ -0.3
-    symbols, mu = apply_gardner_ted(x_delayed, config, ModulationSchemes.QPSK, sps=8)
-    assert abs(mu[-1] + 0.3) < 0.02
+    # Run Gardner TED — symbols should be timing-corrected
+    symbols = apply_gardner_ted(x_delayed, sps=8, BnTs=0.01, zeta=0.707, L=2)
 """
 
 
@@ -194,7 +193,7 @@ def run_test(sps=4, gain=0.005, timing_offset=0.3, snr_db=30, mod_scheme: Modula
     # -------------------------------
     # Run Gardner
     # -------------------------------
-    out_gardner, time_est = apply_gardner_ted(rx, GardnerConfig(gain), mod_scheme, sps)
+    out_gardner = apply_gardner_ted(rx, sps, BnTs=gain, zeta=0.707, L=2)
 
     out_gardner, _ = apply_costas_loop(out_gardner, CostasConfig(0.07), mod_scheme)
 
