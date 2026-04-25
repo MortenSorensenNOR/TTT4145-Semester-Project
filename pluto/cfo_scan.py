@@ -13,8 +13,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import adi
+from pluto.config import PIPELINE
 
-SAMPLE_RATE = 4_000_000
+SAMPLE_RATE = PIPELINE.SAMPLE_RATE
 BUF_SIZE = 131072  # 128k samples
 PEAK_HISTORY = 200  # number of iterations to keep in the peak-offset time series
 

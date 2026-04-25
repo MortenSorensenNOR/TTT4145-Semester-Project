@@ -45,7 +45,7 @@ TUN_NAME=pluto0
 
 TX_GAIN=-20
 MTU=1500
-WINDOW=7
+WINDOW=15
 ARQ_QUEUE_DEPTH=32      # ARQ ingress queue; bump for bursty UDP (streaming, etc.)
 RETRANSMIT_TIMEOUT=0.15 # seconds before ARQ re-sends unacked frames (ping RTT × 2-3)
 SHAPE_RATE="1500kbit"   # "off" to skip; override with --shape-rate / --no-shape

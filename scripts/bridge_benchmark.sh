@@ -44,7 +44,7 @@ PING_INTERVAL=0.5       # -i 0.5 to keep from starving ARQ
 IPERF_TIME=30
 TX_GAIN=-20             # dB, passed to both nodes
 MTU=1500
-WINDOW=7                # ARQ in-flight frames; must be < SEQ_SPACE/2 = 8
+WINDOW=15               # ARQ in-flight frames; must be < SEQ_SPACE/2 = 16
 SHAPE_RATE="1500kbit"   # TUN egress cap (cake qdisc); "off" to skip shaping
 TUN_NAME="pluto0"       # TUN iface name used by pluto.bridge (its --tun default)
 SKIP_IPERF=0            # iperf off by default — link must ping cleanly first

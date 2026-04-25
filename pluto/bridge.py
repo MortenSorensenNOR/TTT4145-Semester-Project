@@ -257,7 +257,7 @@ def main() -> None:
                         help="Raw-buffer prefetch depth between the SDR DMA and "
                              "the RX DSP pipeline. (default: 2)")
     parser.add_argument("--window",     type=int, default=3,
-                        help="ARQ window size (< SEQ_SPACE/2 = 8). Smaller = "
+                        help="ARQ window size (< SEQ_SPACE/2 = 16). Smaller = "
                              "cleaner ping latency and less retransmit "
                              "cascade; larger = better iperf throughput on a "
                              "healthy link. (default: 3)")

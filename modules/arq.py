@@ -16,15 +16,15 @@ Protocol:
     ``[send_base, next_seq)`` that are neither cumulatively nor SACK-acked
     — avoiding Go-Back-N's "one loss wastes the whole window" amplification.
 
-One byte of bitmap is enough for any ``window_size`` ≤ 8 (== SEQ_SPACE/2).
-An ACK with ``length == 0`` (legacy cumulative-only format) is treated as
-bitmap = 0 so the sender falls back to Go-Back-N behaviour.
+Two bytes of bitmap cover any ``window_size`` ≤ 16 (== SEQ_SPACE/2).
+An ACK with ``length == 0`` (cumulative-only) is treated as bitmap = 0 so
+the sender falls back to Go-Back-N behaviour.
 
 Frame types (2-bit ``frame_type`` field, see ``modules.pipeline.PacketType``):
   PacketType.DATA  — carries payload, seq_num = sender's TX seq
-  PacketType.ACK   — carries SACK bitmap (1 byte), seq_num = cumulative ACK
+  PacketType.ACK   — carries SACK bitmap (2 bytes, big-endian), seq_num = cumulative ACK
 
-Sequence space: 4 bits → 0..15; window size must be < SEQ_SPACE/2 (= 8) so
+Sequence space: 5 bits → 0..31; window size must be < SEQ_SPACE/2 (= 16) so
 that circular-distance comparisons stay unambiguous.
 
 Addressing
@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 FRAME_TYPE_DATA: int = int(PacketType.DATA)
 FRAME_TYPE_ACK:  int = int(PacketType.ACK)
 
-SEQ_SPACE: int = 16  # 4-bit sequence numbers: 0 .. 15
+SEQ_SPACE: int = 32  # 5-bit sequence numbers: 0 .. 31
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ def seq_add(a: int, n: int) -> int:
 
 
 def seq_lt(a: int, b: int) -> bool:
-    """True iff a strictly precedes b in the circular mod-16 sequence space."""
+    """True iff a strictly precedes b in the circular mod-32 sequence space."""
     return 0 < (b - a) % SEQ_SPACE < SEQ_SPACE // 2
 
 
@@ -89,7 +89,7 @@ def seq_leq(a: int, b: int) -> bool:
 
 
 def seq_diff(a: int, b: int) -> int:
-    """Forward distance from a to b in mod-16 space (0 when a == b)."""
+    """Forward distance from a to b in mod-32 space (0 when a == b)."""
     return (b - a) % SEQ_SPACE
 
 
@@ -99,7 +99,7 @@ def seq_diff(a: int, b: int) -> int:
 
 @dataclass
 class ARQConfig:
-    window_size: int = 7               # max unacked in-flight frames (< SEQ_SPACE)
+    window_size: int = 15              # max unacked in-flight frames (< SEQ_SPACE/2)
     retransmit_timeout: float = 0.1    # seconds before Go-Back-N retransmit
     send_queue_maxsize: int = 64       # TUN→TX queue depth; excess is dropped
     src: int = 0                       # this node's logical address (1 bit)
@@ -318,15 +318,16 @@ class ARQNode:
         self.pluto_tx(packet)
 
     def _send_ack_frame(self, cumul: int, bitmap: int = 0) -> None:
-        """Send an ACK carrying the cumulative ack + a 1-byte SACK bitmap."""
-        bitmap &= 0xFF
-        bits = np.unpackbits(np.array([bitmap], dtype=np.uint8))
+        """Send an ACK carrying the cumulative ack + a 2-byte SACK bitmap (big-endian)."""
+        bitmap &= 0xFFFF
+        bytes_be = np.array([(bitmap >> 8) & 0xFF, bitmap & 0xFF], dtype=np.uint8)
+        bits = np.unpackbits(bytes_be)
         packet = Packet(
             src_mac=self.config.src,
             dst_mac=self.config.dst,
             type=FRAME_TYPE_ACK,
             seq_num=cumul,
-            length=1,
+            length=2,
             payload=bits,
             valid=True,
         )
@@ -426,10 +427,10 @@ class ARQNode:
 
                 elif packet.type == FRAME_TYPE_ACK:
                     self.stats.ack_rx += 1
-                    # Legacy length=0 ACKs carry no bitmap — treat as 0.
-                    if packet.length >= 1 and packet.payload.size >= 8:
-                        ack_bitmap = int(np.packbits(
-                            packet.payload[:8].astype(np.uint8))[0])
+                    # length=0 ACKs carry no bitmap — treat as 0.
+                    if packet.length >= 2 and packet.payload.size >= 16:
+                        b = np.packbits(packet.payload[:16].astype(np.uint8))
+                        ack_bitmap = (int(b[0]) << 8) | int(b[1])
                     else:
                         ack_bitmap = 0
                     with self._ack_lock:

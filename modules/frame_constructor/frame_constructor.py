@@ -94,7 +94,7 @@ class FrameHeaderConfig:
     dst_bits: int = 1
     frame_type_bits: int = 2
     mod_scheme_bits: int = 2
-    sequence_number_bits: int = 4
+    sequence_number_bits: int = 5
     coding_rate_bits: int = 2
     crc_bits: int = 8
     header_total_size: int = field(init=False)
@@ -305,7 +305,15 @@ class FrameConstructor:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Encode data into a frame."""
         if _USE_EXT:
-            return self._ext.encode(header._to_ext(), payload.ravel().astype(np.int32))
+            h, p = self._ext.encode(header._to_ext(), payload.ravel().astype(np.int32))
+            # The C++ encoder allocates header_length bits (rounded up to even)
+            # but only writes header_total_size bits — any odd-length header
+            # leaves the trailing slot uninitialized.  Zero-fill so it doesn't
+            # blow up bits2symbols downstream.
+            raw_bits = self.header_config.header_total_size
+            if raw_bits < len(h):
+                h[raw_bits:] = 0
+            return (h, p)
 
         payload = payload.ravel()
         header_bits = self.frame_header_constructor.encode(header)

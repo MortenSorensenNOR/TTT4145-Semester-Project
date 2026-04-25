@@ -117,19 +117,19 @@ class TestSeqArith:
         assert seq_add(3, 4) == 7
 
     def test_seq_add_wraparound(self):
-        assert seq_add(14, 3) == 1
+        assert seq_add(SEQ_SPACE - 2, 3) == 1
 
     def test_seq_add_negative(self):
-        assert seq_add(0, -1) == 15
+        assert seq_add(0, -1) == SEQ_SPACE - 1
 
     def test_seq_lt_normal(self):
         assert seq_lt(2, 7)
         assert not seq_lt(7, 2)
 
     def test_seq_lt_wraparound(self):
-        # 14 comes before 1 in the circular space
-        assert seq_lt(14, 1)
-        assert not seq_lt(1, 14)
+        # SEQ_SPACE-2 comes before 1 in the circular space
+        assert seq_lt(SEQ_SPACE - 2, 1)
+        assert not seq_lt(1, SEQ_SPACE - 2)
 
     def test_seq_lt_equal(self):
         assert not seq_lt(5, 5)
@@ -139,7 +139,7 @@ class TestSeqArith:
 
     def test_seq_leq_lt(self):
         assert seq_leq(3, 5)
-        assert seq_leq(14, 0)
+        assert seq_leq(SEQ_SPACE - 2, 0)
 
     def test_seq_diff_normal(self):
         assert seq_diff(2, 5) == 3
@@ -148,7 +148,7 @@ class TestSeqArith:
         assert seq_diff(7, 7) == 0
 
     def test_seq_diff_wraparound(self):
-        assert seq_diff(14, 2) == 4  # 14→15→0→1→2
+        assert seq_diff(SEQ_SPACE - 2, 2) == 4  # wrap → 0 → 1 → 2
 
     def test_window_seqs_normal(self):
         assert _window_seqs(2, 5) == [2, 3, 4]
@@ -157,7 +157,7 @@ class TestSeqArith:
         assert _window_seqs(3, 3) == []
 
     def test_window_seqs_wraparound(self):
-        assert _window_seqs(14, 2) == [14, 15, 0, 1]
+        assert _window_seqs(SEQ_SPACE - 2, 2) == [SEQ_SPACE - 2, SEQ_SPACE - 1, 0, 1]
 
     @pytest.mark.parametrize("a", range(SEQ_SPACE))
     def test_seq_add_full_cycle(self, a):

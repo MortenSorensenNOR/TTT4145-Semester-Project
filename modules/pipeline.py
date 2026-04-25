@@ -54,15 +54,19 @@ class PipelineConfig:
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(0.008) # Bn=0.008 empirically optimal for PSK8 over coax
-    # NDA Gardner (Rice 2009) — see modules/gardner_ted/gardner.py
-    GARDNER_BN_TS: float = 0.0025  # normalised loop bandwidth (probably needs more tuning)
+    # NDA Gardner (Rice 2009) — see modules/gardner_ted/gardner.py.
+    # BnTs must stay narrow: with LDPC the systematic-bits region holds 1500+
+    # consecutive constant-symbol BPSK pad, which gives the NDA TED nothing to
+    # lock onto.  At BnTs >= 0.001 the loop wanders during this stretch and
+    # corrupts the parity symbols that follow.
+    GARDNER_BN_TS: float = 0.0005
     GARDNER_ZETA: float = 0.707
     GARDNER_L: int = 2             # TED smoothing half-length (window = 2L+1 symbols)
 
     pulse_shaping: bool = True
     pilots: bool = False
     costas_loop: bool = True
-    gardner_ted: bool = False
+    gardner_ted: bool = True
     interleaving: bool = False
     cfo_correction: bool = True
     use_golay: bool = False
@@ -334,16 +338,28 @@ class RXPipeline:
 
     def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32, np.float32]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
-        header_end = (self.config.use_golay+1) * self.frame_constructor.header_config.header_total_size + self.config.PRE_HEADER_GUARD_BITS
+        # Use header_encoded_n_bits (rounded to even) instead of raw header_total_size
+        # so payload_start matches what TX actually emits — the encoder pads odd-length
+        # headers up by one bit.
+        header_end = self.frame_constructor.header_encoded_n_bits + self.config.PRE_HEADER_GUARD_BITS
 
         if header_end*self.config.SPS > len(buffer):
             msg = "header end is outside of buffer"
             raise IndexError(msg)
 
         if self.config.gardner_ted:
-            guard = self.config.SPS
+            # New NDA gardner has two quirks vs the old one:
+            #   1) intrinsic 1-sample bias — its first output is signal[1],
+            #      not signal[0]. Prepend a duplicate of the first sample so
+            #      the bias cancels and outputs land on the symbol peaks.
+            #   2) output is (Ns-1) symbols short of naïve decimation —
+            #      extend the trailing guard by sps*sps so downstream
+            #      slicing has enough symbols.
+            guard = self.config.SPS * self.config.SPS
+            gardner_in = buffer[:header_end*self.config.SPS+guard]
+            gardner_in = np.concatenate([gardner_in[:1], gardner_in])
             header_syms = apply_gardner_ted(
-                buffer[:header_end*self.config.SPS+guard],
+                gardner_in,
                 self.config.SPS,
                 BnTs=self.config.GARDNER_BN_TS,
                 zeta=self.config.GARDNER_ZETA,
@@ -399,9 +415,13 @@ class RXPipeline:
             raise IndexError(msg)
 
         if self.config.gardner_ted:
-            guard = self.config.SPS
+            # See header_decode for why we prepend a duplicate sample and use
+            # a sps*sps trailing guard.
+            guard = self.config.SPS * self.config.SPS
+            gardner_in = buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard]
+            gardner_in = np.concatenate([gardner_in[:1], gardner_in])
             rx_syms = apply_gardner_ted(
-                buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard],
+                gardner_in,
                 self.config.SPS,
                 BnTs=self.config.GARDNER_BN_TS,
                 zeta=self.config.GARDNER_ZETA,
