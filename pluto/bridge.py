@@ -244,11 +244,11 @@ def main() -> None:
     parser.add_argument("--rx-ip",      default=None,
                         help="IP of the Pluto used for RX. Default derived "
                              "from --node via pluto.config.NODE_RADIO_IPS.")
-    parser.add_argument("--rx-buf-mult", type=int, default=1,
+    parser.add_argument("--rx-buf-mult", type=int, default=16,
                         help="RX buffer = mult × next-pow2(frame_len). Smaller "
-                             "= lower latency, larger = better throughput. (default: 1)")
-    parser.add_argument("--tx-buf-mult", type=int, default=1,
-                        help="TX buffer = mult × next-pow2(frame_len) (default: 1)")
+                             "= lower latency, larger = better throughput. (default: 16)")
+    parser.add_argument("--tx-buf-mult", type=int, default=8,
+                        help="TX buffer = mult × next-pow2(frame_len) (default: 8)")
     parser.add_argument("--tx-queue-depth", type=int, default=1,
                         help="Packets buffered between ARQ and the TX packer "
                              "thread. Smaller = tighter backpressure and lower "
