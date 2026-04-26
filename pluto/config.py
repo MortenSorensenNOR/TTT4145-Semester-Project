@@ -16,6 +16,10 @@ RX_GAIN = 70.0
 DEFAULT_TX_GAIN = -50
 RX_BUFFER_SIZE = 2**14  # Smaller buffer = lower latency
 TX_BUFFER_SIZE = 2**14
+# Depth of the libiio kernel-side DMA ring. pyadi's default is 4; bumping it
+# gives more headroom for USB scheduling jitter before the Pluto's DMA
+# overruns/underruns.
+KERNEL_BUFFERS_COUNT = 8
 NODE_SRC = 0
 NODE_DST = 0
 MAX_PACKET_SIZE_BYTES = 1500
@@ -41,6 +45,7 @@ def configure_rx(
     sample_rate: int = PIPELINE.SAMPLE_RATE,
     buffer_size: int = RX_BUFFER_SIZE,
     gain_mode: str = "slow_attack",
+    kernel_buffers_count: int = KERNEL_BUFFERS_COUNT,
 ) -> None:
     """Apply standard RX settings to an SDR."""
     sdr.gain_control_mode_chan0 = "slow_attack"
@@ -50,6 +55,7 @@ def configure_rx(
     sdr.sample_rate = sample_rate
     sdr.rx_rf_bandwidth = int(sample_rate)
     sdr.rx_buffer_size = buffer_size
+    sdr._rxadc.set_kernel_buffers_count(kernel_buffers_count)
 
 def configure_tx(
     sdr: adi.Pluto,
@@ -59,6 +65,7 @@ def configure_tx(
     sample_rate: int = PIPELINE.SAMPLE_RATE,
     # buffer_size: int,
     cyclic: bool = False,
+    kernel_buffers_count: int = KERNEL_BUFFERS_COUNT,
 ) -> None:
     """Apply standard TX settings to an SDR."""
     sdr.sample_rate = sample_rate
@@ -67,3 +74,4 @@ def configure_tx(
     sdr.tx_hardwaregain_chan0 = gain
     sdr.tx_cyclic_buffer = cyclic
     # sdr.tx_buffer_size = buffer_size
+    sdr._txdac.set_kernel_buffers_count(kernel_buffers_count)
