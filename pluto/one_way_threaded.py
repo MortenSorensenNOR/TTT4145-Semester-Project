@@ -73,7 +73,6 @@ NODE_FREQS = {
     "A": {"tx": FREQ_A_TO_B, "rx": FREQ_B_TO_A},
     "B": {"tx": FREQ_B_TO_A, "rx": FREQ_A_TO_B},
 }
-from pluto.rrc_ctrl import set_hardware_rrc as _set_pluto_hardware_rrc, get_hardware_rrc as _get_pluto_hardware_rrc
 from pluto.sdr_stream import RxStream, TxStream
 
 import logging
@@ -269,28 +268,6 @@ else:
     else:
         rx_cfo_hz = cal.rx_offset_for(args.node)
         cfo_src   = f"calibration ({cal.measured_at or 'unknown date'})"
-
-# ---------------------------------------------------------------------------
-# Hardware-RRC GPIO: the FPGA applies RRC+4× interpolation iff the pluto_custom
-# GPIO is set. Software mode and GPIO state MUST match — mismatch means either
-# double-filtering (GPIO on + SW upsample) or no filtering at all, both of
-# which destroy the signal. Toggle it over SSH on the TX Pluto before we open
-# the iio context. RX never uses the FPGA RRC (removed from the RX path) so
-# skip the RX Pluto.
-# ---------------------------------------------------------------------------
-
-# Only drive the FPGA GPIO when the user actually asked for it. We leave
-# whatever state it's in otherwise — meaning you must pass --hardware-rrc
-# on every invocation after flashing the custom firmware, otherwise the
-# FPGA may still be in hardware-RRC mode from a previous run while TX
-# generates 4× upsampled samples → double-filtered signal.
-if args.hardware_rrc and args.mode in ("tx", "both"):
-    try:
-        _set_pluto_hardware_rrc(tx_ip, True)
-        print(f"  [pluto@{tx_ip}] hardware_rrc={'on' if _get_pluto_hardware_rrc(tx_ip) else 'off'}")
-    except RuntimeError as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Pipelines
