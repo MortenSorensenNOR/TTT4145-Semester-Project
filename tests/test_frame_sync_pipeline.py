@@ -13,7 +13,6 @@ References
 """
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -27,8 +26,8 @@ from modules.frame_constructor.frame_constructor import (
 from modules.frame_sync.frame_sync import (
     SynchronizerConfig,
     build_long_ref,
-    coarse_sync,
-    fine_timing,
+    build_long_ref_rev,
+    full_buffer_xcorr_sync,
     generate_preamble,
 )
 from modules.modulators import BPSK, QPSK
@@ -48,11 +47,14 @@ SYNC_CFG: SynchronizerConfig = _cfg.SYNC_CONFIG
 
 NUM_TAPS: int = 2 * SPS * SPAN + 1
 
-# CFO acquisition range implied by the short preamble length
-COARSE_CFO_RANGE_HZ: float = float(SAMPLE_RATE) / (
-    2 * SYNC_CFG.short_preamble_nsym * SPS
+# CFO acquisition range for the single-stage long-ZC NCC detector.
+# Unambiguous CFO range from the half-window phase-difference estimator is
+# fs / (2 * N) where N = long_preamble_nsym * SPS.  The NCC peak also rolls
+# off as sinc²(cfo·N/fs), so this same bound is also where detection itself
+# fails — they coincide.
+SINGLE_STAGE_CFO_RANGE_HZ: float = float(SAMPLE_RATE) / (
+    2 * SYNC_CFG.long_preamble_nsym * SPS
 )
-print(COARSE_CFO_RANGE_HZ)
 
 # ---------------------------------------------------------------------------
 # Test scenario constants
@@ -68,11 +70,16 @@ N_TRIALS: int = 30
 N_FP_TRIALS: int = 10
 
 # --- pass/fail thresholds ---
-MIN_DETECTION_CONFIDENCE: float = 0.3
+# NCC gate: matches the single_stage_ncc_threshold used by the production
+# RXPipeline.  Below this the half-window CFO estimator is unreliable too.
+MIN_NCC: float = float(SYNC_CFG.single_stage_ncc_threshold)
 MIN_DETECTION_RATE: float = 0.90
 MAX_CFO_ERROR_HZ: float = 2_000.0
 MIN_ALIGNED_RATE: float = 0.95
-MIN_PEAK_RATIO: float = 4.0
+# Median NCC for a clean detection is ~0.99 at zero CFO; sinc² rolloff drops
+# it toward MIN_NCC at the acquisition edge.  0.5 leaves margin for AWGN +
+# multipath at the lowest tested SNR while still being well above the gate.
+MIN_PEAK_NCC: float = 0.5
 MAX_PHASE_ERR_DEG: float = 15.0
 OTA_MAX_CFO_ERROR_HZ: float = 3_000.0  # relaxed: combined phase noise + SCO stress
 
@@ -103,11 +110,10 @@ CFO_VALUES_HZ = [
     pytest.param(100,    id="0.1kHz"),
     pytest.param(500,    id="0.5kHz"),
     pytest.param(1_000,  id="1kHz"),
+    pytest.param(2_000,  id="2kHz"),
+    pytest.param(3_000,  id="3kHz"),
     pytest.param(5_000,  id="5kHz"),
-    pytest.param(10_000, id="10kHz"),
-    pytest.param(15_000, id="15kHz"),
-    pytest.param(20_000, id="20kHz"),
-    pytest.param(25_000, id="25kHz"),
+    pytest.param(8_000,  id="8kHz"),
 ]
 
 SNR_VALUES_DB = [
@@ -129,28 +135,31 @@ _CFO_GRID_HZ    = [0, 500, 2_000]
 class SyncFixture:
     """Pre-computed objects shared across tests at the same SNR."""
 
-    rrc_taps:    np.ndarray
-    long_ref:    np.ndarray
-    group_delay: int
-    snr_db:      float
-    sig_power:   float
-    noise_scale: float   # for noise-only (false-positive) buffers
+    rrc_taps:     np.ndarray
+    long_ref:     np.ndarray
+    long_ref_rev: np.ndarray
+    group_delay:  int
+    snr_db:       float
+    sig_power:    float
+    noise_scale:  float   # for noise-only (false-positive) buffers
 
 
 @pytest.fixture(params=SNR_VALUES_DB, scope="module")
 def channel(request: pytest.FixtureRequest) -> SyncFixture:
     """Build the shared channel fixture for one SNR level."""
     snr_db: float = request.param
-    rrc_taps = rrc_filter(SPS, RRC_ALPHA, NUM_TAPS)
+    rrc_taps  = rrc_filter(SPS, RRC_ALPHA, NUM_TAPS)
+    long_ref  = build_long_ref(SYNC_CFG, SPS, rrc_taps)
     preamble  = generate_preamble(SYNC_CFG)
     sig_power = float(np.mean(np.abs(upsample(preamble, SPS, rrc_taps)) ** 2))
     return SyncFixture(
-        rrc_taps    = rrc_taps,
-        long_ref    = build_long_ref(SYNC_CFG, SPS, rrc_taps),
-        group_delay = (NUM_TAPS - 1) // 2,
-        snr_db      = snr_db,
-        sig_power   = sig_power,
-        noise_scale = np.sqrt(sig_power / (2 * 10 ** (snr_db / 10))),
+        rrc_taps     = rrc_taps,
+        long_ref     = long_ref,
+        long_ref_rev = build_long_ref_rev(long_ref),
+        group_delay  = (NUM_TAPS - 1) // 2,
+        snr_db       = snr_db,
+        sig_power    = sig_power,
+        noise_scale  = np.sqrt(sig_power / (2 * 10 ** (snr_db / 10))),
     )
 
 # ---------------------------------------------------------------------------
@@ -184,32 +193,30 @@ def _prepend_zeros(tx: np.ndarray) -> np.ndarray:
     return np.concatenate([np.zeros(SAMPLE_OFFSET, dtype=np.complex64), tx])
 
 
-def _run_sync(rx: np.ndarray, long_ref: np.ndarray, rrc_taps: np.ndarray):
-    """Match-filter then run coarse + fine sync.
+def _run_sync(rx: np.ndarray, ch: SyncFixture):
+    """Match-filter then run the single-stage NCC detector.
 
-    Returns (coarse, fine); fine is None when coarse detection falls below
-    MIN_DETECTION_CONFIDENCE.
+    Mirrors RXPipeline.detect() with two_stage_sync=False: full-buffer
+    cross-correlation against the long-ZC reference, NCC threshold gate,
+    half-window CFO estimate.
 
-    Note: short_preamble_nsym=23 gives L=184 > N-1=128, so the filtered
-    noise has no autocorrelation at lag L and false-positive rejection is
-    reliable at the detection threshold.
+    Returns (fine, cfo_hats); both None when no detection fires.
     """
-    rx     = match_filter(rx, rrc_taps)
-    coarse = coarse_sync(rx, SAMPLE_RATE, SPS, SYNC_CFG)
-    if coarse.m_peaks.size == 0 or coarse.m_peaks[0] < MIN_DETECTION_CONFIDENCE:
-        return coarse, None
-    fine = fine_timing(
-        rx, long_ref,
-        coarse.d_hats[:1], coarse.cfo_hats[:1],
-        SAMPLE_RATE, SPS, SYNC_CFG,
+    rx_filtered  = match_filter(rx, ch.rrc_taps)
+    fine, cfos   = full_buffer_xcorr_sync(
+        rx_filtered, ch.long_ref, ch.long_ref_rev,
+        MIN_NCC, SAMPLE_RATE,
     )
-    return coarse, fine
+    if fine.sample_idxs.size == 0:
+        return None, None
+    return fine, cfos
 
 
 def _expected_fine_sample() -> int:
     """Sample index of the long-preamble start after match-filtering.
 
-    TX and RX RRC group delays cancel in the matched-filtered stream.
+    TX and RX RRC group delays cancel in the matched-filtered stream, so the
+    long preamble starts at SAMPLE_OFFSET + (short_total_syms * SPS).
     """
     return (
         SAMPLE_OFFSET
@@ -225,7 +232,7 @@ def _expected_fine_sample() -> int:
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
 def test_detection_rate(cfo_hz: int, channel: SyncFixture) -> None:
     """>=90% of frames are detected over N_TRIALS Monte-Carlo trials."""
-    if cfo_hz > COARSE_CFO_RANGE_HZ * 0.95:
+    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     detects = 0
@@ -234,7 +241,7 @@ def test_detection_rate(cfo_hz: int, channel: SyncFixture) -> None:
         rx  = _channel_model(channel, cfo_hz, seed).apply(
             _prepend_zeros(_make_frame(rng, channel.rrc_taps))
         )
-        _, fine = _run_sync(rx, channel.long_ref, channel.rrc_taps)
+        fine, _ = _run_sync(rx, channel)
         detects += fine is not None
 
     rate = detects / N_TRIALS
@@ -246,8 +253,8 @@ def test_detection_rate(cfo_hz: int, channel: SyncFixture) -> None:
 
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
 def test_cfo_accuracy(cfo_hz: int, channel: SyncFixture) -> None:
-    """Median CFO estimation error < 200 Hz over N_TRIALS trials."""
-    if cfo_hz > COARSE_CFO_RANGE_HZ * 0.95:
+    """Median CFO estimation error < 2 kHz over N_TRIALS trials."""
+    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     errors: list[float] = []
@@ -256,9 +263,9 @@ def test_cfo_accuracy(cfo_hz: int, channel: SyncFixture) -> None:
         rx  = _channel_model(channel, cfo_hz, seed).apply(
             _prepend_zeros(_make_frame(rng, channel.rrc_taps))
         )
-        coarse, fine = _run_sync(rx, channel.long_ref, channel.rrc_taps)
+        fine, cfos = _run_sync(rx, channel)
         if fine is not None:
-            errors.append(abs(float(coarse.cfo_hats[0]) - cfo_hz))
+            errors.append(abs(float(cfos[0]) - cfo_hz))
 
     assert errors, "no frames detected -- cannot evaluate CFO accuracy"
     median_err = float(np.median(errors))
@@ -273,7 +280,7 @@ def test_cfo_accuracy(cfo_hz: int, channel: SyncFixture) -> None:
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
 def test_timing_alignment(cfo_hz: int, channel: SyncFixture) -> None:
     """Fine timing lands on the correct sample grid in >=95% of detections."""
-    if cfo_hz > COARSE_CFO_RANGE_HZ * 0.95:
+    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     expected_fine = _expected_fine_sample()
@@ -283,7 +290,7 @@ def test_timing_alignment(cfo_hz: int, channel: SyncFixture) -> None:
         rx  = _channel_model(channel, cfo_hz, seed).apply(
             _prepend_zeros(_make_frame(rng, channel.rrc_taps))
         )
-        _, fine = _run_sync(rx, channel.long_ref, channel.rrc_taps)
+        fine, _ = _run_sync(rx, channel)
         if fine is None:
             continue
         detects += 1
@@ -294,29 +301,29 @@ def test_timing_alignment(cfo_hz: int, channel: SyncFixture) -> None:
     assert rate >= MIN_ALIGNED_RATE, f"aligned {rate:.0%} < {MIN_ALIGNED_RATE:.0%}"
 
 # ---------------------------------------------------------------------------
-# 4. Cross-correlation peak quality
+# 4. Cross-correlation peak quality (NCC)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
-def test_peak_ratio(cfo_hz: int, channel: SyncFixture) -> None:
-    """Median peak-to-mean cross-correlation ratio > 5.0."""
-    if cfo_hz > COARSE_CFO_RANGE_HZ * 0.95:
+def test_peak_ncc(cfo_hz: int, channel: SyncFixture) -> None:
+    """Median normalized cross-correlation > MIN_PEAK_NCC at the detected peak."""
+    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
-    ratios: list[float] = []
+    nccs: list[float] = []
     for seed in range(N_TRIALS):
         rng = np.random.default_rng(seed)
         rx  = _channel_model(channel, cfo_hz, seed).apply(
             _prepend_zeros(_make_frame(rng, channel.rrc_taps))
         )
-        _, fine = _run_sync(rx, channel.long_ref, channel.rrc_taps)
+        fine, _ = _run_sync(rx, channel)
         if fine is not None:
-            ratios.append(float(fine.peak_ratios[0]))
+            nccs.append(float(fine.peak_ratios[0]))
 
-    assert ratios, "no frames detected -- cannot evaluate peak ratio"
-    median_ratio = float(np.median(ratios))
-    assert median_ratio > MIN_PEAK_RATIO, (
-        f"median peak_ratio {median_ratio:.1f} <= {MIN_PEAK_RATIO}"
+    assert nccs, "no frames detected -- cannot evaluate NCC"
+    median_ncc = float(np.median(nccs))
+    assert median_ncc > MIN_PEAK_NCC, (
+        f"median NCC {median_ncc:.2f} <= {MIN_PEAK_NCC:.2f}"
     )
 
 # ---------------------------------------------------------------------------
@@ -324,7 +331,7 @@ def test_peak_ratio(cfo_hz: int, channel: SyncFixture) -> None:
 # ---------------------------------------------------------------------------
 
 def test_false_positive_rejection(channel: SyncFixture) -> None:
-    """Coarse sync must not fire on noise-only buffers at the configured threshold."""
+    """Single-stage sync must not fire on noise-only buffers at the NCC gate."""
     noise_len = (
         SAMPLE_OFFSET
         + N_PAYLOAD_SYMBOLS * SPS
@@ -336,14 +343,13 @@ def test_false_positive_rejection(channel: SyncFixture) -> None:
             rng.standard_normal(noise_len) + 1j * rng.standard_normal(noise_len)
         ).astype(np.complex64)
         filtered = match_filter(noise, channel.rrc_taps)
-        result   = coarse_sync(filtered, SAMPLE_RATE, SPS, SYNC_CFG)
-        spurious = (
-            result.m_peaks.size > 0
-            and result.m_peaks[0] >= MIN_DETECTION_CONFIDENCE
+        fine, _  = full_buffer_xcorr_sync(
+            filtered, channel.long_ref, channel.long_ref_rev,
+            MIN_NCC, SAMPLE_RATE,
         )
-        assert not spurious, (
+        assert fine.sample_idxs.size == 0, (
             f"false positive on noise-only buffer (seed={10_000 + s}, "
-            f"peak={result.m_peaks[0]:.3f})"
+            f"NCC={float(fine.peak_ratios.max()) if fine.peak_ratios.size else 0.0:.3f})"
         )
 
 # ---------------------------------------------------------------------------
@@ -357,7 +363,7 @@ def test_multi_frame_detection(cfo_hz: int, channel: SyncFixture) -> None:
     Uses Monte-Carlo rather than a single fixed seed so a single unlucky
     noise realisation cannot cause a spurious failure at low SNR.
     """
-    if cfo_hz > COARSE_CFO_RANGE_HZ * 0.95:
+    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     both_detected = 0
@@ -375,12 +381,14 @@ def test_multi_frame_detection(cfo_hz: int, channel: SyncFixture) -> None:
         ])
         buf          = _channel_model(channel, cfo_hz, seed).apply(tx)
         buf_filtered = match_filter(buf, channel.rrc_taps)
-        cm           = coarse_sync(buf_filtered, SAMPLE_RATE, SPS, SYNC_CFG)
+        fine, cfos   = full_buffer_xcorr_sync(
+            buf_filtered, channel.long_ref, channel.long_ref_rev,
+            MIN_NCC, SAMPLE_RATE,
+        )
 
         good = [
-            i for i in range(cm.m_peaks.size)
-            if cm.m_peaks[i] >= MIN_DETECTION_CONFIDENCE
-            and abs(float(cm.cfo_hats[i]) - cfo_hz) < MAX_CFO_ERROR_HZ
+            i for i in range(fine.sample_idxs.size)
+            if abs(float(cfos[i]) - cfo_hz) < MAX_CFO_ERROR_HZ
         ]
         if len(good) < 2:
             continue
@@ -399,7 +407,7 @@ def test_multi_frame_detection(cfo_hz: int, channel: SyncFixture) -> None:
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
 def test_ota_combined(cfo_hz: int, channel: SyncFixture) -> None:
     """Full over-the-air impairments: phase noise, AGC, SRO, clipping."""
-    if cfo_hz > COARSE_CFO_RANGE_HZ * 0.95:
+    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     expected_fine = _expected_fine_sample()
@@ -441,17 +449,17 @@ def test_ota_combined(cfo_hz: int, channel: SyncFixture) -> None:
         + 1j * np.clip(np.imag(rx), -clip, clip)
     ).astype(np.complex64)
 
-    co, fo = _run_sync(rx, channel.long_ref, channel.rrc_taps)
+    fine, cfos = _run_sync(rx, channel)
 
-    assert fo is not None, "OTA combined: frame not detected"
-    assert abs(float(co.cfo_hats[0]) - cfo_hz) < OTA_MAX_CFO_ERROR_HZ, (
-        f"OTA CFO error {abs(float(co.cfo_hats[0]) - cfo_hz):.0f} Hz"
+    assert fine is not None, "OTA combined: frame not detected"
+    assert abs(float(cfos[0]) - cfo_hz) < OTA_MAX_CFO_ERROR_HZ, (
+        f"OTA CFO error {abs(float(cfos[0]) - cfo_hz):.0f} Hz"
     )
-    assert abs(int(fo.sample_idxs[0]) - expected_fine) % SPS <= 1, (
+    assert abs(int(fine.sample_idxs[0]) - expected_fine) % SPS <= 1, (
         "OTA: fine timing off sample grid"
     )
-    assert fo.peak_ratios[0] > MIN_PEAK_RATIO, (
-        f"OTA: peak_ratio {fo.peak_ratios[0]:.1f}"
+    assert fine.peak_ratios[0] > MIN_NCC, (
+        f"OTA: NCC {fine.peak_ratios[0]:.2f} <= gate {MIN_NCC:.2f}"
     )
 
 # ---------------------------------------------------------------------------
@@ -477,7 +485,7 @@ def test_phase_estimate_at_payload(
         seed              = 42,
     )).apply(rx)
 
-    coarse, fine = _run_sync(rx, channel.long_ref, channel.rrc_taps)
+    fine, _ = _run_sync(rx, channel)
     assert fine is not None, (
         f"cfo={cfo_hz} Hz, phase={np.degrees(initial_phase):.0f} deg: not detected"
     )
@@ -497,9 +505,9 @@ def test_phase_estimate_at_payload(
 # ------------------------------------------------------------------------------
 def test_spurious_detection_rate(channel: SyncFixture) -> None:
     """Measure spurious detection rate in two scenarios:
-    1. Noise-only buffers (energy gate calibrated against noise floor).
-    2. Two-frame buffers (energy gate calibrated against preamble power —
-       the realistic operating condition).
+    1. Noise-only buffers.
+    2. Two-frame buffers (count any detection whose CFO is garbage — these
+       must be sidelobes / payload bits accidentally correlating with the ZC).
     Run with pytest -s to see output.
     """
     noise_len = SAMPLE_OFFSET + N_PAYLOAD_SYMBOLS * SPS + len(channel.long_ref)
@@ -511,10 +519,14 @@ def test_spurious_detection_rate(channel: SyncFixture) -> None:
         noise = channel.noise_scale * (
             rng.standard_normal(noise_len) + 1j * rng.standard_normal(noise_len)
         ).astype(np.complex64)
-        result = coarse_sync(match_filter(noise, channel.rrc_taps), SAMPLE_RATE, SPS, SYNC_CFG)
-        noise_spurious += result.m_peaks.size
+        fine, _ = full_buffer_xcorr_sync(
+            match_filter(noise, channel.rrc_taps),
+            channel.long_ref, channel.long_ref_rev,
+            MIN_NCC, SAMPLE_RATE,
+        )
+        noise_spurious += fine.sample_idxs.size
 
-    # --- 2. Two-frame buffers: count detections that fall in the guard ---
+    # --- 2. Two-frame buffers: count detections with garbage CFO ---
     guard_spurious = 0
     for seed in range(N_TRIALS):
         rng = np.random.default_rng(seed)
@@ -532,12 +544,14 @@ def test_spurious_detection_rate(channel: SyncFixture) -> None:
             _channel_model(channel, 0, seed).apply(tx),
             channel.rrc_taps,
         )
-        cm = coarse_sync(buf_filtered, SAMPLE_RATE, SPS, SYNC_CFG)
+        fine, cfos = full_buffer_xcorr_sync(
+            buf_filtered, channel.long_ref, channel.long_ref_rev,
+            MIN_NCC, SAMPLE_RATE,
+        )
 
-        # Any detection whose CFO is garbage is spurious
         guard_spurious += sum(
-            1 for i in range(cm.m_peaks.size)
-            if abs(float(cm.cfo_hats[i])) >= MAX_CFO_ERROR_HZ
+            1 for i in range(fine.sample_idxs.size)
+            if abs(float(cfos[i])) >= MAX_CFO_ERROR_HZ
         )
 
     print(f"\nFalse detection test:"
@@ -548,24 +562,14 @@ def test_spurious_detection_rate(channel: SyncFixture) -> None:
 # ---------------------------------------------------------------------------
 # 9. False-positive rejection on colored noise (LO-leakage model)
 #
-# Problem: the Schmidl-Cox metric M(d) can exceed the 0.5 threshold when
-# the input contains a narrowband tone (LO leakage from the carrier).  A
-# pure or near-pure tone makes P(d) ≈ R(d), so M(d) ≈ 1 for all d.  The
-# energy gate does not help because the tone has genuine energy.
-#
-# Fix: the fine-timing cross-correlation with the long ZC reference gives a
-# peak-to-mean ratio that is high (>4) for real preambles and low (1.5–2.3)
-# for tones/colored noise — adding a fine_peak_ratio_min gate in detect()
-# suppresses these false positives.
-#
-# This test validates that: even when coarse sync fires on a tone+noise
-# mixture, the fine peak_ratio is always below SYNC_CFG.fine_peak_ratio_min.
+# A pure tone correlated against a long Zadoff-Chu reference gives
+# |sum exp(jωm)·conj(zc[m])|² ≈ ||zc||² / N_zc (flat-spectrum ZC), so the
+# normalized cross-correlation collapses to ~1/N_ref ≈ 0.003 — well below
+# the NCC gate.  This is the structural reason single-stage sync is robust
+# to LO leakage where Schmidl-Cox needed an extra gate.  Test asserts no
+# detections fire on tone+noise even with a +15 dB LO excess.
 # ---------------------------------------------------------------------------
 
-# LO tone excess over the broadband noise floor.  15 dB is aggressive enough
-# to reliably push M(d) above the 0.5 coarse threshold so the test actually
-# exercises the fine-timing gate (not just trivially passes because coarse
-# never fires).
 _LO_EXCESS_DB: float = 15.0
 
 # Typical Pluto LO leakage frequencies relative to the tuned centre: DC,
@@ -580,8 +584,7 @@ _LO_OFFSETS_HZ = [
 
 @pytest.mark.parametrize("lo_hz", _LO_OFFSETS_HZ)
 def test_false_positive_colored_noise(lo_hz: int, channel: SyncFixture) -> None:
-    """Coarse sync may trigger on tone+noise; fine peak_ratio must stay below
-    the gate threshold for all such spurious candidates."""
+    """Single-stage NCC must not fire on tone+noise (LO leakage model)."""
     noise_len = (
         SAMPLE_OFFSET
         + N_PAYLOAD_SYMBOLS * SPS
@@ -599,20 +602,14 @@ def test_false_positive_colored_noise(lo_hz: int, channel: SyncFixture) -> None:
         colored = (base + lo_tone).astype(np.complex64)
 
         filtered = match_filter(colored, channel.rrc_taps)
-        coarse   = coarse_sync(filtered, SAMPLE_RATE, SPS, SYNC_CFG)
-        if coarse.m_peaks.size == 0:
-            continue  # coarse didn't fire — trivially fine
-
-        # Coarse fired: every candidate must be rejected by fine
-        fine = fine_timing(
-            filtered, channel.long_ref,
-            coarse.d_hats, coarse.cfo_hats,
-            SAMPLE_RATE, SPS, SYNC_CFG,
+        fine, _  = full_buffer_xcorr_sync(
+            filtered, channel.long_ref, channel.long_ref_rev,
+            MIN_NCC, SAMPLE_RATE,
         )
-        assert all(float(r) < float(SYNC_CFG.fine_peak_ratio_min) for r in fine.peak_ratios), (
+        assert fine.sample_idxs.size == 0, (
             f"lo_hz={lo_hz} Hz, snr={channel.snr_db}dB, seed={seed}: "
-            f"fine peak_ratios {fine.peak_ratios} >= gate {SYNC_CFG.fine_peak_ratio_min} "
-            f"on colored noise (LO +{_LO_EXCESS_DB}dB)"
+            f"NCC peaks {fine.peak_ratios} fired on colored noise "
+            f"(LO +{_LO_EXCESS_DB}dB)"
         )
 
 # ---------------------------------------------------------------------------

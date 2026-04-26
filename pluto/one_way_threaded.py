@@ -563,6 +563,7 @@ def run_rx():
 
                     status.set(0, f"  [RX] #{n_total:>6d}  seq={seq:>10d}  valid=True   "
                                   f"(ok={n_valid}, dropped≈{n_dropped})  "
+                                  f"q={stream._q.qsize():>3d}/{stream._q.maxsize}  "
                                   f"rate={_fmt_rate(rate.rate_bps)}  "
                                   f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
 
@@ -723,6 +724,7 @@ else:  # "both" — original threaded loopback behaviour
                     rx_rate.add(pkt.length)
                     status.set(1, f"  [RX] #{n_total:>6d}  seq={seq:>10d}  valid=True   "
                                   f"(ok={n_valid})  "
+                                  f"q={stream._q.qsize():>3d}/{stream._q.maxsize}  "
                                   f"rate={_fmt_rate(rx_rate.rate_bps)}  "
                                   f"avg={_fmt_rate(rx_rate.avg_bps)}  "
                                   f"total={_fmt_bytes(rx_rate.total_bytes)}")
