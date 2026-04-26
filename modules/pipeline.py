@@ -68,8 +68,8 @@ class PipelineConfig:
     # consecutive constant-symbol BPSK pad, which gives the NDA TED nothing to
     # lock onto.  At BnTs >= 0.001 the loop wanders during this stretch and
     # corrupts the parity symbols that follow.
-    GARDNER_BN_TS: float = 0.0005
-    GARDNER_ZETA: float = 0.707
+    GARDNER_BN_TS: float = 0.0025
+    GARDNER_ZETA: float = 2.000
     GARDNER_L: int = 2             # TED smoothing half-length (window = 2L+1 symbols)
 
     pulse_shaping: bool = True
