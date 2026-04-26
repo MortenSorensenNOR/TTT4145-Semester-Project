@@ -50,10 +50,10 @@ logging.basicConfig(level=logging.INFO)
 # ---------------------------------------------------------------------------
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--gain",         type=float, default=-30,           help="TX gain in dB (default: -30)")
-parser.add_argument("--payload",      type=int,   default=10,            help="Payload bytes (default: 10)")
+parser.add_argument("--gain",         type=float, default=-10,           help="TX gain in dB (default: -10)")
+parser.add_argument("--payload",      type=int,   default=1000,          help="Payload bytes (default: 1000)")
 parser.add_argument("--packets",      type=int,   default=20,            help="Number of packets to transmit (default: 20)")
-parser.add_argument("--interval",     type=float, default=200,           help="Inter-batch gap in ms (default: 200)")
+parser.add_argument("--interval",     type=float, default=0,             help="Inter-batch gap in ms (default: 0)")
 parser.add_argument("--batch-size",   type=int,   default=8,             help="Packets per TX batch/window (default: 8)")
 parser.add_argument("--ip",           type=str,   default="192.168.2.1", help="PlutoSDR IP (default: 192.168.2.1)")
 # parser.add_argument("--hardware-rrc", type=bool,  default=False,         help="Skip software RRC; use FPGA hardware RRC filter (requires custom bitstream)")

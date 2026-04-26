@@ -230,8 +230,8 @@ def main() -> None:
     parser.add_argument("--tun",        default="pluto0",   help="TUN interface name")
     parser.add_argument("--mtu",        type=int, default=MAX_PACKET_SIZE_BYTES,
                         help="TUN MTU in bytes")
-    parser.add_argument("--tx-gain",    type=float, default=-20,
-                        help="TX hardware gain in dB (default: -20)")
+    parser.add_argument("--tx-gain",    type=float, default=-10,
+                        help="TX hardware gain in dB (default: -10)")
     parser.add_argument("--cfo-offset", type=int, default=None,
                         help="Manual override for the RX-LO CFO correction in "
                              "Hz. Default: value from pluto/cfo_calibration.json "
@@ -248,18 +248,18 @@ def main() -> None:
                              "= lower latency, larger = better throughput. (default: 16)")
     parser.add_argument("--tx-buf-mult", type=int, default=8,
                         help="TX buffer = mult × next-pow2(frame_len) (default: 8)")
-    parser.add_argument("--tx-queue-depth", type=int, default=1,
+    parser.add_argument("--tx-queue-depth", type=int, default=16,
                         help="Packets buffered between ARQ and the TX packer "
                              "thread. Smaller = tighter backpressure and lower "
-                             "latency; larger = smoother bursts. (default: 1)")
-    parser.add_argument("--rx-queue-depth", type=int, default=2,
+                             "latency; larger = smoother bursts. (default: 16)")
+    parser.add_argument("--rx-queue-depth", type=int, default=16,
                         help="Raw-buffer prefetch depth between the SDR DMA and "
-                             "the RX DSP pipeline. (default: 2)")
-    parser.add_argument("--window",     type=int, default=15,
+                             "the RX DSP pipeline. (default: 16)")
+    parser.add_argument("--window",     type=int, default=7,
                         help="ARQ window size (< SEQ_SPACE/2 = 16). Smaller = "
                              "cleaner ping latency and less retransmit "
                              "cascade; larger = better iperf throughput on a "
-                             "healthy link. (default: 15)")
+                             "healthy link. (default: 7)")
     parser.add_argument("--retransmit-timeout", type=float, default=0.5,
                         help="ARQ retransmit timeout in seconds. Should sit "
                              "~2× above steady-state RTT: too short → false "

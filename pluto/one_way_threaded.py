@@ -216,10 +216,10 @@ def _install_live_logging(status: LiveStatus, level=logging.INFO) -> None:
 # ---------------------------------------------------------------------------
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--gain",     type=float, default=-30,           help="TX gain in dB (default: -30)")
-parser.add_argument("--payload",  type=int,   default=10,            help="Payload bytes (default: 10)")
+parser.add_argument("--gain",     type=float, default=-10,           help="TX gain in dB (default: -10)")
+parser.add_argument("--payload",  type=int,   default=1000,          help="Payload bytes (default: 1000)")
 parser.add_argument("--packets",  type=int,   default=20,            help="Number of packets per TX burst (default: 20)")
-parser.add_argument("--interval", type=float, default=200,           help="Inter-burst gap in ms (default: 200)")
+parser.add_argument("--interval", type=float, default=0,             help="Inter-burst gap in ms (default: 0)")
 parser.add_argument("--node",     type=str,   default="A",           help="Node identity A or B; picks default TX/RX IPs from NODE_RADIO_IPS")
 parser.add_argument("--tx-ip",    type=str,   default=None,          help="Override TX Pluto IP (default: derived from --node)")
 parser.add_argument("--rx-ip",    type=str,   default=None,          help="Override RX Pluto IP (default: derived from --node)")
