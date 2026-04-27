@@ -234,6 +234,12 @@ parser.add_argument("--variable", action="store_true", help="Randomize payload s
 parser.add_argument("--min-payload", type=int, default=4, help="Minimum payload bytes when --variable is set (default: 4, must hold seq number)")
 parser.add_argument("--tx-buf-mult", type=int, default=8, help="TX buffer size as multiple of next-power-of-2 frame length (default: 8)")
 parser.add_argument("--hardware-rrc", action="store_true", help="Use the FPGA hardware RRC/4x interpolation path on TX (toggles the pluto_custom firmware GPIO). TX only — RX always uses software match filter.")
+parser.add_argument("--save-rx-buf", type=str, default=None,
+                    help="Directory to dump raw RX buffers (.npz) for offline replay by "
+                         "scripts/sweep_*_params.py. RX mode only.")
+parser.add_argument("--save-n",      type=int, default=4,
+                    help="How many RX buffers to dump (default: 4). Only buffers that "
+                         "produced ≥1 detected packet are saved.")
 args = parser.parse_args()
 
 if args.mode not in ("tx", "rx", "both"):
@@ -485,6 +491,14 @@ def run_rx():
     _proc_times: list[float] = []
     _buf_count  = 0
 
+    # --- optional raw-buffer dump for offline sweep replay ---
+    _save_dir: Path | None = None
+    _saved_n  = 0
+    if args.save_rx_buf:
+        _save_dir = Path(args.save_rx_buf)
+        _save_dir.mkdir(parents=True, exist_ok=True)
+        status.log(f"  [RX] dumping up to {args.save_n} buffers to {_save_dir}/")
+
     try:
         while True:
             try:
@@ -499,10 +513,45 @@ def run_rx():
             raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
 
             _t0 = time.perf_counter()
+            _rx_search_from = search_from
             packets, max_det = rx_pipe.receive(raw, search_from=search_from)
             _proc_ms = (time.perf_counter() - _t0) * 1e3
             _proc_times.append(_proc_ms)
             _buf_count += 1
+
+            if (_save_dir is not None and _saved_n < args.save_n
+                and len(packets) > 0):
+                _n_valid_buf = sum(1 for p in packets if p.valid)
+                # Ground truth for offline replay: seq_nums of every valid
+                # packet decoded during capture. Sweep scripts compare each
+                # combo's decoded seqs against this set to catch silent LDPC
+                # divergence (CRC-16 false-pass prob is ~2⁻¹⁶ but non-zero).
+                _seqs_in_buf: list[int] = []
+                for p in packets:
+                    if not p.valid or p.payload is None or p.payload.size < 32:
+                        continue
+                    sb = np.packbits(p.payload[:32].astype(np.uint8))
+                    _seqs_in_buf.append(
+                        (int(sb[0]) << 24) | (int(sb[1]) << 16)
+                        | (int(sb[2]) << 8) | int(sb[3])
+                    )
+                _path = _save_dir / f"rxbuf_{_saved_n:04d}.npz"
+                np.savez(
+                    _path,
+                    samples=raw.astype(np.complex64),
+                    search_from=np.int64(_rx_search_from),
+                    sample_rate=np.int64(pipe_cfg.SAMPLE_RATE),
+                    sps=np.int64(pipe_cfg.SPS),
+                    mod_scheme=pipe_cfg.MOD_SCHEME.name,
+                    code_rate=pipe_cfg.CODING_RATE.name,
+                    n_valid_in_buf=np.int64(_n_valid_buf),
+                    n_total_in_buf=np.int64(len(packets)),
+                    seq_nums=np.array(_seqs_in_buf, dtype=np.int64),
+                )
+                _saved_n += 1
+                status.log(f"  [RX] saved {_path.name} "
+                           f"({len(raw)} samples, {_n_valid_buf}/{len(packets)} valid, "
+                           f"seqs={_seqs_in_buf})")
             if _buf_count % 500 == 0:
                 buf_dur_ms = rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3
                 status.log(f"  [RX perf] proc={np.mean(_proc_times):.2f} ms avg / "

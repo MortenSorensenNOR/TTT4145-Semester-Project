@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineConfig:
-    SAMPLE_RATE: int = 8_000_000
+    SAMPLE_RATE: int = 6_000_000
     CENTER_FREQ: int = 2_410_000_000
     SPS: int = 4
     SPAN: int = 8
@@ -62,7 +62,12 @@ class PipelineConfig:
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
-    COSTAS_CONFIG = CostasConfig(0.008) # Bn=0.008 empirically optimal for PSK8 over coax
+    COSTAS_CONFIG = CostasConfig(
+        loop_noise_bandwidth_normalized=0.008,
+        # damping_factor=1.400
+    )
+    # Bn=0.008 empirically optimal for PSK8 over coax
+
     # NDA Gardner (Rice 2009) — see modules/gardner_ted/gardner.py.
     # BnTs must stay narrow: with LDPC the systematic-bits region holds 1500+
     # consecutive constant-symbol BPSK pad, which gives the NDA TED nothing to

@@ -8,6 +8,7 @@ wheels/
 *.so
 *.pyd
 *.log
+*.npz
 
 # Local machine overrides (e.g. piwheels on Pi)
 uv.toml

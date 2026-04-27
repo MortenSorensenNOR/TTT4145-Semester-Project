@@ -39,7 +39,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from modules.frame_constructor.frame_constructor import ModulationSchemes
-from modules.modulators import BPSK, PSK8, QPSK
+from modules.modulators import BPSK, QPSK, PSK8, PSK16
 from modules.pipeline import PipelineConfig, RXPipeline
 
 
@@ -55,6 +55,7 @@ _MOD_INSTANCE = {
     ModulationSchemes.BPSK: BPSK(),
     ModulationSchemes.QPSK: QPSK(),
     ModulationSchemes.PSK8: PSK8(),
+    ModulationSchemes.PSK16: PSK16(),
 }
 
 

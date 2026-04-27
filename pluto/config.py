@@ -50,7 +50,7 @@ def configure_rx(
     """Apply standard RX settings to an SDR."""
     sdr.gain_control_mode_chan0 = "slow_attack"
     # sdr.gain_control_mode_chan0 = "manual"
-    # sdr.rx_hardwaregain_chan0 = 30
+    # sdr.rx_hardwaregain_chan0 = 50
     sdr.rx_lo = int(freq)
     sdr.sample_rate = sample_rate
     sdr.rx_rf_bandwidth = int(sample_rate)
@@ -69,12 +69,7 @@ def configure_tx(
 ) -> None:
     """Apply standard TX settings to an SDR."""
 
-    # sdr.tx_hardwaregain_chan0 = -70
-    # sdr.tx_lo = int(5.2e9)  # Sample rate change BLAAASTS noise on tx that is above the tx power of the pluto
-    #                         # therefore start up the tx with a different frequency when we set sample rate, then switch back to 2.4 ghz after
     sdr.sample_rate = sample_rate
-    # time.sleep(1)
-
     sdr.tx_rf_bandwidth = int(sample_rate)
     sdr.tx_lo = int(freq)
     sdr.tx_hardwaregain_chan0 = gain
