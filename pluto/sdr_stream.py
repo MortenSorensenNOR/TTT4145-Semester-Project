@@ -31,13 +31,19 @@ TxStream — continuous queue-based transmit
         stream.stop()
 """
 
+import os
 import queue
+import time
 import threading
+import logging
+logger = logging.getLogger(__name__)
+
 
 import numpy as np
 import adi
 
 from pluto.config import DAC_SCALE
+from modules.parallel_pipeline import _apply_cpu_affinity
 
 _SCALE = np.float32(2.0 / DAC_SCALE)
 
@@ -80,6 +86,7 @@ class RxStream:
                    discard) before the background thread is started — drains
                    stale DMA data and lets the AGC settle.
         """
+
         for _ in range(flush):
             self._rx()
         self._stop.clear()
@@ -272,5 +279,9 @@ class TxStream:
             # — an explicit time.sleep() after tx() was causing repeated
             # DMA underruns between buffers and silently dropping ~5–10 %
             # of packets on coax.
+            t0 = time.perf_counter()
             self._sdr.tx(buf)
+            t1 = time.perf_counter()
+
+            logger.error(f"Time for sdr.tx: {(t1 - t0) * 1000:.2f} ms")
             self._bufs_sent += 1
