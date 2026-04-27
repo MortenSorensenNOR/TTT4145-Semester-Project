@@ -85,11 +85,20 @@ py::array_t<c64> nda_symb_sync(
     // SoA layout — real and imag separate for NEON vectorisation
     // Prepend one zero sample (matches the Python hstack([0], z))
     std::vector<f32> re(N + 1, 0.f), im(N + 1, 0.f);
+    int n_total = N + 1;
+
+    // Output size depends on the inner loop's progress, so accumulate in
+    // std::vectors here and allocate the py::array_t once we know the length.
+    int max_out = N / Ns + 2;
+    std::vector<f32> out_r(max_out, 0.f), out_i(max_out, 0.f);
+    int mm = 1;  // output write index (index 0 left as zero, matches Python)
+
+    {
+    py::gil_scoped_release nogil;
     for (int i = 0; i < N; ++i) {
         re[i + 1] = in(i).real();
         im[i + 1] = in(i).imag();
     }
-    int n_total = N + 1;
 
     // Loop filter gains (Rice eq. 8.89)
     f32 K0 = -1.f;
@@ -97,11 +106,6 @@ py::array_t<c64> nda_symb_sync(
     f32 denom = zeta + 1.f / (4.f * zeta);
     f32 K1 = 4.f * zeta / denom * BnTs / Ns / Kp / K0;
     f32 K2 = 4.f / (denom * denom) * (BnTs / Ns) * (BnTs / Ns) / Kp / K0;
-
-    // Output buffers (upper-bound size)
-    int max_out = N / Ns + 2;
-    std::vector<f32> out_r(max_out, 0.f), out_i(max_out, 0.f);
-    int mm = 1;  // output write index (index 0 left as zero, matches Python)
 
     // c1 smoothing buffer (circular, length 2*L+1)
     int  buf_len  = 2 * L + 1;
@@ -198,26 +202,31 @@ py::array_t<c64> nda_symb_sync(
             mu_next   = mu;
         }
     }
+    }  // end gil_scoped_release
 
     // Trim to actual output length (mm-1 valid symbols, index 1..mm-1)
     int out_len = mm - 1;
     auto result = py::array_t<c64>(out_len);
     auto ptr    = result.mutable_unchecked<1>();
 
-    // Compute std for normalisation (matches Python zz /= np.std(zz))
-    f32 mean_r = 0.f, mean_i = 0.f;
-    for (int i = 1; i <= out_len; ++i) { mean_r += out_r[i]; mean_i += out_i[i]; }
-    mean_r /= out_len; mean_i /= out_len;
-    f32 var = 0.f;
-    for (int i = 1; i <= out_len; ++i) {
-        f32 dr = out_r[i] - mean_r, di = out_i[i] - mean_i;
-        var += dr*dr + di*di;
-    }
-    f32 std_val = std::sqrt(var / out_len);
-    if (std_val < 1e-10f) std_val = 1.f;
+    {
+        py::gil_scoped_release nogil;
 
-    for (int i = 0; i < out_len; ++i)
-        ptr(i) = c64((out_r[i+1]) / std_val, (out_i[i+1]) / std_val);
+        // Compute std for normalisation (matches Python zz /= np.std(zz))
+        f32 mean_r = 0.f, mean_i = 0.f;
+        for (int i = 1; i <= out_len; ++i) { mean_r += out_r[i]; mean_i += out_i[i]; }
+        mean_r /= out_len; mean_i /= out_len;
+        f32 var = 0.f;
+        for (int i = 1; i <= out_len; ++i) {
+            f32 dr = out_r[i] - mean_r, di = out_i[i] - mean_i;
+            var += dr*dr + di*di;
+        }
+        f32 std_val = std::sqrt(var / out_len);
+        if (std_val < 1e-10f) std_val = 1.f;
+
+        for (int i = 0; i < out_len; ++i)
+            ptr(i) = c64((out_r[i+1]) / std_val, (out_i[i+1]) / std_val);
+    }
 
     return result;
 }

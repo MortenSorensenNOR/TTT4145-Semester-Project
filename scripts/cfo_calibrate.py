@@ -8,18 +8,19 @@ For each air path (A_TX → B_RX, B_TX → A_RX) the script:
   4. Subtracts the intentional baseband offset — what's left is the LO
      frequency error between the two oscillators.
 
-The two measurements are medianed across several captures and saved to
-``pluto/cfo_calibration.json``. The bridge reads that file at startup and
-auto-applies the correction to each node's RX LO, so you don't have to
-pass ``--cfo-offset`` every run.
+The two measurements are medianed across several captures and written
+into the ``cfo`` block of ``pluto/setup.json``. The bridge reads the
+file at startup and auto-applies the correction to each node's RX LO,
+so you don't have to pass ``--cfo-offset`` every run.
 
 Usage::
 
     uv run python scripts/cfo_calibrate.py            # measure both directions
     uv run python scripts/cfo_calibrate.py --captures 20
 
-Assumes all four Plutos are reachable from this host at the IPs in
-``pluto.config.NODE_RADIO_IPS`` (same layout as the bridge).
+Assumes all four Plutos are reachable from this host at the IPs given
+in the ``nodes`` block of ``pluto/setup.json`` (same layout the bridge
+uses).
 """
 
 from __future__ import annotations
@@ -34,14 +35,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pluto.cfo_config import CFO_CONFIG_PATH, CFOCalibration, save
 from pluto.config import (
     DAC_SCALE,
     FREQ_A_TO_B,
     FREQ_B_TO_A,
-    NODE_RADIO_IPS,
     PIPELINE,
 )
+from pluto.setup_config import SETUP_PATH, CFOCalibration, load_or_die as load_setup, save_cfo
 
 SAMPLE_RATE    = PIPELINE.SAMPLE_RATE
 BUF_SIZE       = 131_072         # ~30 Hz FFT bin at 4 Msps — fine enough for LO drift
@@ -141,16 +141,17 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--captures", type=int, default=10,
                         help="Buffers to median over, per direction (default: 10)")
-    parser.add_argument("--output",   type=Path, default=CFO_CONFIG_PATH,
-                        help=f"Output JSON path (default: {CFO_CONFIG_PATH})")
+    parser.add_argument("--output",   type=Path, default=SETUP_PATH,
+                        help=f"Setup JSON path to update (default: {SETUP_PATH})")
     parser.add_argument("--dry-run",  action="store_true",
                         help="Measure and print, but don't overwrite the calibration file.")
     args = parser.parse_args()
 
-    a_tx_ip = NODE_RADIO_IPS["A"]["tx"]
-    a_rx_ip = NODE_RADIO_IPS["A"]["rx"]
-    b_tx_ip = NODE_RADIO_IPS["B"]["tx"]
-    b_rx_ip = NODE_RADIO_IPS["B"]["rx"]
+    setup = load_setup(args.output)
+    a_tx_ip = setup.tx_ip("A")
+    a_rx_ip = setup.rx_ip("A")
+    b_tx_ip = setup.tx_ip("B")
+    b_rx_ip = setup.rx_ip("B")
 
     print("Opening radios:")
     print(f"  A TX @ {a_tx_ip}")
@@ -184,8 +185,8 @@ def main() -> int:
     if args.dry_run:
         print("\n[dry-run] not writing calibration file")
     else:
-        save(cal, args.output)
-        print(f"\nWrote {args.output}")
+        save_cfo(cal, args.output)
+        print(f"\nUpdated cfo block in {args.output}")
     return 0
 
 

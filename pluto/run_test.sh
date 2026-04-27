@@ -19,18 +19,20 @@
 #
 # Note: --constellation requires running RX directly (not via this script),
 #   since this script redirects RX output to a log file and backgrounds it:
-#   uv run pluto/one_way_threaded.py --ip 192.168.2.1 --mode rx --constellation
+#   uv run pluto/one_way_threaded.py --ip <RX_IP> --mode rx --constellation
 #
 # Script-only options:
 #   --duration N      Run time in seconds          (default: 60)
-#   --rx-ip IP        RX Pluto IP                  (default: 192.168.2.1)
-#   --tx-ip IP        TX Pluto IP                  (default: 192.168.3.1)
+#   --rx-ip IP        RX Pluto IP                  (default: from pluto/setup.json node A)
+#   --tx-ip IP        TX Pluto IP                  (default: from pluto/setup.json node B)
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-RX_IP="192.168.2.1"
-TX_IP="192.168.3.1"
+# Pull defaults from pluto/setup.json so the IPs follow the canonical config.
+eval "$(uv run python -m pluto.setup_config --shell-export)"
+RX_IP="${PLUTO_A_RX_IP:?missing PLUTO_A_RX_IP from setup.json}"
+TX_IP="${PLUTO_B_TX_IP:?missing PLUTO_B_TX_IP from setup.json}"
 DURATION=60
 PASSTHROUGH_ARGS=()
 

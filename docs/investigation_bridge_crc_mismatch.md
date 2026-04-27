@@ -35,12 +35,12 @@ sample-loss problem**, not a demod-quality problem.
 ## Setup
 
 - Split-radio bridge: each node has one TX Pluto and one RX Pluto
-  (`pluto/config.py:NODE_RADIO_IPS`). Connected via coax, no shared antenna,
-  so no self-interference.
+  (per-node IPs in the `nodes` block of `pluto/setup.json`). Connected via
+  coax, no shared antenna, so no self-interference.
 - Bidirectional ARQ with selective-repeat (`modules/arq.py`), MTU 1500,
   window 7, retransmit-timeout 0.15 s, arq-queue-depth 64.
-- CFO calibration is current and applied to RX LO only (see
-  `pluto/cfo_calibration.json`).
+- CFO calibration is current and applied to RX LO only (see the `cfo`
+  block of `pluto/setup.json`).
 - Tests pass (`uv run pytest tests/`).
 
 ## Reproduction

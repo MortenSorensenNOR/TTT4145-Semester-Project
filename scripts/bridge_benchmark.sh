@@ -6,12 +6,10 @@
 # so each node runs a dedicated TX radio and a dedicated RX radio. Host
 # IPs follow the 192.168.N.1 convention (even N → node A, odd N → node B).
 #
-# Needs root (netns + moving interfaces into netns).  Assumes:
-#   * Node A TX Pluto at 192.168.4.1 (host iface has 192.168.4.10)
-#   * Node A RX Pluto at 192.168.2.1 (host iface has 192.168.2.10)
-#   * Node B TX Pluto at 192.168.3.1 (host iface has 192.168.3.10)
-#   * Node B RX Pluto at 192.168.5.1 (host iface has 192.168.5.10)
-#   * Project venv at .venv/bin/python
+# Needs root (netns + moving interfaces into netns).  Pluto IPs come from
+# pluto/setup.json (loaded via `python -m pluto.setup_config --shell-export`);
+# the host-side endpoint on each Pluto USB net is the same /24 with .10 in
+# the last octet. Assumes the project venv lives at .venv/bin/python.
 #
 # Usage:
 #   sudo ./scripts/bridge_benchmark.sh                        # ping only (default)
@@ -29,8 +27,8 @@
 # stalls. Matching the cap to actual air throughput gives TCP a real back-
 # pressure signal and smooths the rate.
 #
-# CFO compensation: per-direction LO offsets are auto-loaded from
-# pluto/cfo_calibration.json — generate it once with
+# CFO compensation: per-direction LO offsets live in the cfo block of
+# pluto/setup.json — generate them once with
 #   uv run python scripts/cfo_calibrate.py
 # and the bridge applies the correction to each node's RX LO on startup.
 #
@@ -57,17 +55,23 @@ NS_B=arq-b
 IP_A=10.0.0.0
 IP_B=10.0.0.1
 
-# Per-node TX/RX Pluto IPs (must stay in sync with pluto.config.NODE_RADIO_IPS).
-PLUTO_A_TX_IP=192.168.4.1   # node A, TX radio
-PLUTO_A_RX_IP=192.168.2.1   # node A, RX radio
-PLUTO_B_TX_IP=192.168.3.1   # node B, TX radio
-PLUTO_B_RX_IP=192.168.5.1   # node B, RX radio
+# Per-node TX/RX Pluto IPs are loaded from pluto/setup.json below.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJ_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PYTHON="$PROJ_ROOT/.venv/bin/python"
+[[ -x "$PYTHON" ]] || { echo "ERROR: $PYTHON not found — run 'uv sync' first" >&2; exit 1; }
+eval "$("$PYTHON" -m pluto.setup_config --shell-export)"
+: "${PLUTO_A_TX_IP:?missing PLUTO_A_TX_IP}"
+: "${PLUTO_A_RX_IP:?missing PLUTO_A_RX_IP}"
+: "${PLUTO_B_TX_IP:?missing PLUTO_B_TX_IP}"
+: "${PLUTO_B_RX_IP:?missing PLUTO_B_RX_IP}"
 
-# Matching host-side endpoints on each Pluto USB net (.10 convention).
-HOST_A_TX_IP=192.168.4.10
-HOST_A_RX_IP=192.168.2.10
-HOST_B_TX_IP=192.168.3.10
-HOST_B_RX_IP=192.168.5.10
+# Host-side endpoints share each Pluto's /24, with .10 in the last octet.
+host_ip_for() { sed 's/\.[0-9]\+$/.10/' <<<"$1"; }
+HOST_A_TX_IP=$(host_ip_for "$PLUTO_A_TX_IP")
+HOST_A_RX_IP=$(host_ip_for "$PLUTO_A_RX_IP")
+HOST_B_TX_IP=$(host_ip_for "$PLUTO_B_TX_IP")
+HOST_B_RX_IP=$(host_ip_for "$PLUTO_B_RX_IP")
 
 # ── Argparse-lite ────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -164,16 +168,6 @@ cleanup_only() {
 if [[ $CLEANUP_ONLY -eq 1 ]]; then
     cleanup_only
     exit 0
-fi
-
-# ── Project paths ────────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJ_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PYTHON="$PROJ_ROOT/.venv/bin/python"
-
-if [[ ! -x "$PYTHON" ]]; then
-    echo "ERROR: $PYTHON not found — run 'uv sync' first" >&2
-    exit 1
 fi
 
 # ── Auto-detect USB-ethernet interfaces ──────────────────────────────────

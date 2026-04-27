@@ -130,6 +130,16 @@ CoarseResult coarse_sync_ext(
 
     std::vector<c64> p_d(md_len);
     std::vector<f32> r_d(md_len);
+    std::vector<f32> m_d(md_len);
+
+    // Output accumulators — populated under the release block, then copied
+    // into freshly-allocated py::array_t after the GIL is reacquired.
+    std::vector<ssize_t> out_d_vec;
+    std::vector<f32>     out_cfo_vec;
+    std::vector<f32>     out_m_vec;
+
+    {
+    py::gil_scoped_release nogil;
 
     c64 p(0.0f, 0.0f);
     f32 r = 0.0f;
@@ -151,7 +161,6 @@ CoarseResult coarse_sync_ext(
     f32 r_gate = (energy_gate_fraction > 0.0f && max_r > 0.0f)
                      ? max_r * energy_gate_fraction : -1.0f;
 
-    std::vector<f32> m_d(md_len);
     std::vector<int> above;
     above.reserve(md_len / 4);
 
@@ -162,8 +171,7 @@ CoarseResult coarse_sync_ext(
             above.push_back(d);
     }
 
-    if (above.empty()) return make_empty();
-
+    if (!above.empty()) {
     std::vector<int> splits = {0};
     for (int i = 1; i < static_cast<int>(above.size()); ++i)
         if (above[i] - above[i - 1] > min_gap) splits.push_back(i);
@@ -171,10 +179,6 @@ CoarseResult coarse_sync_ext(
 
     int n_frames_raw = static_cast<int>(splits.size()) - 1;
 
-    // Pre-allocate worst-case, then fill only valid frames.
-    std::vector<ssize_t> out_d_vec;
-    std::vector<f32>     out_cfo_vec;
-    std::vector<f32>     out_m_vec;
     out_d_vec.reserve(n_frames_raw);
     out_cfo_vec.reserve(n_frames_raw);
     out_m_vec.reserve(n_frames_raw);
@@ -276,6 +280,8 @@ CoarseResult coarse_sync_ext(
         out_cfo_vec.push_back(cfo_hat);
         out_m_vec.push_back(m_peak);
     }
+    }  // end if (!above.empty())
+    }  // end gil_scoped_release
 
     int n_frames = static_cast<int>(out_d_vec.size());
     if (n_frames == 0) return make_empty();
@@ -368,6 +374,8 @@ FineResult fine_timing_ext(
 
     std::vector<c64> buf(pad_len);   // reused across frames
 
+    {
+    py::gil_scoped_release nogil;
     for (int i = 0; i < n_frames; ++i) {
 
         // ---- start sample (clipped) ----
@@ -431,6 +439,7 @@ FineResult fine_timing_ext(
         p_ratio(i) = (mean_mag > 0.0f) ? peak_mag / mean_mag : 0.0f;
         p_phase(i) = mod_phase;
     }
+    }  // end gil_scoped_release
 
     return {out_sidx, out_ratio, out_phase};
 }

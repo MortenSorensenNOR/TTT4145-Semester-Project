@@ -2,8 +2,12 @@
 # Flash custom firmware onto a PlutoSDR if it isn't already running it.
 #
 # Usage: ./flash_pluto.sh [A|B]
-#   A -> 192.168.2.1 (RX Pluto)
-#   B -> 192.168.3.1 (TX Pluto)
+#   A -> 192.168.2.1 (node A, TX Pluto in current setup.json)
+#   B -> 192.168.3.1 (node B, RX Pluto in current setup.json)
+#
+# The A/B argument selects a physical Pluto by IP; the role (TX/RX) on each
+# node is whatever pluto/setup.json currently says — flashing is per-device,
+# not per-role, so the mapping above is just a label.
 #
 # The script checks whether the device is already running the custom build
 # (detected by "dirty" in the version string).  If not, it calls

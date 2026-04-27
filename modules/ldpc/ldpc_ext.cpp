@@ -53,20 +53,23 @@ static py::array_t<uint8_t> encode_ext(
         throw std::invalid_argument("g_packed.shape[1] inconsistent with n");
     }
 
-    std::vector<uint64_t> acc(n_words, 0);
-    for (ssize_t i = 0; i < k; ++i) {
-        if (msg_buf(i) & 1) {
-            const uint64_t* row = &g_buf(i, 0);
-            for (ssize_t w = 0; w < n_words; ++w) {
-                acc[w] ^= row[w];
-            }
-        }
-    }
-
     py::array_t<uint8_t> out(n);
     auto out_buf = out.mutable_unchecked<1>();
-    for (int j = 0; j < n; ++j) {
-        out_buf(j) = (uint8_t)((acc[j >> 6] >> (j & 63)) & 1ULL);
+
+    {
+        py::gil_scoped_release nogil;
+        std::vector<uint64_t> acc(n_words, 0);
+        for (ssize_t i = 0; i < k; ++i) {
+            if (msg_buf(i) & 1) {
+                const uint64_t* row = &g_buf(i, 0);
+                for (ssize_t w = 0; w < n_words; ++w) {
+                    acc[w] ^= row[w];
+                }
+            }
+        }
+        for (int j = 0; j < n; ++j) {
+            out_buf(j) = (uint8_t)((acc[j >> 6] >> (j & 63)) & 1ULL);
+        }
     }
     return out;
 }
@@ -109,12 +112,17 @@ static py::array_t<uint8_t> decode_ext(
         throw std::invalid_argument("check_order length must match edge_var");
     }
 
+    py::array_t<uint8_t> out(k);
+    auto out_buf = out.mutable_unchecked<1>();
+
     // Pull arrays into local pointers — the Python objects don't move during
     // the call, but the pointer-deref shaves a small amount of indirection.
     const float*   llr  = llr_buf.data(0);
     const int64_t* ev   = var_buf.data(0);
     const int64_t* co   = ord_buf.data(0);
     const int64_t* bnd  = bnd_buf.data(0);
+
+    py::gil_scoped_release nogil;
 
     std::vector<float> v2c(num_edges);
     std::vector<float> c2v(num_edges, 0.0f);
@@ -194,8 +202,6 @@ static py::array_t<uint8_t> decode_ext(
         if (all_zero) break;
     }
 
-    py::array_t<uint8_t> out(k);
-    auto out_buf = out.mutable_unchecked<1>();
     for (int v = 0; v < k; ++v) out_buf(v) = hard[v];
     return out;
 }

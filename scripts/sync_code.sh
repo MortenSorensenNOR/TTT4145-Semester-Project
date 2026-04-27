@@ -3,8 +3,10 @@
 # Usage:
 #   ./sync.sh                          # sync entire project (default remote)
 #   ./sync.sh file_or_dir              # sync specific file/dir (default remote)
-#   ./sync.sh pluto A                  # sync to Pluto A (192.168.2.1)
-#   ./sync.sh pluto B                  # sync to Pluto B (192.168.3.1)
+#   ./sync.sh pluto A                  # sync to physical Pluto at 192.168.2.1
+#   ./sync.sh pluto B                  # sync to physical Pluto at 192.168.3.1
+# (The A/B labels are just shorthand for the two Plutos; the TX/RX role on
+#  each node is whatever pluto/setup.json currently says.)
 
 DEFAULT_REMOTE="radiotester@100.114.51.4"
 REMOTE_DIR="~/TTT4145-Semester-Project"

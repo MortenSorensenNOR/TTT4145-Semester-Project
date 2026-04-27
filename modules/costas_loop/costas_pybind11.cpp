@@ -96,23 +96,26 @@ LoopResult costas_loop_bpsk(
     auto syms_ptr  = out_syms.mutable_unchecked<1>();
     auto phase_ptr = out_phase.mutable_unchecked<1>();
 
-    for (int i = 0; i < n; ++i) {
-        const f32 sr  = in(i).real();
-        const f32 si  = in(i).imag();
-        const int idx = phase_to_idx(phase_estimate);
-        const f32 c   = cos_lut[idx];
-        const f32 s   = sin_lut[idx];
+    {
+        py::gil_scoped_release nogil;
+        for (int i = 0; i < n; ++i) {
+            const f32 sr  = in(i).real();
+            const f32 si  = in(i).imag();
+            const int idx = phase_to_idx(phase_estimate);
+            const f32 c   = cos_lut[idx];
+            const f32 s   = sin_lut[idx];
 
-        const f32 cr =  sr * c + si * s;
-        const f32 ci = -sr * s + si * c;
+            const f32 cr =  sr * c + si * s;
+            const f32 ci = -sr * s + si * c;
 
-        const f32 error = ci * fsign(cr);
-        integrator     += beta  * error;
-        phase_estimate += alpha * error + integrator;
-        phase_estimate  = wrap(phase_estimate);
+            const f32 error = ci * fsign(cr);
+            integrator     += beta  * error;
+            phase_estimate += alpha * error + integrator;
+            phase_estimate  = wrap(phase_estimate);
 
-        syms_ptr(i)  = c64(cr, ci);
-        phase_ptr(i) = phase_estimate;
+            syms_ptr(i)  = c64(cr, ci);
+            phase_ptr(i) = phase_estimate;
+        }
     }
 
     return {std::move(out_syms), std::move(out_phase)};
@@ -135,23 +138,26 @@ LoopResult costas_loop_qpsk(
     auto syms_ptr  = out_syms.mutable_unchecked<1>();
     auto phase_ptr = out_phase.mutable_unchecked<1>();
 
-    for (int i = 0; i < n; ++i) {
-        const f32 sr  = in(i).real();
-        const f32 si  = in(i).imag();
-        const int idx = phase_to_idx(phase_estimate);
-        const f32 c   = cos_lut[idx];
-        const f32 s   = sin_lut[idx];
+    {
+        py::gil_scoped_release nogil;
+        for (int i = 0; i < n; ++i) {
+            const f32 sr  = in(i).real();
+            const f32 si  = in(i).imag();
+            const int idx = phase_to_idx(phase_estimate);
+            const f32 c   = cos_lut[idx];
+            const f32 s   = sin_lut[idx];
 
-        const f32 cr =  sr * c + si * s;
-        const f32 ci = -sr * s + si * c;
+            const f32 cr =  sr * c + si * s;
+            const f32 ci = -sr * s + si * c;
 
-        const f32 error = ci * fsign(cr) - cr * fsign(ci);
-        integrator     += beta  * error;
-        phase_estimate += alpha * error + integrator;
-        phase_estimate  = wrap(phase_estimate);
+            const f32 error = ci * fsign(cr) - cr * fsign(ci);
+            integrator     += beta  * error;
+            phase_estimate += alpha * error + integrator;
+            phase_estimate  = wrap(phase_estimate);
 
-        syms_ptr(i)  = c64(cr, ci);
-        phase_ptr(i) = phase_estimate;
+            syms_ptr(i)  = c64(cr, ci);
+            phase_ptr(i) = phase_estimate;
+        }
     }
 
     return {std::move(out_syms), std::move(out_phase)};
@@ -183,31 +189,34 @@ LoopResult costas_loop_8psk(
 
     constexpr f32 INV8 = 1.0f / 8.0f;
 
-    for (int i = 0; i < n; ++i) {
-        const f32 sr  = in(i).real();
-        const f32 si  = in(i).imag();
-        const int idx = phase_to_idx(phase_estimate);
-        const f32 c   = cos_lut[idx];
-        const f32 s   = sin_lut[idx];
+    {
+        py::gil_scoped_release nogil;
+        for (int i = 0; i < n; ++i) {
+            const f32 sr  = in(i).real();
+            const f32 si  = in(i).imag();
+            const int idx = phase_to_idx(phase_estimate);
+            const f32 c   = cos_lut[idx];
+            const f32 s   = sin_lut[idx];
 
-        const f32 cr =  sr * c + si * s;
-        const f32 ci = -sr * s + si * c;
+            const f32 cr =  sr * c + si * s;
+            const f32 ci = -sr * s + si * c;
 
-        // y^8 via 3 multiplies — no log/exp
-        const c64 y(cr, ci);
-        const c64 y2 = y  * y;
-        const c64 y4 = y2 * y2;
-        const c64 y8 = y4 * y4;
+            // y^8 via 3 multiplies — no log/exp
+            const c64 y(cr, ci);
+            const c64 y2 = y  * y;
+            const c64 y4 = y2 * y2;
+            const c64 y8 = y4 * y4;
 
-        // Explicit atan2 — -ffast-math may lower this to a polynomial approx
-        const f32 error = std::atan2(y8.imag(), y8.real()) * INV8;
+            // Explicit atan2 — -ffast-math may lower this to a polynomial approx
+            const f32 error = std::atan2(y8.imag(), y8.real()) * INV8;
 
-        integrator     += beta  * error;
-        phase_estimate += alpha * error + integrator;
-        phase_estimate  = wrap(phase_estimate);
+            integrator     += beta  * error;
+            phase_estimate += alpha * error + integrator;
+            phase_estimate  = wrap(phase_estimate);
 
-        syms_ptr(i)  = c64(cr, ci);
-        phase_ptr(i) = phase_estimate;
+            syms_ptr(i)  = c64(cr, ci);
+            phase_ptr(i) = phase_estimate;
+        }
     }
 
     return {std::move(out_syms), std::move(out_phase)};

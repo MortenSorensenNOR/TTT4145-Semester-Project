@@ -42,40 +42,44 @@ py::array_t<c64> match_filter(
     const c64* sig  = signal_in.data();
     const f32* taps = taps_in.data();
 
-    // Reversed taps — inner loop becomes a forward dot-product (cache-friendly)
-    std::vector<f32> trev(M);
-    for (int k = 0; k < M; ++k) trev[k] = taps[M - 1 - k];
-
-    // Deinterleaved input padded with M trailing zeros (handles trailing edge
-    // where signal[i+m] would be out-of-bounds — just reads zeros instead).
-    const int buf_len = N + M;
-    std::vector<f32> re_in(buf_len, 0.0f), im_in(buf_len, 0.0f);
-    for (int i = 0; i < N; ++i) {
-        re_in[i] = sig[i].real();
-        im_in[i] = sig[i].imag();
-    }
-
     py::array_t<c64> out_np(N);
     f32* out = reinterpret_cast<f32*>(out_np.mutable_data());
 
-    const f32* re = re_in.data();
-    const f32* im = im_in.data();
-    const f32* tr = trev.data();
+    {
+        py::gil_scoped_release nogil;
 
-    // Simple inner dot-product: -O3 -ffast-math -march=native causes GCC/Clang to
-    // auto-vectorize this into AVX2 FMAs with multiple implicit accumulators.
-    // Manual unrolling here tends to increase register pressure and hurt performance.
-    for (int i = 0; i < N; ++i) {
-        f32 re_acc = 0.0f, im_acc = 0.0f;
-        const f32* rs = re + i;
-        const f32* is_ = im + i;
-        for (int m = 0; m < M; ++m) {
-            f32 t   = tr[m];
-            re_acc += rs[m]  * t;
-            im_acc += is_[m] * t;
+        // Reversed taps — inner loop becomes a forward dot-product (cache-friendly)
+        std::vector<f32> trev(M);
+        for (int k = 0; k < M; ++k) trev[k] = taps[M - 1 - k];
+
+        // Deinterleaved input padded with M trailing zeros (handles trailing edge
+        // where signal[i+m] would be out-of-bounds — just reads zeros instead).
+        const int buf_len = N + M;
+        std::vector<f32> re_in(buf_len, 0.0f), im_in(buf_len, 0.0f);
+        for (int i = 0; i < N; ++i) {
+            re_in[i] = sig[i].real();
+            im_in[i] = sig[i].imag();
         }
-        out[2 * i]     = re_acc;
-        out[2 * i + 1] = im_acc;
+
+        const f32* re = re_in.data();
+        const f32* im = im_in.data();
+        const f32* tr = trev.data();
+
+        // Simple inner dot-product: -O3 -ffast-math -march=native causes GCC/Clang to
+        // auto-vectorize this into AVX2 FMAs with multiple implicit accumulators.
+        // Manual unrolling here tends to increase register pressure and hurt performance.
+        for (int i = 0; i < N; ++i) {
+            f32 re_acc = 0.0f, im_acc = 0.0f;
+            const f32* rs = re + i;
+            const f32* is_ = im + i;
+            for (int m = 0; m < M; ++m) {
+                f32 t   = tr[m];
+                re_acc += rs[m]  * t;
+                im_acc += is_[m] * t;
+            }
+            out[2 * i]     = re_acc;
+            out[2 * i + 1] = im_acc;
+        }
     }
     return out_np;
 }
@@ -107,48 +111,53 @@ py::array_t<c64> upsample(
 
     const int Nout = Ns * sps + M - 1;
 
-    // Deinterleave symbols
-    std::vector<f32> sym_re(Ns), sym_im(Ns);
-    for (int i = 0; i < Ns; ++i) {
-        sym_re[i] = sym[i].real();
-        sym_im[i] = sym[i].imag();
-    }
-
     py::array_t<c64> out_np(Nout);
     f32* out = reinterpret_cast<f32*>(out_np.mutable_data());
-    std::fill(out, out + 2 * Nout, 0.0f);
 
-    // For each phase p ∈ [0, sps-1]:
-    //   sub-filter: h_p[k] = taps[p + k*sps],  k = 0 .. sub_len-1
-    //   output positions: p, p+sps, p+2*sps, ... (every sps samples)
-    //   For output index n = q*sps + p:
-    //     out[n] = sum_{k=0}^{sub_len-1} symbols[q-k] * h_p[k]   (causal)
-    //
-    // This is a full convolution of symbols with h_p, written at offset p
-    // and stride sps.
+    {
+        py::gil_scoped_release nogil;
 
-    for (int p = 0; p < sps; ++p) {
-        // Build sub-filter for phase p
-        int sub_len = (M - p + sps - 1) / sps;  // ceil((M-p)/sps)
-        std::vector<f32> hp(sub_len);
-        for (int k = 0; k < sub_len; ++k) hp[k] = taps[p + k * sps];
+        // Deinterleave symbols
+        std::vector<f32> sym_re(Ns), sym_im(Ns);
+        for (int i = 0; i < Ns; ++i) {
+            sym_re[i] = sym[i].real();
+            sym_im[i] = sym[i].imag();
+        }
 
-        // Full convolution of symbols with hp; output length Ns + sub_len - 1
-        int conv_len = Ns + sub_len - 1;
-        for (int q = 0; q < conv_len; ++q) {
-            f32 re_acc = 0.0f, im_acc = 0.0f;
-            const int k_lo = std::max(0, q - (Ns - 1));
-            const int k_hi = std::min(sub_len, q + 1);
-            for (int k = k_lo; k < k_hi; ++k) {
-                int s = q - k;
-                f32 h = hp[k];
-                re_acc += sym_re[s] * h;
-                im_acc += sym_im[s] * h;
-            }
-            int out_idx = q * sps + p;
-            if (out_idx < Nout) {
-                out[2 * out_idx]     = re_acc;
-                out[2 * out_idx + 1] = im_acc;
+        std::fill(out, out + 2 * Nout, 0.0f);
+
+        // For each phase p ∈ [0, sps-1]:
+        //   sub-filter: h_p[k] = taps[p + k*sps],  k = 0 .. sub_len-1
+        //   output positions: p, p+sps, p+2*sps, ... (every sps samples)
+        //   For output index n = q*sps + p:
+        //     out[n] = sum_{k=0}^{sub_len-1} symbols[q-k] * h_p[k]   (causal)
+        //
+        // This is a full convolution of symbols with h_p, written at offset p
+        // and stride sps.
+
+        for (int p = 0; p < sps; ++p) {
+            // Build sub-filter for phase p
+            int sub_len = (M - p + sps - 1) / sps;  // ceil((M-p)/sps)
+            std::vector<f32> hp(sub_len);
+            for (int k = 0; k < sub_len; ++k) hp[k] = taps[p + k * sps];
+
+            // Full convolution of symbols with hp; output length Ns + sub_len - 1
+            int conv_len = Ns + sub_len - 1;
+            for (int q = 0; q < conv_len; ++q) {
+                f32 re_acc = 0.0f, im_acc = 0.0f;
+                const int k_lo = std::max(0, q - (Ns - 1));
+                const int k_hi = std::min(sub_len, q + 1);
+                for (int k = k_lo; k < k_hi; ++k) {
+                    int s = q - k;
+                    f32 h = hp[k];
+                    re_acc += sym_re[s] * h;
+                    im_acc += sym_im[s] * h;
+                }
+                int out_idx = q * sps + p;
+                if (out_idx < Nout) {
+                    out[2 * out_idx]     = re_acc;
+                    out[2 * out_idx + 1] = im_acc;
+                }
             }
         }
     }

@@ -32,12 +32,9 @@ FREQ_A_TO_B = 2_405_000_000
 FREQ_B_TO_A = 2_415_000_000
 
 # Split-radio layout: each node dedicates one Pluto to TX and another to RX
-# because a single USB-2 Pluto cannot sustain 4 Msps full-duplex. Convention:
-# the 3rd octet N in 192.168.N.1 picks the node (even → A, odd → B).
-NODE_RADIO_IPS = {
-    "A": {"tx": "192.168.4.1", "rx": "192.168.2.1"},
-    "B": {"tx": "192.168.3.1", "rx": "192.168.5.1"},
-}
+# because a single USB-2 Pluto cannot sustain 4 Msps full-duplex. The actual
+# per-node TX/RX IP assignment lives in pluto/setup.json (see pluto.setup_config)
+# so that swapping cables doesn't require code edits.
 
 PIPELINE = PipelineConfig()
 
@@ -72,11 +69,11 @@ def configure_tx(
 ) -> None:
     """Apply standard TX settings to an SDR."""
 
-    sdr.tx_hardwaregain_chan0 = -70
-    sdr.tx_lo = int(5.2e9)  # Sample rate change BLAAASTS noise on tx that is above the tx power of the pluto
-                            # therefore start up the tx with a different frequency when we set sample rate, then switch back to 2.4 ghz after
+    # sdr.tx_hardwaregain_chan0 = -70
+    # sdr.tx_lo = int(5.2e9)  # Sample rate change BLAAASTS noise on tx that is above the tx power of the pluto
+    #                         # therefore start up the tx with a different frequency when we set sample rate, then switch back to 2.4 ghz after
     sdr.sample_rate = sample_rate
-    time.sleep(1)
+    # time.sleep(1)
 
     sdr.tx_rf_bandwidth = int(sample_rate)
     sdr.tx_lo = int(freq)

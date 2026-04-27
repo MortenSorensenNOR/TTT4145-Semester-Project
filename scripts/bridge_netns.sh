@@ -18,28 +18,37 @@
 #     sudo ./scripts/bridge_netns.sh status                  # what's running?
 #     sudo ./scripts/bridge_netns.sh down                    # tear down
 #
-# Config (Pluto IPs, frequencies, etc.) must match bridge_benchmark.sh and
-# pluto.config.NODE_RADIO_IPS. Generated log files:
+# Pluto IPs are loaded from pluto/setup.json (single source of truth, also
+# used by the bridge process itself). Generated log files:
 #     bridge-A.log   bridge-B.log    (project root)
 # Bridge PIDs are stored in /tmp/bridge-{A,B}.pid so `down` can kill them
 # even after the shell that ran `up` has exited.
 set -euo pipefail
 
-# ── Config — keep in sync with bridge_benchmark.sh ───────────────────────
+# ── Config ───────────────────────────────────────────────────────────────
 NS_A=arq-a
 NS_B=arq-b
 IP_A=10.0.0.0
 IP_B=10.0.0.1
 
-PLUTO_A_TX_IP=192.168.4.1
-PLUTO_A_RX_IP=192.168.2.1
-PLUTO_B_TX_IP=192.168.3.1
-PLUTO_B_RX_IP=192.168.5.1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJ_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PYTHON="$PROJ_ROOT/.venv/bin/python"
 
-HOST_A_TX_IP=192.168.4.10
-HOST_A_RX_IP=192.168.2.10
-HOST_B_TX_IP=192.168.3.10
-HOST_B_RX_IP=192.168.5.10
+# Pull PLUTO_{A,B}_{TX,RX}_IP from pluto/setup.json.
+[[ -x "$PYTHON" ]] || { echo "ERROR: $PYTHON not found — run 'uv sync' first" >&2; exit 1; }
+eval "$("$PYTHON" -m pluto.setup_config --shell-export)"
+: "${PLUTO_A_TX_IP:?missing PLUTO_A_TX_IP}"
+: "${PLUTO_A_RX_IP:?missing PLUTO_A_RX_IP}"
+: "${PLUTO_B_TX_IP:?missing PLUTO_B_TX_IP}"
+: "${PLUTO_B_RX_IP:?missing PLUTO_B_RX_IP}"
+
+# Host-side endpoints share the Pluto's /24 with .10 in the last octet.
+host_ip_for() { sed 's/\.[0-9]\+$/.10/' <<<"$1"; }
+HOST_A_TX_IP=$(host_ip_for "$PLUTO_A_TX_IP")
+HOST_A_RX_IP=$(host_ip_for "$PLUTO_A_RX_IP")
+HOST_B_TX_IP=$(host_ip_for "$PLUTO_B_TX_IP")
+HOST_B_RX_IP=$(host_ip_for "$PLUTO_B_RX_IP")
 
 TUN_NAME=pluto0
 
@@ -54,9 +63,6 @@ STARTUP_WAIT=6
 PID_A=/tmp/bridge-A.pid
 PID_B=/tmp/bridge-B.pid
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJ_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PYTHON="$PROJ_ROOT/.venv/bin/python"
 LOG_A="$PROJ_ROOT/bridge-A.log"
 LOG_B="$PROJ_ROOT/bridge-B.log"
 

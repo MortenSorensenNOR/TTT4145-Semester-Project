@@ -22,7 +22,7 @@ Options:
     --packets      Number of packets to TX           (default: 20)
     --batch-size   Packets per TX window             (default: 8)
     --interval     Inter-batch gap in ms             (default: 200)
-    --ip           PlutoSDR IP address               (default: 192.168.2.1)
+    --ip           PlutoSDR IP address               (default: 192.168.2.1 — single-Pluto loopback target)
     --hardware-rrc Use FPGA RRC filter (custom bitstream required)
 """
 

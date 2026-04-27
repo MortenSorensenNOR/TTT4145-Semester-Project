@@ -32,9 +32,9 @@ Options:
     --tx-buf-mult  TX buf multiplier             (default: 8)
 
 Radio convention: each node runs a dedicated TX Pluto and a dedicated RX
-Pluto (a single USB-2 Pluto cannot sustain 4 Msps full-duplex). The 3rd
-octet N in 192.168.N.1 picks the node — even → A, odd → B. Defaults come
-from pluto.config.NODE_RADIO_IPS.
+Pluto (a single USB-2 Pluto cannot sustain 4 Msps full-duplex). The per-
+node TX/RX IP assignment is loaded from pluto/setup.json — see
+pluto.setup_config for the schema.
 """
 
 import argparse
@@ -55,16 +55,15 @@ import numpy as np
 import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
-from pluto.cfo_config import CFO_CONFIG_PATH, load as load_cfo_calibration
 from pluto.config import (
     DAC_SCALE,
     FREQ_A_TO_B,
     FREQ_B_TO_A,
-    NODE_RADIO_IPS,
     PIPELINE,
     configure_rx,
     configure_tx,
 )
+from pluto.setup_config import SETUP_PATH, load_or_die as load_setup
 
 # FDD frequency plan: A transmits on FREQ_A_TO_B and listens on FREQ_B_TO_A;
 # B does the opposite. Mirrors pluto.bridge.NODE_CONFIGS so a node-A and
@@ -219,15 +218,15 @@ parser.add_argument("--gain",     type=float, default=-10,           help="TX ga
 parser.add_argument("--payload",  type=int,   default=1000,          help="Payload bytes (default: 1000)")
 parser.add_argument("--packets",  type=int,   default=20,            help="Number of packets per TX burst (default: 20)")
 parser.add_argument("--interval", type=float, default=0,             help="Inter-burst gap in ms (default: 0)")
-parser.add_argument("--node",     type=str,   default="A",           help="Node identity A or B; picks default TX/RX IPs from NODE_RADIO_IPS")
+parser.add_argument("--node",     type=str,   default="A",           help="Node identity A or B; picks default TX/RX IPs from pluto/setup.json")
 parser.add_argument("--tx-ip",    type=str,   default=None,          help="Override TX Pluto IP (default: derived from --node)")
 parser.add_argument("--rx-ip",    type=str,   default=None,          help="Override RX Pluto IP (default: derived from --node)")
 parser.add_argument("--mode",     type=str,   default="both",        help="Mode: 'tx', 'rx', or 'both' (default: both)")
 parser.add_argument("--cfo-offset", type=int, default=None,
                     help="Manual override for the RX-LO CFO correction in Hz. "
-                         "Default: value from pluto/cfo_calibration.json for "
-                         "--node (run scripts/cfo_calibrate.py to generate it), "
-                         "or 0 if no calibration file exists. Only affects RX.")
+                         "Default: value from the cfo block of pluto/setup.json "
+                         "for --node (run scripts/cfo_calibrate.py to generate "
+                         "it), or 0 if no calibration is present. Only affects RX.")
 parser.add_argument("--tx-freq", type=float, default=None, help="TX center frequency in Hz (default: derived from --node via NODE_FREQS)")
 parser.add_argument("--rx-freq", type=float, default=None, help="RX center frequency in Hz (default: derived from --node via NODE_FREQS)")
 parser.add_argument("--constellation", action="store_true", help="Show live PSK8 constellation plot (RX mode only)")
@@ -241,33 +240,32 @@ if args.mode not in ("tx", "rx", "both"):
     print(f"ERROR: --mode must be 'tx', 'rx', or 'both', got '{args.mode}'")
     sys.exit(1)
 
-if args.node not in NODE_RADIO_IPS:
-    print(f"ERROR: --node must be one of {sorted(NODE_RADIO_IPS)}, got '{args.node}'")
+setup = load_setup()
+if args.node not in setup.nodes:
+    print(f"ERROR: --node must be one of {sorted(setup.nodes)}, got '{args.node}'")
     sys.exit(1)
 
-tx_ip = args.tx_ip or NODE_RADIO_IPS[args.node]["tx"]
-rx_ip = args.rx_ip or NODE_RADIO_IPS[args.node]["rx"]
+tx_ip = args.tx_ip or setup.tx_ip(args.node)
+rx_ip = args.rx_ip or setup.rx_ip(args.node)
 
 # Resolve RX-LO CFO offset: manual CLI override wins; otherwise pull the
-# measured value for this node from the calibration file; otherwise 0. TX
-# always emits at its natural LO (split-radio convention — the peer's RX
-# does the compensating).
+# measured value for this node from the calibration; otherwise 0. TX always
+# emits at its natural LO (split-radio convention — the peer's RX does the
+# compensating).
 if args.cfo_offset is not None:
     rx_cfo_hz = args.cfo_offset
     cfo_src   = "cli"
 elif args.mode == "tx":
     rx_cfo_hz = 0
     cfo_src   = "n/a (tx-only)"
+elif setup.cfo is None:
+    rx_cfo_hz = 0
+    cfo_src   = "unset"
+    print(f"  [warn] no CFO calibration in {SETUP_PATH} — using 0 Hz. "
+          f"Run 'uv run python scripts/cfo_calibrate.py' to generate one.")
 else:
-    cal = load_cfo_calibration()
-    if cal is None:
-        rx_cfo_hz = 0
-        cfo_src   = "unset"
-        print(f"  [warn] no CFO calibration at {CFO_CONFIG_PATH} — using 0 Hz. "
-              f"Run 'uv run python scripts/cfo_calibrate.py' to generate one.")
-    else:
-        rx_cfo_hz = cal.rx_offset_for(args.node)
-        cfo_src   = f"calibration ({cal.measured_at or 'unknown date'})"
+    rx_cfo_hz = setup.cfo.rx_offset_for(args.node)
+    cfo_src   = f"calibration ({setup.cfo.measured_at or 'unknown date'})"
 
 # ---------------------------------------------------------------------------
 # Pipelines

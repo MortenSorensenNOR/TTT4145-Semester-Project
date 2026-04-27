@@ -18,11 +18,11 @@ Node A and Node B are mirror images — A transmits on FREQ_A_TO_B and listens
 on FREQ_B_TO_A; B does the opposite. Each node's ARQ has its own (src, dst)
 pair so a node ignores its own TX leakage and any third party.
 
-Radio IP convention (see pluto.config.NODE_RADIO_IPS): the 3rd octet N of
-192.168.N.1 selects the node — even → A, odd → B. Defaults:
+Radio IP assignment lives in ``pluto/setup.json`` (loaded via
+``pluto.setup_config``). Current default layout::
 
-  * Node A — tx 192.168.4.1, rx 192.168.2.1
-  * Node B — tx 192.168.3.1, rx 192.168.5.1
+  * Node A — tx 192.168.2.1, rx 192.168.4.1
+  * Node B — tx 192.168.5.1, rx 192.168.3.1
 
 Usage::
 
@@ -34,7 +34,7 @@ Usage::
 
     # Override IPs if needed:
     sudo .venv/bin/python -m pluto.bridge --node A \\
-        --tx-ip 192.168.4.1 --rx-ip 192.168.2.1
+        --tx-ip 192.168.2.1 --rx-ip 192.168.4.1
 
     # From A:  ping 10.0.0.1   (B's TUN address)
     # From B:  ping 10.0.0.0   (A's TUN address)
@@ -58,18 +58,17 @@ import numpy as np
 
 from modules.arq import ARQConfig, ARQNode
 from modules.pipeline import Packet, PipelineConfig, RXPipeline, TXPipeline
-from pluto.cfo_config import CFO_CONFIG_PATH, load as load_cfo_calibration
 from pluto.config import (
     DAC_SCALE,
     FREQ_A_TO_B,
     FREQ_B_TO_A,
     MAX_PACKET_SIZE_BYTES,
-    NODE_RADIO_IPS,
     PIPELINE,
     configure_rx,
     configure_tx,
 )
 from pluto.sdr_stream import RxStream, TxStream
+from pluto.setup_config import SETUP_PATH, load_or_die as load_setup
 
 logger = logging.getLogger(__name__)
 
@@ -234,15 +233,16 @@ def main() -> None:
                         help="TX hardware gain in dB (default: -10)")
     parser.add_argument("--cfo-offset", type=int, default=None,
                         help="Manual override for the RX-LO CFO correction in "
-                             "Hz. Default: value from pluto/cfo_calibration.json "
-                             "(run scripts/cfo_calibrate.py to (re)generate it), "
-                             "or 0 if no calibration file exists.")
+                             "Hz. Default: value from the cfo block of "
+                             "pluto/setup.json (run scripts/cfo_calibrate.py "
+                             "to (re)generate it), or 0 if no calibration is "
+                             "present.")
     parser.add_argument("--tx-ip",      default=None,
                         help="IP of the Pluto used for TX. Default derived "
-                             "from --node via pluto.config.NODE_RADIO_IPS.")
+                             "from --node via pluto/setup.json.")
     parser.add_argument("--rx-ip",      default=None,
                         help="IP of the Pluto used for RX. Default derived "
-                             "from --node via pluto.config.NODE_RADIO_IPS.")
+                             "from --node via pluto/setup.json.")
     parser.add_argument("--rx-buf-mult", type=int, default=16,
                         help="RX buffer = mult × next-pow2(frame_len). Smaller "
                              "= lower latency, larger = better throughput. (default: 16)")
@@ -285,8 +285,9 @@ def main() -> None:
     ip_addr = NODE_IPS[args.node]
     config: PipelineConfig = PIPELINE
 
-    tx_ip = args.tx_ip or NODE_RADIO_IPS[args.node]["tx"]
-    rx_ip = args.rx_ip or NODE_RADIO_IPS[args.node]["rx"]
+    setup = load_setup()
+    tx_ip = args.tx_ip or setup.tx_ip(args.node)
+    rx_ip = args.rx_ip or setup.rx_ip(args.node)
 
     # Resolve RX-LO CFO offset: manual CLI override wins, otherwise use the
     # persisted calibration, otherwise 0. Only the RX LO is offset — the TX
@@ -294,17 +295,15 @@ def main() -> None:
     if args.cfo_offset is not None:
         rx_cfo_hz = args.cfo_offset
         cfo_src   = "cli"
+    elif setup.cfo is None:
+        rx_cfo_hz = 0
+        cfo_src   = "unset"
+        logger.warning("No CFO calibration in %s — using 0 Hz. "
+                       "Run 'uv run python scripts/cfo_calibrate.py' to generate one.",
+                       SETUP_PATH)
     else:
-        cal = load_cfo_calibration()
-        if cal is None:
-            rx_cfo_hz = 0
-            cfo_src   = "unset"
-            logger.warning("No CFO calibration found at %s — using 0 Hz. "
-                           "Run 'uv run python scripts/cfo_calibrate.py' to generate one.",
-                           CFO_CONFIG_PATH)
-        else:
-            rx_cfo_hz = cal.rx_offset_for(args.node)
-            cfo_src   = f"calibration ({cal.measured_at or 'unknown date'})"
+        rx_cfo_hz = setup.cfo.rx_offset_for(args.node)
+        cfo_src   = f"calibration ({setup.cfo.measured_at or 'unknown date'})"
 
     # ── Probe to size buffers ───────────────────────────────────────────
     _probe_pkt = Packet(src_mac=node.src, dst_mac=node.dst, type=0, seq_num=0,
