@@ -154,20 +154,12 @@ if __name__ == "__main__":
     rng = np.random.default_rng(0)
 
     # ---------------------------------------------------------------------------
-    # SDR setup — always full-duplex (TX and RX Pluto open simultaneously).
-    # ---------------------------------------------------------------------------
-
-    tx_freq = int(args.tx_freq) if args.tx_freq is not None else NODE_FREQS[args.node]["tx"]
-    rx_freq = int(args.rx_freq) if args.rx_freq is not None else NODE_FREQS[args.node]["rx"]
-
-    tx_sdr = adi.Pluto("ip:" + tx_ip)
-    configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
-
-    rx_sdr = adi.Pluto("ip:" + rx_ip)
-    configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz, gain_mode="slow_attack")
-
-    # ---------------------------------------------------------------------------
     # Buffer sizing — probe one MTU-sized packet to learn frame_len.
+    #
+    # Run BEFORE opening the SDR so that the slow spawn-pool startup that
+    # follows doesn't sit between configure_rx() and the first stream.refill()
+    # — libiio's first-refill timeout is short enough that pool startup can
+    # exceed it on slower laptops, killing the connection.
     # ---------------------------------------------------------------------------
 
     _probe_bits    = rng.integers(0, 2, args.mtu * 8, dtype=np.uint8)
@@ -176,8 +168,10 @@ if __name__ == "__main__":
     _probe_samples = tx_pipe.transmit(_probe_pkt)
     frame_len      = len(_probe_samples)
     rx_buf_size    = 16 * int(2 ** np.ceil(np.log2(frame_len)))
-    rx_sdr.rx_buffer_size = rx_buf_size
     tx_buf_size    = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
+
+    tx_freq = int(args.tx_freq) if args.tx_freq is not None else NODE_FREQS[args.node]["tx"]
+    rx_freq = int(args.rx_freq) if args.rx_freq is not None else NODE_FREQS[args.node]["rx"]
 
     print(f"Node      : {args.node}  (peer {peer})")
     print(f"TUN       : {args.tun_name} = {tun_ip}/24  (peer {peer_tun_ip})  MTU {args.mtu}")
@@ -193,10 +187,8 @@ if __name__ == "__main__":
     # ---------------------------------------------------------------------------
     # Worker pools — only created when --workers > 0.
     #
-    # Slot capacity must hold the longest filtered buffer we'd hand to a worker.
-    # Each RX iteration concatenates prev_buf + curr_buf and runs match_filter on
-    # the result, so the worst case is exactly 2 × rx_buf_size samples.  We add
-    # a small safety margin for any future search_from-trimming changes.
+    # Created BEFORE opening the SDR (see comment above) so the spawn startup
+    # latency lands while the radio is still idle.
     # ---------------------------------------------------------------------------
 
     tx_pool: TXWorkerPool | None = None
@@ -210,12 +202,32 @@ if __name__ == "__main__":
                                slot_samples=rx_slot_samples,
                                n_slots=args.rx_slots,
                                start_method=args.mp_start)
+        # Atexit so the shared-memory ring gets unlinked even when the SDR
+        # raises (libiio TimeoutError, USB unplug, etc.) and skips the
+        # finally-cleanup at the bottom of the script.
+        import atexit as _atexit
+        _atexit.register(tx_pool.shutdown)
+        _atexit.register(rx_pool.shutdown)
         print(f"Workers   : {args.workers}  (TX + RX pools, "
               f"rx_slot={rx_slot_samples} samples × {args.rx_slots} slots, "
               f"start={args.mp_start or 'spawn'})")
     else:
         print("Workers   : 0  (inline TX build / RX decode on the threads)")
     print()
+
+    # ---------------------------------------------------------------------------
+    # SDR setup — always full-duplex (TX and RX Pluto open simultaneously).
+    #
+    # Done AFTER pool creation so the libiio connection isn't sitting idle
+    # while spawn workers boot up.
+    # ---------------------------------------------------------------------------
+
+    tx_sdr = adi.Pluto("ip:" + tx_ip)
+    configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
+
+    rx_sdr = adi.Pluto("ip:" + rx_ip)
+    configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz, gain_mode="slow_attack")
+    rx_sdr.rx_buffer_size = rx_buf_size
 
     # ---------------------------------------------------------------------------
     # TUN bring-up — open device, then assign address and bring the link up.

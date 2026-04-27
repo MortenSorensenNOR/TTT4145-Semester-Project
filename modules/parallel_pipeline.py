@@ -102,8 +102,17 @@ class RXResult:
 # TX worker functions.
 # ---------------------------------------------------------------------------
 
-def _tx_init(pipe_cfg: "PipelineConfig") -> None:
-    """Worker initializer: build a TXPipeline, warm caches with a small probe."""
+def _tx_init(pipe_cfg: "PipelineConfig", init_barrier=None) -> None:
+    """Worker initializer: build a TXPipeline, warm caches with a small probe.
+
+    If ``init_barrier`` is given (a multiprocessing.Barrier sized to the worker
+    count) every worker waits on it after building its TXPipeline. The pool's
+    parent then submits a no-op fence that can only run *after* the barrier
+    releases, giving the parent a way to block until every worker is fully
+    initialized — essential when the next thing the parent does is open an
+    SDR over libiio (its 1 s default refill timeout is short enough that
+    background spawn-import CPU pressure can blow past it).
+    """
     global _TX_PIPE
     # Heavy imports happen here under spawn so the parent stays light.
     from modules.pipeline import Packet, TXPipeline
@@ -113,6 +122,8 @@ def _tx_init(pipe_cfg: "PipelineConfig") -> None:
     probe = Packet(src_mac=0, dst_mac=0, type=0, seq_num=0,
                    length=64, payload=np.zeros(64 * 8, dtype=np.uint8))
     _TX_PIPE.transmit(probe)
+    if init_barrier is not None:
+        init_barrier.wait()
 
 
 def _tx_build(payload_bytes: bytes, src_mac: int, dst_mac: int, ftype: int,
@@ -134,12 +145,14 @@ def _tx_build(payload_bytes: bytes, src_mac: int, dst_mac: int, ftype: int,
 # ---------------------------------------------------------------------------
 
 def _rx_init(pipe_cfg: "PipelineConfig", shm_names: list[str], slot_samples: int,
-             include_rx_symbols: bool) -> None:
+             include_rx_symbols: bool, init_barrier=None) -> None:
     """Worker initializer: build RXPipeline + attach to every shared-memory slot.
 
     The attached shared-memory blocks live for the lifetime of the worker; their
     backing pages are reused across decode jobs (each job just picks the slot
     by name and reads its slice).
+
+    See ``_tx_init`` for the rationale behind ``init_barrier``.
     """
     global _RX_PIPE, _RX_SHM, _RX_INCLUDE_SYMBOLS
     from modules.pipeline import RXPipeline
@@ -150,6 +163,13 @@ def _rx_init(pipe_cfg: "PipelineConfig", shm_names: list[str], slot_samples: int
         arr = np.ndarray((slot_samples,), dtype=np.complex64, buffer=shm.buf)
         _RX_SHM[name] = (shm, arr)
     _RX_INCLUDE_SYMBOLS = include_rx_symbols
+    if init_barrier is not None:
+        init_barrier.wait()
+
+
+def _no_op() -> None:
+    """Fence task — runs only after a worker has finished its initializer."""
+    return None
 
 
 def _rx_decode(slot_name: str, start: int, end: int,
@@ -211,13 +231,24 @@ class TXWorkerPool:
         if n_workers < 1:
             raise ValueError("n_workers must be >= 1")
         self._ctx = _resolve_context(start_method)
+        # Barrier sized to n_workers — every worker waits on it inside its
+        # initializer.  Once all N reach the barrier they all proceed and
+        # become ready to take tasks.  The fence-task we submit below can
+        # only run after a worker is past init, so .get() returning means
+        # at least one worker is fully initialized — and because the barrier
+        # synchronizes all of them, *every* worker is fully initialized.
+        init_barrier = self._ctx.Barrier(n_workers)
         self._pool = self._ctx.Pool(
             processes=n_workers,
             initializer=_tx_init,
-            initargs=(pipe_cfg,),
+            initargs=(pipe_cfg, init_barrier),
         )
         self._n_workers = n_workers
-        logger.info(f"TXWorkerPool: {n_workers} workers ({self._ctx._name})")
+        self._shutdown_done = False
+        logger.info(f"TXWorkerPool: {n_workers} workers ({self._ctx._name}) — waiting for init …")
+        # Block here until every worker has completed _tx_init.
+        self._pool.apply(_no_op)
+        logger.info("TXWorkerPool: workers ready")
 
     @property
     def n_workers(self) -> int:
@@ -235,6 +266,9 @@ class TXWorkerPool:
         )
 
     def shutdown(self) -> None:
+        if self._shutdown_done:
+            return
+        self._shutdown_done = True
         try:
             self._pool.close()
             self._pool.join()
@@ -362,18 +396,25 @@ class RXWorkerPool:
             raise ValueError("n_slots must be >= 1")
         self._ring = _RXBufferRing(n_slots=n_slots, slot_samples=slot_samples)
         self._ctx = _resolve_context(start_method)
+        # See TXWorkerPool for why we gate on a barrier here.
+        init_barrier = self._ctx.Barrier(n_workers)
         self._pool = self._ctx.Pool(
             processes=n_workers,
             initializer=_rx_init,
-            initargs=(pipe_cfg, list(self._ring.names), slot_samples, include_rx_symbols),
+            initargs=(pipe_cfg, list(self._ring.names), slot_samples,
+                      include_rx_symbols, init_barrier),
         )
         self._n_workers = n_workers
         self._slot_samples = slot_samples
         self._n_slots = n_slots
+        self._shutdown_done = False
         logger.info(
             f"RXWorkerPool: {n_workers} workers × {n_slots} slots "
-            f"× {slot_samples} samples ({self._ctx._name})"
+            f"× {slot_samples} samples ({self._ctx._name}) — waiting for init …"
         )
+        # Block here until every worker has completed _rx_init.
+        self._pool.apply(_no_op)
+        logger.info("RXWorkerPool: workers ready")
 
     @property
     def n_workers(self) -> int:
@@ -447,6 +488,9 @@ class RXWorkerPool:
                                 detections=list(detections))
 
     def shutdown(self) -> None:
+        if self._shutdown_done:
+            return
+        self._shutdown_done = True
         try:
             self._pool.close()
             self._pool.join()

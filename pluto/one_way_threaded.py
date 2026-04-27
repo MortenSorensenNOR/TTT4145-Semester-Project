@@ -177,28 +177,13 @@ if __name__ == "__main__":
     rng = np.random.default_rng(0)
 
     # ---------------------------------------------------------------------------
-    # SDR setup — per direction. Each node runs a dedicated TX Pluto and a
-    # dedicated RX Pluto; we only open the device(s) that the current mode
-    # actually needs, so tx/rx-only invocations don't require both radios to
-    # be plugged in.
-    # ---------------------------------------------------------------------------
-
-    tx_sdr = None
-    rx_sdr = None
-
-    tx_freq = int(args.tx_freq) if args.tx_freq is not None else NODE_FREQS[args.node]["tx"]
-    rx_freq = int(args.rx_freq) if args.rx_freq is not None else NODE_FREQS[args.node]["rx"]
-
-    if args.mode in ("tx", "both"):
-        tx_sdr = adi.Pluto("ip:" + tx_ip)
-        configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
-
-    if args.mode in ("rx", "both"):
-        rx_sdr = adi.Pluto("ip:" + rx_ip)
-        configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz, gain_mode="slow_attack")
-
-    # ---------------------------------------------------------------------------
-    # RX buffer sizing (needed for RX and both modes, and for the TX probe)
+    # Buffer sizing — probe one packet to learn frame_len.
+    #
+    # Run BEFORE opening the SDR so that the slow spawn-pool startup that
+    # follows doesn't sit between configure_rx() and stream.start() — libiio's
+    # first-refill timeout is short enough that pool startup (esp. on hybrid
+    # Intel laptops where the spawn imports get scheduled onto E-cores) can
+    # exceed it and kill the connection.
     # ---------------------------------------------------------------------------
 
     _probe_bits    = rng.integers(0, 2, args.payload * 8, dtype=np.uint8)
@@ -206,11 +191,10 @@ if __name__ == "__main__":
     _probe_samples = tx_pipe.transmit(_probe_pkt)
     frame_len      = len(_probe_samples)
     rx_buf_size    = 16 * int(2 ** np.ceil(np.log2(frame_len)))
+    tx_buf_size    = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
 
-    if args.mode in ("rx", "both"):
-        rx_sdr.rx_buffer_size = rx_buf_size
-
-    tx_buf_size = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
+    tx_freq = int(args.tx_freq) if args.tx_freq is not None else NODE_FREQS[args.node]["tx"]
+    rx_freq = int(args.rx_freq) if args.rx_freq is not None else NODE_FREQS[args.node]["rx"]
 
     print(f"Mode      : {args.mode}")
     print(f"Node      : {args.node}")
@@ -234,7 +218,8 @@ if __name__ == "__main__":
     print(f"TX gain   : {args.gain} dB")
 
     # ---------------------------------------------------------------------------
-    # Worker pools — only created when --workers > 0.
+    # Worker pools — only created when --workers > 0. Spun up BEFORE the SDR
+    # so spawn import latency lands while the radio is still idle.
     # ---------------------------------------------------------------------------
 
     tx_pool: TXWorkerPool | None = None
@@ -251,10 +236,37 @@ if __name__ == "__main__":
                                    n_slots=args.rx_slots,
                                    start_method=args.mp_start)
             print(f"RX slots  : {args.rx_slots} × {rx_slot_samples} samples")
+        # Atexit so the shared-memory ring gets unlinked even when the SDR
+        # raises (libiio TimeoutError, USB unplug, etc.) and skips the
+        # finally-cleanup at the bottom of the script.
+        import atexit as _atexit
+        if tx_pool is not None:
+            _atexit.register(tx_pool.shutdown)
+        if rx_pool is not None:
+            _atexit.register(rx_pool.shutdown)
         print(f"Workers   : {args.workers}  (start={args.mp_start or 'spawn'})")
     else:
         print("Workers   : 0  (inline TX build / RX decode on the threads)")
     print()
+
+    # ---------------------------------------------------------------------------
+    # SDR setup — per direction. Each node runs a dedicated TX Pluto and a
+    # dedicated RX Pluto; we only open the device(s) that the current mode
+    # actually needs, so tx/rx-only invocations don't require both radios to
+    # be plugged in.
+    # ---------------------------------------------------------------------------
+
+    tx_sdr = None
+    rx_sdr = None
+
+    if args.mode in ("tx", "both"):
+        tx_sdr = adi.Pluto("ip:" + tx_ip)
+        configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
+
+    if args.mode in ("rx", "both"):
+        rx_sdr = adi.Pluto("ip:" + rx_ip)
+        configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz, gain_mode="slow_attack")
+        rx_sdr.rx_buffer_size = rx_buf_size
 
     # ---------------------------------------------------------------------------
     # TX helpers
@@ -438,17 +450,22 @@ if __name__ == "__main__":
 
                     global_seq += 1
 
-                # End of burst: drain remaining inflight before reporting timing,
-                # otherwise the burst time is misleading (work is still queued).
-                while inflight:
-                    _drain_inflight()
+                # Only drain to zero when there's an inter-burst gap to honour.
+                # Continuous TX (interval=0) keeps the worker pipeline saturated
+                # across burst boundaries — draining here would idle the pool
+                # for ~inflight_depth × per_packet_time on every burst.
+                if args.interval > 0:
+                    while inflight:
+                        _drain_inflight()
 
                 t1 = time.perf_counter()
                 status.log(f"  [TX] burst {burst_num}: {args.packets} pkts "
-                           f"(seq {burst_start}–{global_seq - 1}) queued in {t1 - t0:.3f}s  "
-                           f"(pending={stream.pending}, bufs_sent={stream.bufs_sent})")
+                           f"(seq {burst_start}–{global_seq - 1}) submitted in {t1 - t0:.3f}s  "
+                           f"(inflight={len(inflight)}, pending={stream.pending}, "
+                           f"bufs_sent={stream.bufs_sent})")
 
-                time.sleep(args.interval / 1000.0)
+                if args.interval > 0:
+                    time.sleep(args.interval / 1000.0)
         finally:
             status.stop()
 

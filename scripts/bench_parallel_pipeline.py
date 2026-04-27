@@ -43,12 +43,7 @@ def main() -> int:
     payloads = [bytes(rng.integers(0, 256, args.payload, dtype=np.uint8))
                 for _ in range(args.packets)]
 
-    # --- Build samples once via the inline pipeline (so the bench focuses
-    # on decode cost) -------------------------------------------------------
-    print(f"Building {args.packets} × {args.payload}-byte packets inline …")
-    t0 = time.perf_counter()
-    chunks = []
-    for payload in payloads:
+    def _build_one(payload: bytes) -> np.ndarray:
         bits = np.unpackbits(np.frombuffer(payload, dtype=np.uint8))
         pkt = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0,
                      length=args.payload, payload=bits)
@@ -56,10 +51,29 @@ def main() -> int:
         peak = float(np.max(np.abs(samples)))
         if peak > 0:
             samples = samples / peak
-        chunks.append(samples.astype(np.complex64))
+        return samples.astype(np.complex64)
+
+    # Warm caches once so the first inline timing isn't dominated by LDPC
+    # encoder cache build / numpy code path JIT.
+    _build_one(payloads[0])
+
+    # --- Build samples via the inline pipeline ----------------------------
+    print(f"Building {args.packets} × {args.payload}-byte packets inline …")
+    t0 = time.perf_counter()
+    chunks = [_build_one(p) for p in payloads]
     inline_build_s = time.perf_counter() - t0
+    air_time_per_pkt_ms = len(chunks[0]) / pipe_cfg.SAMPLE_RATE * 1000.0
     print(f"  inline build: {inline_build_s*1000:.1f} ms total "
-          f"({inline_build_s/args.packets*1000:.1f} ms/pkt)")
+          f"({inline_build_s/args.packets*1000:.2f} ms/pkt)")
+    print(f"  air time   :  {air_time_per_pkt_ms:.2f} ms/pkt  "
+          f"(SDR-bound throughput cap = {1000.0/air_time_per_pkt_ms:.1f} pkts/s "
+          f"= {args.payload * 8 / air_time_per_pkt_ms:.1f} kbps)")
+    if inline_build_s/args.packets*1000 < air_time_per_pkt_ms:
+        print("  → inline build is FASTER than air time — TX is already SDR-bound,")
+        print("    so workers can give at most a small (~few %) speedup.")
+    else:
+        print(f"  → inline build is SLOWER than air time — TX is CPU-bound; "
+              f"workers should help.")
 
     silence = np.zeros(2048, dtype=np.complex64)
     raw = np.concatenate([silence] + [c for chunk in chunks for c in (chunk, silence)])
