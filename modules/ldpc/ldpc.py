@@ -218,8 +218,8 @@ class LDPCConfig:
 _h_cache: dict[LDPCConfig, np.ndarray] = {}
 _encoding_cache: dict[LDPCConfig, tuple[np.ndarray, np.ndarray]] = {}
 _decode_cache: dict[LDPCConfig, tuple[sparse.csr_matrix, int, int, np.ndarray, np.ndarray, np.ndarray]] = {}
-# Bit-packed generator rows for the C++ encoder: shape (k, ceil(n/64)), uint64.
-_packed_g_cache: dict[LDPCConfig, np.ndarray] = {}
+# Per-config encoder tables (see _get_encoder_tables).
+_encoder_tables_cache: dict[LDPCConfig, tuple] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -265,29 +265,83 @@ def ldpc_clear_cache() -> None:
     _h_cache.clear()
     _encoding_cache.clear()
     _decode_cache.clear()
-    _packed_g_cache.clear()
+    _encoder_tables_cache.clear()
 
 
-def _get_packed_g(config: LDPCConfig) -> np.ndarray:
-    """Pack G rows into uint64 words (LSB-first) for the C++ encoder."""
-    if config in _packed_g_cache:
-        return _packed_g_cache[config]
-    g_mat, _ = _get_encoding_structures(config)
-    k, n = g_mat.shape
-    n_words = (n + 63) // 64
-    packed = np.zeros((k, n_words), dtype=np.uint64)
-    g_bits = (g_mat & 1).astype(np.uint8)
-    for i in range(k):
-        bits = g_bits[i]
-        for j in range(n):
-            if bits[j]:
-                packed[i, j >> 6] |= np.uint64(1) << np.uint64(j & 63)
-    _packed_g_cache[config] = packed
-    return packed
+def _pack_bits_rows(bits: np.ndarray) -> np.ndarray:
+    """Pack a (R, C) {0,1} matrix into uint64 words (LSB-first along axis 1).
+
+    Returns shape (R, ceil(C/64)).
+    """
+    R, C = bits.shape
+    n_words = (C + 63) // 64
+    pad = n_words * 64 - C
+    if pad:
+        bits = np.hstack([bits, np.zeros((R, pad), dtype=bits.dtype)])
+    bits = bits.astype(np.uint64, copy=False)
+    bit_pos = np.arange(64, dtype=np.uint64)
+    return (bits.reshape(R, n_words, 64) << bit_pos).sum(axis=2).astype(np.uint64)
+
+
+def _gf2_inverse(M: np.ndarray) -> np.ndarray:
+    """Invert an n×n binary matrix over GF(2). Raises if not invertible."""
+    n = M.shape[0]
+    if M.shape != (n, n):
+        msg = f"Matrix must be square, got {M.shape}"
+        raise ValueError(msg)
+    A = np.hstack([np.asarray(M, dtype=np.uint8) % 2, np.eye(n, dtype=np.uint8)])
+    for r in range(n):
+        if not A[r, r]:
+            for rr in range(r + 1, n):
+                if A[rr, r]:
+                    A[[r, rr]] = A[[rr, r]]
+                    break
+            else:
+                msg = "Matrix is singular over GF(2)"
+                raise ValueError(msg)
+        for rr in range(n):
+            if rr != r and A[rr, r]:
+                A[rr] ^= A[r]
+    return A[:, n:]
+
+
+def _get_encoder_tables(config: LDPCConfig) -> tuple:
+    """Build (and cache) encoder tables: structured H_p^{-1}-based encoder.
+
+    Returns a tuple compatible with the C++ encode_struct entry point:
+        (h_s_packed, h_p_inv_cols, k, n)
+    where:
+      - h_s_packed: uint64[m, ceil(k/64)] — H_s rows (h_permuted[:, :k]) bit-packed
+      - h_p_inv_cols: uint64[m, ceil(m/64)] — columns of H_p^{-1}
+        (where H_p = h_permuted[:, k:]); row j of this array is column j of H_p^{-1}.
+      - k, n: scalars
+
+    Encoder algorithm (in C++):
+      1. syn[i] = popcount(h_s_packed[i] & m_packed) mod 2  for i in 0..m-1
+      2. For each set bit j in syn: p ^= h_p_inv_cols[j]
+      3. codeword = [message | p]
+    """
+    if config in _encoder_tables_cache:
+        return _encoder_tables_cache[config]
+
+    _, h_permuted = _get_encoding_structures(config)
+    m, n = h_permuted.shape
+    k = n - m
+
+    h_s = (h_permuted[:, :k] & 1).astype(np.uint8)
+    h_p = (h_permuted[:, k:] & 1).astype(np.uint8)
+    h_p_inv = _gf2_inverse(h_p)
+
+    h_s_packed = _pack_bits_rows(h_s)            # (m, ceil(k/64))
+    h_p_inv_cols = _pack_bits_rows(h_p_inv.T)    # (m, ceil(m/64))
+
+    result = (h_s_packed, h_p_inv_cols, int(k), int(n))
+    _encoder_tables_cache[config] = result
+    return result
 
 
 def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray:
-    """Encode k-bit message to a n-bit codeword."""
+    """Encode k-bit message to an n-bit codeword."""
     k = config.k
     if len(message) != k:
         msg = f"Message length {len(message)} != expected {k}"
@@ -295,11 +349,39 @@ def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray:
 
     if _ext is not None:
         msg_u8 = np.ascontiguousarray(message, dtype=np.uint8)
-        return _ext.encode(msg_u8, _get_packed_g(config), config.n).astype(int)
+        h_s_packed, h_p_inv_cols, _k, n = _get_encoder_tables(config)
+        # Return uint8 directly. Callers on the throughput-critical TX path want
+        # uint8 anyway; casting to int64 here only to be cast right back was pure overhead.
+        return _ext.encode(msg_u8, h_s_packed, h_p_inv_cols, n)
 
     g_mat, _ = _get_encoding_structures(config)
     codeword = message @ g_mat % 2
-    return codeword.astype(int)
+    return codeword.astype(np.uint8)
+
+
+def ldpc_encode_batch(messages: np.ndarray, config: LDPCConfig) -> np.ndarray:
+    """Encode `n_cw` messages in one C++ call.
+
+    `messages` has shape (n_cw, k) or shape (n_cw * k,) — both are accepted.
+    Returns uint8[n_cw, n], one row per codeword.
+    """
+    k = config.k
+    flat = np.ascontiguousarray(messages, dtype=np.uint8).ravel()
+    if len(flat) % k != 0:
+        msg = f"messages length {len(flat)} not a multiple of k={k}"
+        raise ValueError(msg)
+    n_cw = len(flat) // k
+
+    if _ext is not None and hasattr(_ext, "encode_batch"):
+        h_s_packed, h_p_inv_cols, _k, n = _get_encoder_tables(config)
+        return _ext.encode_batch(flat, h_s_packed, h_p_inv_cols, n, n_cw)
+
+    # Fallback: loop the per-codeword encoder.
+    n = config.n
+    out = np.empty((n_cw, n), dtype=np.uint8)
+    for i in range(n_cw):
+        out[i] = ldpc_encode(flat[i * k:(i + 1) * k], config)
+    return out
 
 
 @_njit

@@ -168,7 +168,7 @@ py::array_t<c64> upsample(
 // Module
 // ---------------------------------------------------------------------------
 
-PYBIND11_MODULE(pulse_shaping_ext, m) {
+PYBIND11_MODULE(pulse_shaping_ext, m, py::mod_gil_not_used()) {
     m.doc() = "C++ FIR filter kernels for complex64 signals (pulse shaping).";
 
     m.def("match_filter", &match_filter,

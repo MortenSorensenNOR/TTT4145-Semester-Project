@@ -235,7 +235,7 @@ py::array_t<c64> nda_symb_sync(
 // Module
 // ---------------------------------------------------------------------------
 
-PYBIND11_MODULE(gardner_ext, m) {
+PYBIND11_MODULE(gardner_ext, m, py::mod_gil_not_used()) {
     m.doc() = R"pbdoc(
         NDA symbol timing synchroniser — optimised pybind11 C++ extension.
 

@@ -223,9 +223,64 @@ LoopResult costas_loop_8psk(
 }
 
 // ---------------------------------------------------------------------------
+// 16PSK  —  Mth-power error detector,  error = atan2(Im{y^16}, Re{y^16}) / 16
+//
+// y^16 via 4 complex multiplies: y^2, y^4, y^8, y^16 (square-and-square).
+// Same atan2 / -ffast-math story as the 8PSK detector.
+// ---------------------------------------------------------------------------
+LoopResult costas_loop_16psk(
+    py::array_t<c64, py::array::c_style | py::array::forcecast> symbols,
+    f32 alpha, f32 beta,
+    f32 phase_estimate = 0.0f,
+    f32 integrator     = 0.0f)
+{
+    auto in = symbols.unchecked<1>();
+    int  n  = static_cast<int>(in.shape(0));
+
+    auto out_syms  = py::array_t<c64>(n);
+    auto out_phase = py::array_t<f32>(n);
+    auto syms_ptr  = out_syms.mutable_unchecked<1>();
+    auto phase_ptr = out_phase.mutable_unchecked<1>();
+
+    constexpr f32 INV16 = 1.0f / 16.0f;
+
+    {
+        py::gil_scoped_release nogil;
+        for (int i = 0; i < n; ++i) {
+            const f32 sr  = in(i).real();
+            const f32 si  = in(i).imag();
+            const int idx = phase_to_idx(phase_estimate);
+            const f32 c   = cos_lut[idx];
+            const f32 s   = sin_lut[idx];
+
+            const f32 cr =  sr * c + si * s;
+            const f32 ci = -sr * s + si * c;
+
+            // y^16 via 4 multiplies — no log/exp
+            const c64 y(cr, ci);
+            const c64 y2  = y   * y;
+            const c64 y4  = y2  * y2;
+            const c64 y8  = y4  * y4;
+            const c64 y16 = y8  * y8;
+
+            const f32 error = std::atan2(y16.imag(), y16.real()) * INV16;
+
+            integrator     += beta  * error;
+            phase_estimate += alpha * error + integrator;
+            phase_estimate  = wrap(phase_estimate);
+
+            syms_ptr(i)  = c64(cr, ci);
+            phase_ptr(i) = phase_estimate;
+        }
+    }
+
+    return {std::move(out_syms), std::move(out_phase)};
+}
+
+// ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
-PYBIND11_MODULE(costas_ext, m) {
+PYBIND11_MODULE(costas_ext, m, py::mod_gil_not_used()) {
     m.doc() = R"pbdoc(
         Costas loop carrier phase recovery — optimised pybind11 C++ extension.
 
@@ -269,4 +324,9 @@ PYBIND11_MODULE(costas_ext, m) {
         py::arg("symbols"), py::arg("alpha"), py::arg("beta"),
         py::arg("phase_estimate") = 0.0f, py::arg("integrator") = 0.0f,
         "8PSK Costas loop — Mth-power error detector");
+
+    m.def("costas_loop_16psk", &costas_loop_16psk,
+        py::arg("symbols"), py::arg("alpha"), py::arg("beta"),
+        py::arg("phase_estimate") = 0.0f, py::arg("integrator") = 0.0f,
+        "16PSK Costas loop — Mth-power error detector");
 }

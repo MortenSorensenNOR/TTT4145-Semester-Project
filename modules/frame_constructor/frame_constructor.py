@@ -39,6 +39,7 @@ class ModulationSchemes(Enum):
     BPSK = 0
     QPSK = 1
     PSK8 = 2
+    PSK16 = 3
 
 
 DEFAULT_CODING_RATE = 3  # CodeRates.FIVE_SIXTH_RATE.value — kept as int to avoid an import cycle

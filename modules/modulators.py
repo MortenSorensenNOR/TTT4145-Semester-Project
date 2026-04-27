@@ -135,6 +135,68 @@ class PSK8(Modulator):
             d1 = np.abs(r - self._llr_c1[b][np.newaxis, :]) ** 2
             out[:, b] = (d1.min(axis=1) - d0.min(axis=1)).astype(np.float32)
         return out
+
+
+class PSK16(Modulator):
+    def __init__(self) -> None:
+        self.bits_per_symbol = 4
+        self.qam_order = 16
+
+        # Gray-coded 16-PSK: ring position k ∈ 0..15 sits at angle k·π/8 and
+        # carries the bit pattern gray(k) = k ^ (k>>1).  symbol_mapping is
+        # indexed by bit-pattern, so we invert: position(bits) = inv_gray(bits).
+        bits_idx = np.arange(16, dtype=np.uint16)
+        # 4-bit inverse Gray:  b = g ^ (g>>1) ^ (g>>2) ^ (g>>3)
+        positions = bits_idx ^ (bits_idx >> 1) ^ (bits_idx >> 2) ^ (bits_idx >> 3)
+        angles = positions.astype(np.float64) * (np.pi / 8.0)
+        self.symbol_mapping = np.exp(1j * angles).astype(np.complex64)
+
+        # angular bin k (0..15) → bit pattern (Gray code of k).  Used by
+        # symbols2bits to map the nearest constellation slot back to bits.
+        ring = np.arange(16, dtype=np.uint8)
+        self._BIN_TO_IDX = (ring ^ (ring >> 1)).astype(np.uint8)
+
+        # Pre-split constellation by bit value at each position for max-log LLR.
+        idx = np.arange(16)
+        bits_for_idx = np.stack([(idx >> 3) & 1, (idx >> 2) & 1,
+                                 (idx >> 1) & 1, idx & 1], axis=1)
+        self._llr_c0 = [self.symbol_mapping[bits_for_idx[:, b] == 0].astype(np.complex64)
+                        for b in range(4)]
+        self._llr_c1 = [self.symbol_mapping[bits_for_idx[:, b] == 1].astype(np.complex64)
+                        for b in range(4)]
+
+    def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
+        if bitstream.size == 0:
+            return EMPTY_COMPLEX
+        bitstream = bitstream.reshape(-1, 4)
+        indices = ((bitstream[:, 0] << 3) | (bitstream[:, 1] << 2)
+                   | (bitstream[:, 2] << 1) | bitstream[:, 3])
+        return self.symbol_mapping[indices]
+
+    def symbols2bits(self, symbols: np.ndarray) -> np.ndarray:
+        if symbols.size == 0:
+            return EMPTY_INT
+        # 16 angular slots of π/8 each, centred on the constellation points.
+        bins = np.round(np.angle(symbols) / (np.pi / 8)).astype(int) % 16
+        indices = self._BIN_TO_IDX[bins]
+        bits = np.empty((symbols.size, 4), dtype=np.uint8)
+        bits[:, 0] = (indices >> 3) & 1
+        bits[:, 1] = (indices >> 2) & 1
+        bits[:, 2] = (indices >> 1) & 1
+        bits[:, 3] = indices & 1
+        return bits
+
+    def symbols2llrs(self, symbols: np.ndarray) -> np.ndarray:
+        # max-log MAP: LLR(b) = min_{s∈C1} |r-s|² − min_{s∈C0} |r-s|²
+        if symbols.size == 0:
+            return np.empty((0, 4), dtype=np.float32)
+        r = symbols.astype(np.complex64).reshape(-1, 1)
+        out = np.empty((r.shape[0], 4), dtype=np.float32)
+        for b in range(4):
+            d0 = np.abs(r - self._llr_c0[b][np.newaxis, :]) ** 2
+            d1 = np.abs(r - self._llr_c1[b][np.newaxis, :]) ** 2
+            out[:, b] = (d1.min(axis=1) - d0.min(axis=1)).astype(np.float32)
+        return out
 """
 
 LUT_SIZE = 128  # 128x128 grid for moderate accuracy

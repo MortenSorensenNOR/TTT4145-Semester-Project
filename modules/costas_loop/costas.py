@@ -86,15 +86,31 @@ def _8psk_py(symbols, alpha, beta, phase, integrator):
     return out_syms, out_phase
 
 
+def _16psk_py(symbols, alpha, beta, phase, integrator):
+    n = len(symbols)
+    out_syms  = np.empty(n, dtype=np.complex64)
+    out_phase = np.empty(n, dtype=np.float32)
+    for i, s in enumerate(symbols):
+        c  = s * np.exp(-1j * phase)
+        e  = np.angle(c ** 16) / 16.0
+        integrator += beta  * e
+        phase      += alpha * e + integrator
+        phase       = (phase + np.pi) % (2 * np.pi) - np.pi
+        out_syms[i] = c
+        out_phase[i] = phase
+    return out_syms, out_phase
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table — maps modulator type to the correct loop function.
 # Prefers the C++ extension, falls back to Python silently.
 # ---------------------------------------------------------------------------
 
 _func_map = {
-    ModulationSchemes.BPSK: _ext.costas_loop_bpsk if _ext else _bpsk_py,
-    ModulationSchemes.QPSK: _ext.costas_loop_qpsk if _ext else _qpsk_py,
-    ModulationSchemes.PSK8: _ext.costas_loop_8psk if _ext else _8psk_py,
+    ModulationSchemes.BPSK:  _ext.costas_loop_bpsk  if _ext else _bpsk_py,
+    ModulationSchemes.QPSK:  _ext.costas_loop_qpsk  if _ext else _qpsk_py,
+    ModulationSchemes.PSK8:  _ext.costas_loop_8psk  if _ext else _8psk_py,
+    ModulationSchemes.PSK16: _ext.costas_loop_16psk if _ext else _16psk_py,
 }
 
 # ---------------------------------------------------------------------------

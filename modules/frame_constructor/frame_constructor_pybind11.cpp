@@ -74,7 +74,7 @@ static int bits_to_int(const std::vector<int>& bits) {
 // Enums / structs
 // ---------------------------------------------------------------------------
 
-enum class ModulationSchemes : int { BPSK = 0, QPSK = 1, PSK8 = 2 };
+enum class ModulationSchemes : int { BPSK = 0, QPSK = 1, PSK8 = 2, PSK16 = 3 };
 
 struct FrameHeader {
     int               length = 0;
@@ -323,13 +323,14 @@ private:
 // pybind11 module
 // ---------------------------------------------------------------------------
 
-PYBIND11_MODULE(frame_constructor_ext, m) {
+PYBIND11_MODULE(frame_constructor_ext, m, py::mod_gil_not_used()) {
     m.doc() = "C++ frame constructor with pybind11 bindings (optimized)";
 
     py::enum_<ModulationSchemes>(m, "ModulationSchemes")
         .value("BPSK", ModulationSchemes::BPSK)
         .value("QPSK", ModulationSchemes::QPSK)
         .value("PSK8", ModulationSchemes::PSK8)
+        .value("PSK16", ModulationSchemes::PSK16)
         .export_values();
 
     py::class_<FrameHeader>(m, "FrameHeader")

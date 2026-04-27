@@ -448,7 +448,7 @@ FineResult fine_timing_ext(
 // Module
 // ---------------------------------------------------------------------------
 
-PYBIND11_MODULE(frame_sync_ext, m) {
+PYBIND11_MODULE(frame_sync_ext, m, py::mod_gil_not_used()) {
     m.doc() = R"pbdoc(
         Frame synchronization C++ extension.
 

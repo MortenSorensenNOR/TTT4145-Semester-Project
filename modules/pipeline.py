@@ -9,7 +9,7 @@ from modules.frame_constructor.frame_constructor import *
 from modules.golay import *
 from modules.frame_sync.frame_sync import *
 from modules.costas_loop.costas import *
-from modules.ldpc.ldpc import LDPCConfig, ldpc_encode, ldpc_decode
+from modules.ldpc.ldpc import LDPCConfig, ldpc_encode, ldpc_decode, ldpc_encode_batch
 from modules.ldpc.channel_coding import *
 from modules.gardner_ted.gardner import *
 
@@ -50,12 +50,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineConfig:
-    SAMPLE_RATE: int = 6_000_000
+    SAMPLE_RATE: int = 8_000_000
     CENTER_FREQ: int = 2_410_000_000
     SPS: int = 4
     SPAN: int = 8
     RRC_ALPHA: np.float32 = np.float32(0.25)
-    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
+    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK16
     CODING_RATE: CodeRates = CodeRates.FIVE_SIXTH_RATE
     LDPC_MAX_ITER: int = 20
     PRE_HEADER_GUARD_BITS: int = 0
@@ -128,15 +128,17 @@ class TXPipeline:
         self.frame_constructor = FrameConstructor()
         self.frame_constructor.header_config.use_golay = config.use_golay
 
-        # All three modulators always live on the TX pipeline so packets can
+        # All four modulators always live on the TX pipeline so packets can
         # override the default per-frame (e.g. ARQ pins itself to BPSK).
-        self.bpsk = BPSK()
-        self.qpsk = QPSK()
-        self.psk8 = PSK8()
+        self.bpsk  = BPSK()
+        self.qpsk  = QPSK()
+        self.psk8  = PSK8()
+        self.psk16 = PSK16()
         self._modulators = {
-            ModulationSchemes.BPSK: self.bpsk,
-            ModulationSchemes.QPSK: self.qpsk,
-            ModulationSchemes.PSK8: self.psk8,
+            ModulationSchemes.BPSK:  self.bpsk,
+            ModulationSchemes.QPSK:  self.qpsk,
+            ModulationSchemes.PSK8:  self.psk8,
+            ModulationSchemes.PSK16: self.psk16,
         }
         self.payload_modulator = self._modulators[self.config.MOD_SCHEME]
 
@@ -159,14 +161,12 @@ class TXPipeline:
         if code_rate == CodeRates.NONE:
             return flat
         n_cw, k, n_air = _on_air_payload_n_bits(len(flat), code_rate)
-        n = n_air // n_cw
         pad = n_cw * k - len(flat)
         msg = np.concatenate([flat, _LDPC_PAD_BITS[:pad]]) if pad else flat
         cfg = LDPCConfig(k=k, code_rate=code_rate)
-        coded = np.empty(n_cw * n, dtype=np.uint8)
-        for i in range(n_cw):
-            coded[i*n:(i+1)*n] = ldpc_encode(msg[i*k:(i+1)*k], cfg).astype(np.uint8)
-        return coded
+        # Single C++ call for all n_cw codewords — was the per-call pybind11
+        # marshalling that dominated runtime, not the XOR work.
+        return ldpc_encode_batch(msg, cfg).ravel()
 
     def transmit(self, packet: Packet) -> np.ndarray:
         # Per-packet overrides win, otherwise fall back to config. Empty-payload
@@ -231,9 +231,10 @@ class RXPipeline:
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
 
-        self.bpsk = BPSK()
-        self.qpsk = QPSK()
-        self.psk8 = PSK8()
+        self.bpsk  = BPSK()
+        self.qpsk  = QPSK()
+        self.psk8  = PSK8()
+        self.psk16 = PSK16()
 
         # generate the known long preamble for matched filtering
         self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
@@ -482,9 +483,10 @@ class RXPipeline:
             rx_syms = rx_syms[:payload_end-payload_start]*np.exp(-1j*current_phase_estimate)
 
         match header.mod_scheme:
-            case ModulationSchemes.BPSK: mod = self.bpsk
-            case ModulationSchemes.QPSK: mod = self.qpsk
-            case ModulationSchemes.PSK8: mod = self.psk8
+            case ModulationSchemes.BPSK:  mod = self.bpsk
+            case ModulationSchemes.QPSK:  mod = self.qpsk
+            case ModulationSchemes.PSK8:  mod = self.psk8
+            case ModulationSchemes.PSK16: mod = self.psk16
         logger.debug(f"Modulation scheme: {header.mod_scheme}")
 
         if code_rate == CodeRates.NONE:
