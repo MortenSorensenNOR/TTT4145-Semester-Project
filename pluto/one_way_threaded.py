@@ -54,7 +54,7 @@ import numpy as np
 import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
-from modules.parallel_pipeline import RXWorkerPool, TXWorkerPool
+from modules.parallel_pipeline import RXWorkerPool, TXWorkerPool, apply_cpu_affinity, parse_cpu_spec
 from modules.pulse_shaping.pulse_shaping import match_filter
 from pluto.config import (
     DAC_SCALE,
@@ -127,13 +127,30 @@ if __name__ == "__main__":
                         choices=("spawn", "fork", "forkserver"),
                         help="multiprocessing start method for the worker pools "
                              "(default: 'spawn').")
-    parser.add_argument("--worker-cpus", type=str, default=None,
-                        help="Pin workers to these CPU IDs (Linux only). "
-                             "Forms: '0,1,2,3', '0-3', '0-3,8', or 'p-cores' "
-                             "to auto-detect Intel hybrid P-cores. Default: "
-                             "no pinning. On 12th-gen Intel laptops the "
-                             "P-cores are the low-numbered CPUs.")
+    parser.add_argument("--worker-cpus", type=str, default="0",
+                        help="Pin the main process AND workers to these CPU "
+                             "IDs (Linux only). Forms: '0,1,2,3', '0-3', "
+                             "'0-3,8', the keyword 'p-cores', or empty "
+                             "string '' to disable. Default: '0' — CPU 0 is "
+                             "always a P-core on Intel hybrid systems and a "
+                             "regular core elsewhere, so this gives "
+                             "consistent single-thread performance even "
+                             "when --workers 0. Override with '0-3' or "
+                             "'0,2,4,6' when scaling up.")
+    parser.add_argument("--profile", action="store_true",
+                        help="In --mode tx, log rolling build / send timings "
+                             "every 100 packets so you can tell whether the "
+                             "bottleneck is tx_pipe.transmit (CPU) or "
+                             "stream.send / DMA push (radio).")
     args = parser.parse_args()
+
+    # Resolve the CPU set early — apply to the main process now so the inline
+    # path benefits, and forward the same set to every worker later.
+    if args.worker_cpus == "":
+        worker_cpus: list[int] | None = None
+    else:
+        worker_cpus = parse_cpu_spec(args.worker_cpus)
+    apply_cpu_affinity(worker_cpus)
 
     if args.mode not in ("tx", "rx", "both"):
         print(f"ERROR: --mode must be 'tx', 'rx', or 'both', got '{args.mode}'")
@@ -232,12 +249,6 @@ if __name__ == "__main__":
     rx_pool: RXWorkerPool | None = None
 
     if args.workers > 0:
-        if args.worker_cpus:
-            from modules.parallel_pipeline import parse_cpu_spec
-            worker_cpus = parse_cpu_spec(args.worker_cpus)
-            print(f"Worker CPUs: {worker_cpus}")
-        else:
-            worker_cpus = None
         if args.mode in ("tx", "both"):
             tx_pool = TXWorkerPool(pipe_cfg, n_workers=args.workers,
                                    start_method=args.mp_start,
@@ -261,6 +272,8 @@ if __name__ == "__main__":
         print(f"Workers   : {args.workers}  (start={args.mp_start or 'spawn'})")
     else:
         print("Workers   : 0  (inline TX build / RX decode on the threads)")
+    print(f"CPU pin   : {worker_cpus if worker_cpus else 'off'}  "
+          f"(applied to main process; also forwarded to workers)")
     print()
 
     # ---------------------------------------------------------------------------
@@ -424,11 +437,41 @@ if __name__ == "__main__":
         inflight: collections.deque = collections.deque()
         inflight_depth = max(2, tx_pool.n_workers * 2) if tx_pool else 0
 
+        # --- profiling ----------------------------------------------------------
+        prof_enabled  = args.profile
+        prof_build_ms: collections.deque = collections.deque(maxlen=500)
+        prof_send_ms:  collections.deque = collections.deque(maxlen=500)
+        air_ms_per_pkt = frame_len / pipe_cfg.SAMPLE_RATE * 1e3
+
+        def _maybe_log_profile() -> None:
+            n = len(prof_build_ms)
+            if n < 100:
+                return
+            bt = sorted(prof_build_ms)
+            st = sorted(prof_send_ms)
+            p99 = max(0, int(n * 0.99) - 1)
+            label = "build" if tx_pool is None else "ar.get"
+            status.log(
+                f"  [TX-prof] last {n} pkts: "
+                f"{label} avg={sum(bt)/n:.2f}ms p50={bt[n//2]:.2f}ms p99={bt[p99]:.2f}ms | "
+                f"send avg={sum(st)/n:.2f}ms p50={st[n//2]:.2f}ms p99={st[p99]:.2f}ms | "
+                f"air≈{air_ms_per_pkt:.2f}ms"
+            )
+            prof_build_ms.clear()
+            prof_send_ms.clear()
+
         def _drain_inflight():
             """Pull one finished job off the head of inflight (blocks for it)."""
             ar, payload_len, seq = inflight.popleft()
+            t0 = time.perf_counter()
             samples = ar.get(timeout=10.0)
+            t1 = time.perf_counter()
             stream.send(samples)
+            t2 = time.perf_counter()
+            if prof_enabled:
+                prof_build_ms.append((t1 - t0) * 1e3)
+                prof_send_ms.append((t2 - t1) * 1e3)
+                _maybe_log_profile()
             rate.add(payload_len)
             status.set(0, f"  [TX] seq={seq:>10d}  burst={burst_num:>4d}  "
                           f"pending={stream.pending:>3d}  rate={_fmt_rate(rate.rate_bps)}  "
@@ -447,8 +490,15 @@ if __name__ == "__main__":
                         pay_size = args.payload
 
                     if tx_pool is None:
+                        tb0 = time.perf_counter()
                         samples = _build_packet(global_seq, pay_size)
+                        tb1 = time.perf_counter()
                         stream.send(samples)
+                        tb2 = time.perf_counter()
+                        if prof_enabled:
+                            prof_build_ms.append((tb1 - tb0) * 1e3)
+                            prof_send_ms.append((tb2 - tb1) * 1e3)
+                            _maybe_log_profile()
                         rate.add(pay_size)
                         status.set(0, f"  [TX] seq={global_seq+1:>10d}  burst={burst_num:>4d}  "
                                       f"pending={stream.pending:>3d}  rate={_fmt_rate(rate.rate_bps)}  "

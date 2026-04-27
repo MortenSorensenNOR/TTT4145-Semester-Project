@@ -36,7 +36,7 @@ import numpy as np
 import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
-from modules.parallel_pipeline import RXWorkerPool, TXWorkerPool
+from modules.parallel_pipeline import RXWorkerPool, TXWorkerPool, apply_cpu_affinity, parse_cpu_spec
 from modules.pulse_shaping.pulse_shaping import match_filter
 from modules.tun import TunDevice
 from pluto.config import (
@@ -107,17 +107,30 @@ if __name__ == "__main__":
                         help="multiprocessing start method for the worker pools. "
                              "Default: 'spawn' (safest). Override via "
                              "RADIO_MP_START_METHOD or this flag.")
-    parser.add_argument("--worker-cpus", type=str, default=None,
-                        help="CPU IDs the workers should pin themselves to. "
-                             "Linux only — uses os.sched_setaffinity() in each "
-                             "worker's initializer. Forms: comma list "
-                             "('0,1,2,3'), range ('0-3'), mix ('0-3,8'), or "
-                             "the keyword 'p-cores' to auto-detect Intel "
-                             "hybrid P-cores via /sys/devices/cpu_core/cpus. "
-                             "Default: no pinning. On a 12th-gen Intel laptop "
-                             "the P-cores are CPUs 0..2N-1 (with hyperthreads) "
-                             "and the E-cores follow.")
+    parser.add_argument("--worker-cpus", type=str, default="0",
+                        help="CPU IDs to pin the main process AND workers to. "
+                             "Linux only — uses os.sched_setaffinity(). Forms: "
+                             "comma list ('0,1,2,3'), range ('0-3'), mix "
+                             "('0-3,8'), the keyword 'p-cores' to auto-detect "
+                             "Intel hybrid P-cores via "
+                             "/sys/devices/cpu_core/cpus, or empty string '' "
+                             "to disable pinning. Default: '0' — CPU 0 is "
+                             "always a P-core on Intel hybrid systems and a "
+                             "regular core elsewhere, so this gives "
+                             "consistent single-thread performance "
+                             "regardless of --workers. When --workers > 1, "
+                             "override this with e.g. '0-3' or '0,2,4,6' to "
+                             "give each worker its own physical P-core.")
     args = parser.parse_args()
+
+    # Resolve the CPU set early — apply to the main process now, then later
+    # forward the same set to every worker so the entire program runs on the
+    # intended cores. Empty string disables pinning.
+    if args.worker_cpus == "":
+        worker_cpus: list[int] | None = None
+    else:
+        worker_cpus = parse_cpu_spec(args.worker_cpus)
+    apply_cpu_affinity(worker_cpus)
 
     setup = load_setup()
     if args.node not in setup.nodes:
@@ -206,11 +219,6 @@ if __name__ == "__main__":
 
     if args.workers > 0:
         rx_slot_samples = 2 * rx_buf_size + 1024
-        if args.worker_cpus:
-            from modules.parallel_pipeline import parse_cpu_spec
-            worker_cpus = parse_cpu_spec(args.worker_cpus)
-        else:
-            worker_cpus = None
         tx_pool = TXWorkerPool(pipe_cfg, n_workers=args.workers,
                                start_method=args.mp_start,
                                cpu_set=worker_cpus)
@@ -230,6 +238,8 @@ if __name__ == "__main__":
               f"start={args.mp_start or 'spawn'})")
     else:
         print("Workers   : 0  (inline TX build / RX decode on the threads)")
+    print(f"CPU pin   : {worker_cpus if worker_cpus else 'off'}  "
+          f"(applied to main process; also forwarded to workers)")
     print()
 
     # ---------------------------------------------------------------------------

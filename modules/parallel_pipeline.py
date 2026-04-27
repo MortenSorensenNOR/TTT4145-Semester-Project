@@ -102,12 +102,15 @@ class RXResult:
 # TX worker functions.
 # ---------------------------------------------------------------------------
 
-def _apply_cpu_affinity(cpu_set: list[int] | None) -> None:
-    """Pin the *current* worker to the given CPU set (no-op if empty/None).
+def apply_cpu_affinity(cpu_set: list[int] | None) -> None:
+    """Pin the current process to the given CPU set (no-op if empty/None).
 
-    Used to keep workers on Intel hybrid P-cores instead of letting the OS
+    Used to keep work on Intel hybrid P-cores instead of letting the OS
     scheduler bounce a Python process onto E-cores. On Linux only — silently
     skipped on platforms without ``os.sched_setaffinity``.
+
+    Public so callers (the launcher scripts, the inline TX/RX threads) can
+    pin themselves with the same helper that the workers use.
     """
     if not cpu_set:
         return
@@ -116,6 +119,10 @@ def _apply_cpu_affinity(cpu_set: list[int] | None) -> None:
         os.sched_setaffinity(0, set(cpu_set))
     except (AttributeError, OSError) as e:
         logger.warning(f"CPU affinity not applied ({type(e).__name__}: {e})")
+
+
+# Backwards-compat alias — older callers used the underscore-prefixed name.
+_apply_cpu_affinity = apply_cpu_affinity
 
 
 def _tx_init(pipe_cfg: "PipelineConfig", init_barrier=None,
