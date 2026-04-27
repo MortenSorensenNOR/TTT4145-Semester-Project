@@ -15,12 +15,17 @@ so you don't have to pass ``--cfo-offset`` every run.
 
 Usage::
 
-    uv run python scripts/cfo_calibrate.py            # measure both directions
+    uv run python scripts/cfo_calibrate.py            # both directions
+    uv run python scripts/cfo_calibrate.py --node A   # only A_TX → B_RX
+    uv run python scripts/cfo_calibrate.py --node B   # only B_TX → A_RX
     uv run python scripts/cfo_calibrate.py --captures 20
 
-Assumes all four Plutos are reachable from this host at the IPs given
-in the ``nodes`` block of ``pluto/setup.json`` (same layout the bridge
-uses).
+Assumes the Plutos involved in the requested direction(s) are reachable
+from this host at the IPs in the ``nodes`` block of ``pluto/setup.json``.
+The default (no ``--node``) requires all four; ``--node A`` only opens
+A's TX and B's RX; ``--node B`` only opens B's TX and A's RX. When only
+one direction is measured, the other direction's existing value in the
+calibration file is preserved.
 """
 
 from __future__ import annotations
@@ -46,8 +51,7 @@ from pluto.setup_config import SETUP_PATH, CFOCalibration, load_or_die as load_s
 SAMPLE_RATE    = PIPELINE.SAMPLE_RATE
 BUF_SIZE       = 131_072         # ~30 Hz FFT bin at 4 Msps — fine enough for LO drift
 TONE_OFFSET_HZ = 100_000         # baseband tone offset (avoids DC-leakage peak)
-RX_GAIN_DB     = 50              # manual RX gain — plenty of margin over coax / short link
-TX_GAIN_DB     = -20             # a strong tone; the receiver has attenuator headroom
+TX_GAIN_DB     = -10             # a strong tone; the receiver has attenuator headroom
 FLUSH_BUFFERS  = 8               # discard this many RX buffers to clear DMA + settle AGC
 SETTLE_SECONDS = 0.2             # give TX DMA a moment before first RX capture
 
@@ -69,8 +73,9 @@ def _configure_tx(sdr: adi.Pluto, freq_hz: int, gain_db: float) -> None:
 
 
 def _configure_rx(sdr: adi.Pluto, freq_hz: int) -> None:
-    sdr.gain_control_mode_chan0 = "manual"
-    sdr.rx_hardwaregain_chan0 = RX_GAIN_DB
+    sdr.gain_control_mode_chan0 = "slow_attack"
+    # sdr.gain_control_mode_chan0 = "manual"
+    # sdr.rx_hardwaregain_chan0 = RX_GAIN_DB
     sdr.rx_lo = int(freq_hz)
     sdr.sample_rate = SAMPLE_RATE
     sdr.rx_rf_bandwidth = SAMPLE_RATE
@@ -139,6 +144,9 @@ def measure_path(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--node",     choices=["A", "B"], default=None,
+                        help="Only calibrate one direction: 'A' measures A_TX→B_RX, "
+                             "'B' measures B_TX→A_RX. Default: both directions.")
     parser.add_argument("--captures", type=int, default=10,
                         help="Buffers to median over, per direction (default: 10)")
     parser.add_argument("--output",   type=Path, default=SETUP_PATH,
@@ -147,40 +155,66 @@ def main() -> int:
                         help="Measure and print, but don't overwrite the calibration file.")
     args = parser.parse_args()
 
-    setup = load_setup(args.output)
-    a_tx_ip = setup.tx_ip("A")
-    a_rx_ip = setup.rx_ip("A")
-    b_tx_ip = setup.tx_ip("B")
-    b_rx_ip = setup.rx_ip("B")
+    setup  = load_setup(args.output)
+    do_a   = args.node in (None, "A")
+    do_b   = args.node in (None, "B")
+
+    a_tx_ip = setup.tx_ip("A") if do_a else None
+    b_rx_ip = setup.rx_ip("B") if do_a else None
+    b_tx_ip = setup.tx_ip("B") if do_b else None
+    a_rx_ip = setup.rx_ip("A") if do_b else None
 
     print("Opening radios:")
-    print(f"  A TX @ {a_tx_ip}")
-    print(f"  A RX @ {a_rx_ip}")
-    print(f"  B TX @ {b_tx_ip}")
-    print(f"  B RX @ {b_rx_ip}")
+    if do_a:
+        print(f"  A TX @ {a_tx_ip}")
+        print(f"  B RX @ {b_rx_ip}")
+    if do_b:
+        print(f"  B TX @ {b_tx_ip}")
+        print(f"  A RX @ {a_rx_ip}")
 
-    a_tx = adi.Pluto(f"ip:{a_tx_ip}")
-    a_rx = adi.Pluto(f"ip:{a_rx_ip}")
-    b_tx = adi.Pluto(f"ip:{b_tx_ip}")
-    b_rx = adi.Pluto(f"ip:{b_rx_ip}")
+    a_tx = adi.Pluto(f"ip:{a_tx_ip}") if do_a else None
+    b_rx = adi.Pluto(f"ip:{b_rx_ip}") if do_a else None
+    b_tx = adi.Pluto(f"ip:{b_tx_ip}") if do_b else None
+    a_rx = adi.Pluto(f"ip:{a_rx_ip}") if do_b else None
 
+    a_to_b: int | None = None
+    b_to_a: int | None = None
     try:
-        a_to_b = measure_path(a_tx, b_rx, FREQ_A_TO_B,
-                              captures=args.captures, label="A_TX → B_RX")
-        b_to_a = measure_path(b_tx, a_rx, FREQ_B_TO_A,
-                              captures=args.captures, label="B_TX → A_RX")
+        if do_a:
+            a_to_b = measure_path(a_tx, b_rx, FREQ_A_TO_B,
+                                  captures=args.captures, label="A_TX → B_RX")
+        if do_b:
+            b_to_a = measure_path(b_tx, a_rx, FREQ_B_TO_A,
+                                  captures=args.captures, label="B_TX → A_RX")
     finally:
         # Paranoid cleanup — either TX destroy may have already fired.
         for sdr in (a_tx, b_tx):
-            try:
-                sdr.tx_destroy_buffer()
-            except Exception:
-                pass
+            if sdr is not None:
+                try:
+                    sdr.tx_destroy_buffer()
+                except Exception:
+                    pass
+
+    # When only one direction was measured, preserve the other from any
+    # existing calibration so we don't clobber a previously-good value with 0.
+    prev = setup.cfo
+    if a_to_b is None:
+        a_to_b = prev.a_to_b_cfo_hz if prev is not None else 0
+        if prev is None:
+            print("[warn] no existing A_TX→B_RX calibration; saving 0 for that direction")
+    if b_to_a is None:
+        b_to_a = prev.b_to_a_cfo_hz if prev is not None else 0
+        if prev is None:
+            print("[warn] no existing B_TX→A_RX calibration; saving 0 for that direction")
 
     cal = CFOCalibration(a_to_b_cfo_hz=a_to_b, b_to_a_cfo_hz=b_to_a)
     print("\n── Result ──")
-    print(f"  A_TX → B_RX :  {cal.a_to_b_cfo_hz:+d} Hz   (B's RX LO will be tuned up by this)")
-    print(f"  B_TX → A_RX :  {cal.b_to_a_cfo_hz:+d} Hz   (A's RX LO will be tuned up by this)")
+    a_marker = "  " if do_a else "* "  # mark preserved-from-prior values
+    b_marker = "  " if do_b else "* "
+    print(f"{a_marker}A_TX → B_RX :  {cal.a_to_b_cfo_hz:+d} Hz   (B's RX LO will be tuned up by this)")
+    print(f"{b_marker}B_TX → A_RX :  {cal.b_to_a_cfo_hz:+d} Hz   (A's RX LO will be tuned up by this)")
+    if not (do_a and do_b):
+        print("  (* = preserved from prior calibration, not re-measured)")
 
     if args.dry_run:
         print("\n[dry-run] not writing calibration file")

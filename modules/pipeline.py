@@ -55,7 +55,7 @@ class PipelineConfig:
     SPS: int = 4
     SPAN: int = 8
     RRC_ALPHA: np.float32 = np.float32(0.25)
-    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK16
+    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
     CODING_RATE: CodeRates = CodeRates.FIVE_SIXTH_RATE
     LDPC_MAX_ITER: int = 20
     PRE_HEADER_GUARD_BITS: int = 0
@@ -252,6 +252,17 @@ class RXPipeline:
         # Time-reversed conjugate ref for the single-stage detector path.
         self.long_ref_rev = build_long_ref_rev(self.long_ref)
 
+        # Per-call diagnostic counters, refreshed at the start of each receive().
+        # `last_payload_failures` counts detections where the header decoded but
+        # the payload raised (CRC-16 mismatch, LDPC failure, etc.) — these are
+        # real packet losses that callers may want to surface in stats.
+        # `last_tail_cutoffs` counts IndexErrors where the frame extended past
+        # the buffer; the receive() loop breaks on those so the same detection
+        # gets retried on the next iteration with more samples appended, so
+        # callers should NOT treat them as drops.
+        self.last_payload_failures: int = 0
+        self.last_tail_cutoffs:     int = 0
+
     def receive(self, buffer: np.ndarray, search_from: int = 0) -> tuple[list[Packet], int]:
         """Detect and decode all frames in buffer.
 
@@ -275,7 +286,8 @@ class RXPipeline:
         logger.debug(f"Detected {len(detections)} packets\n\t Cfo's: {[float(det.cfo_estimate) for det in detections]}'")
 
         packets = []
-        n_decode_errors = 0
+        n_payload_failures = 0   # header decoded but payload raised — real losses
+        n_tail_cutoffs     = 0   # IndexError: frame past buffer end — will retry
         max_detection_sample = search_from  # track furthest detection attempted
         for det in detections:
             abs_payload_start = search_from + det.payload_start
@@ -294,18 +306,22 @@ class RXPipeline:
                 # cutoff — permanently losing it. Matters for variable-length
                 # payloads; with fixed lengths every later detection would
                 # also cut off, so the break is a no-op.
-                n_decode_errors += 1
+                n_tail_cutoffs += 1
                 logger.debug(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
                 break
             except Exception as e:
                 max_detection_sample = max(max_detection_sample, abs_payload_start)
-                n_decode_errors += 1
+                n_payload_failures += 1
                 logger.debug(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
             logger.debug(f"DECODE SUCCESS (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f})")
 
+        n_decode_errors = n_payload_failures + n_tail_cutoffs
         if n_decode_errors:
-            logger.info(f"{n_decode_errors}/{len(detections)} detections failed decode")
+            logger.info(f"{n_decode_errors}/{len(detections)} detections failed decode "
+                        f"({n_payload_failures} payload, {n_tail_cutoffs} tail-cutoff)")
 
+        self.last_payload_failures = n_payload_failures
+        self.last_tail_cutoffs     = n_tail_cutoffs
         return packets, max_detection_sample
 
     def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:

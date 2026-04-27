@@ -203,9 +203,10 @@ stats = {
     "tun_in":      0,  # IP packets pulled from TUN
     "tun_out":     0,  # IP packets written back to TUN
     "tun_dropped": 0,  # TUN reads dropped because send_q was full
-    "data_rx_ok":  0,  # valid frames received and accepted
+    "data_rx_ok":      0,  # valid frames received and accepted (header + payload OK, addressed to us)
     "data_rx_foreign": 0,  # valid frames whose dst_mac wasn't ours
-    "data_rx_invalid": 0,  # frames whose payload CRC failed
+    "data_rx_header_bad":  0,  # frames returned with valid=False (header CRC failed)
+    "data_rx_payload_bad": 0,  # detections where header decoded but payload raised (CRC-16 mismatch / LDPC fail) — these never appear in the returned packets list, counted via rx_pipe.last_payload_failures
 }
 
 
@@ -276,6 +277,12 @@ def rx_thread_fn():
             raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
 
             packets, max_det = rx_pipe.receive(raw, search_from=search_from)
+            # Detections where the header decoded fine but the payload raised
+            # (CRC-16 mismatch, LDPC failure, etc.) get dropped inside receive()
+            # and never appear in `packets` — surface them via this counter so
+            # they show up as drops in the stats. Tail-cutoff IndexErrors are
+            # NOT counted here: they retry on the next buffer.
+            stats["data_rx_payload_bad"] += rx_pipe.last_payload_failures
 
             prev_buf = curr_buf
             if packets:
@@ -286,7 +293,7 @@ def rx_thread_fn():
 
             for pkt in packets:
                 if not pkt.valid:
-                    stats["data_rx_invalid"] += 1
+                    stats["data_rx_header_bad"] += 1
                     continue
                 if pkt.dst_mac != my_addr:
                     stats["data_rx_foreign"] += 1
@@ -301,13 +308,15 @@ def rx_thread_fn():
                 stats["data_rx_ok"] += 1
                 stats["tun_out"]    += 1
                 rx_rate.add(pkt.length)
-                status.set(1, f"  [RX] ok={stats['data_rx_ok']:>8d}  "
-                              f"bad={stats['data_rx_invalid']:>4d}  "
-                              f"foreign={stats['data_rx_foreign']:>4d}  "
-                              f"q={stream._q.qsize():>3d}/{stream._q.maxsize}  "
-                              f"rate={_fmt_rate(rx_rate.rate_bps)}  "
-                              f"avg={_fmt_rate(rx_rate.avg_bps)}  "
-                              f"total={_fmt_bytes(rx_rate.total_bytes)}")
+
+            status.set(1, f"  [RX] ok={stats['data_rx_ok']:>8d}  "
+                          f"hdr_bad={stats['data_rx_header_bad']:>4d}  "
+                          f"pay_bad={stats['data_rx_payload_bad']:>4d}  "
+                          f"foreign={stats['data_rx_foreign']:>4d}  "
+                          f"q={stream._q.qsize():>3d}/{stream._q.maxsize}  "
+                          f"rate={_fmt_rate(rx_rate.rate_bps)}  "
+                          f"avg={_fmt_rate(rx_rate.avg_bps)}  "
+                          f"total={_fmt_bytes(rx_rate.total_bytes)}")
     finally:
         stream.stop()
 
@@ -343,7 +352,8 @@ finally:
     print(f"TUN out      : {stats['tun_out']}")
     print(f"TUN dropped  : {stats['tun_dropped']}  (send queue full)")
     print(f"RX valid     : {stats['data_rx_ok']}")
-    print(f"RX bad CRC   : {stats['data_rx_invalid']}")
+    print(f"RX hdr bad   : {stats['data_rx_header_bad']}   (header CRC failed)")
+    print(f"RX pay bad   : {stats['data_rx_payload_bad']}   (header OK, payload CRC/LDPC failed)")
     print(f"RX foreign   : {stats['data_rx_foreign']}  (dst_mac != us)")
     print(f"TX bytes     : {tx_rate.total_bytes}  (avg {_fmt_rate(tx_rate.avg_bps)})")
     print(f"RX bytes     : {rx_rate.total_bytes}  (avg {_fmt_rate(rx_rate.avg_bps)})")
