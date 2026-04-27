@@ -65,7 +65,7 @@ sudo ip netns exec arq-a ffmpeg \
     -c:v libx264 -preset ultrafast -tune zerolatency \
     -b:v 500k -maxrate 500k -bufsize 250k \
     -c:a aac -b:a 64k -ac 1 -ar 44100 \
-    -f mpegts tcp://10.0.0.1:5000
+    -f mpegts tcp://10.0.0.2:5000
 ```
 
 Watch `bridge-A.log` for DECODE ERROR lines and the periodic ARQ stats:

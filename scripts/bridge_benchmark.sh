@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bridge benchmark — two netns, *two Plutos in each* (one TX, one RX),
-# measure latency / throughput / post-ARQ reliability over the radio link.
+# measure latency / throughput / reliability over the radio link.
 #
 # Split-radio layout: single USB-2 Pluto can't sustain 4 Msps full-duplex,
 # so each node runs a dedicated TX radio and a dedicated RX radio. Host
@@ -38,13 +38,12 @@ set -euo pipefail
 
 # ── Defaults ─────────────────────────────────────────────────────────────
 PING_COUNT=30
-PING_INTERVAL=0.5       # -i 0.5 to keep from starving ARQ
+PING_INTERVAL=0.5
 IPERF_TIME=30
 TX_GAIN=-20             # dB, passed to both nodes
 MTU=1500
-WINDOW=15               # ARQ in-flight frames; must be < SEQ_SPACE/2 = 16
 SHAPE_RATE="1500kbit"   # TUN egress cap (cake qdisc); "off" to skip shaping
-TUN_NAME="pluto0"       # TUN iface name used by pluto.bridge (its --tun default)
+TUN_NAME="pluto0"       # TUN iface name used by pluto.tun_link (its --tun-name default)
 SKIP_IPERF=0            # iperf off by default — link must ping cleanly first
 SKIP_PING=0
 STARTUP_WAIT=6          # seconds to let bridges come up before traffic
@@ -52,8 +51,8 @@ CLEANUP_ONLY=0          # --cleanup: tear down state from a prior aborted run
 
 NS_A=arq-a
 NS_B=arq-b
-IP_A=10.0.0.0
-IP_B=10.0.0.1
+IP_A=10.0.0.1
+IP_B=10.0.0.2
 
 # Per-node TX/RX Pluto IPs are loaded from pluto/setup.json below.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,7 +80,6 @@ while [[ $# -gt 0 ]]; do
         --iperf-time)       IPERF_TIME=$2; shift 2 ;;
         --tx-gain)          TX_GAIN=$2; shift 2 ;;
         --mtu)              MTU=$2; shift 2 ;;
-        --window)           WINDOW=$2; shift 2 ;;
         --shape-rate)       SHAPE_RATE=$2; shift 2 ;;
         --no-shape)         SHAPE_RATE="off"; shift ;;
         --skip-iperf)       SKIP_IPERF=1; shift ;;
@@ -110,12 +108,12 @@ fi
 cleanup_only() {
     echo "[info] Cleanup-only mode"
 
-    # 1. Kill any python -m pluto.bridge processes still alive
-    if pgrep -f "pluto\.bridge" >/dev/null; then
+    # 1. Kill any python -m pluto.tun_link processes still alive
+    if pgrep -f "pluto\.tun_link" >/dev/null; then
         echo "[info]   killing stray bridge processes…"
-        pkill -INT -f "pluto\.bridge" 2>/dev/null || true
+        pkill -INT -f "pluto\.tun_link" 2>/dev/null || true
         sleep 1
-        pkill -KILL -f "pluto\.bridge" 2>/dev/null || true
+        pkill -KILL -f "pluto\.tun_link" 2>/dev/null || true
     fi
 
     # 2. For each netns we own, move every non-lo iface back to root,
@@ -280,18 +278,18 @@ LOG_B="$PROJ_ROOT/bridge-B.log"
 
 BRIDGE_PIDS=()
 
-echo "[info] Starting bridge A (window=$WINDOW, log: $LOG_A)…"
+echo "[info] Starting bridge A (log: $LOG_A)…"
 cd "$PROJ_ROOT"
-ip netns exec "$NS_A" "$PYTHON" -m pluto.bridge \
+ip netns exec "$NS_A" "$PYTHON" -m pluto.tun_link \
     --node A --tx-ip "$PLUTO_A_TX_IP" --rx-ip "$PLUTO_A_RX_IP" \
-    --tx-gain "$TX_GAIN" --mtu "$MTU" --window "$WINDOW" \
+    --gain "$TX_GAIN" --mtu "$MTU" --tun-name "$TUN_NAME" \
     >"$LOG_A" 2>&1 &
 BRIDGE_PIDS+=($!)
 
-echo "[info] Starting bridge B (window=$WINDOW, log: $LOG_B)…"
-ip netns exec "$NS_B" "$PYTHON" -m pluto.bridge \
+echo "[info] Starting bridge B (log: $LOG_B)…"
+ip netns exec "$NS_B" "$PYTHON" -m pluto.tun_link \
     --node B --tx-ip "$PLUTO_B_TX_IP" --rx-ip "$PLUTO_B_RX_IP" \
-    --tx-gain "$TX_GAIN" --mtu "$MTU" --window "$WINDOW" \
+    --gain "$TX_GAIN" --mtu "$MTU" --tun-name "$TUN_NAME" \
     >"$LOG_B" 2>&1 &
 BRIDGE_PIDS+=($!)
 
@@ -371,7 +369,7 @@ echo "========================================================================"
 echo "  SUMMARY"
 echo "========================================================================"
 [[ -n "$RESULT_PING" ]]         && echo "  Ping RTT (avg) : $RESULT_PING"
-[[ -n "$RESULT_RELIABILITY" ]]  && echo "  Post-ARQ loss  : $RESULT_RELIABILITY"
+[[ -n "$RESULT_RELIABILITY" ]]  && echo "  Loss           : $RESULT_RELIABILITY"
 [[ -n "$RESULT_THROUGHPUT" ]]   && echo "  Throughput     : $RESULT_THROUGHPUT"
 echo "  Bridge logs    : $LOG_A  $LOG_B"
 echo "========================================================================"

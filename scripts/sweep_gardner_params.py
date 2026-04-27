@@ -308,12 +308,12 @@ def main() -> int:
     p.add_argument("rx_buffers", help="directory, glob, or .npz file dumped by --save-rx-buf")
 
     # Default grid (~16500 combos = ~117× finer than the previous 140-combo default).
-    p.add_argument("--bnts-min",  type=float, default=0.0001, help="BnTs min (default: 0.0001)")
-    p.add_argument("--bnts-max",  type=float, default=0.01,   help="BnTs max (default: 0.01)")
-    p.add_argument("--bnts-step", type=float, default=0.0001, help="BnTs step (default: 0.0001)")
-    p.add_argument("--zeta-min",  type=float, default=0.4,    help="ζ min (default: 0.4)")
+    p.add_argument("--bnts-min",  type=float, default=0.001, help="BnTs min (default: 0.0001)")
+    p.add_argument("--bnts-max",  type=float, default=0.02,   help="BnTs max (default: 0.01)")
+    p.add_argument("--bnts-step", type=float, default=0.001, help="BnTs step (default: 0.0001)")
+    p.add_argument("--zeta-min",  type=float, default=0.6,    help="ζ min (default: 0.4)")
     p.add_argument("--zeta-max",  type=float, default=2.0,    help="ζ max (default: 2.0)")
-    p.add_argument("--zeta-step", type=float, default=0.05,   help="ζ step (default: 0.05)")
+    p.add_argument("--zeta-step", type=float, default=0.04,   help="ζ step (default: 0.05)")
     p.add_argument("--l-min",     type=int,   default=1,      help="L min (default: 1)")
     p.add_argument("--l-max",     type=int,   default=5,      help="L max (default: 5)")
 

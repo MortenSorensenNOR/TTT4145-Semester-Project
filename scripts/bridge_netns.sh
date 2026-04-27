@@ -6,15 +6,13 @@
 # pulled out into an up/down controller. After `up` the bridges keep
 # running in the background; run your traffic tool inside either netns:
 #
-#     sudo ip netns exec arq-a ffmpeg -re -i input.mp4 ... 10.0.0.1
+#     sudo ip netns exec arq-a ffmpeg -re -i input.mp4 ... 10.0.0.2
 #     sudo ip netns exec arq-b ffplay udp://0.0.0.0:5000
 #
 # Usage:
 #     sudo ./scripts/bridge_netns.sh up                      # bring link up
 #     sudo ./scripts/bridge_netns.sh up --shape-rate 2mbit   # custom shaping
 #     sudo ./scripts/bridge_netns.sh up --no-shape           # no qdisc
-#     sudo ./scripts/bridge_netns.sh up --window 5           # smaller ARQ window
-#     sudo ./scripts/bridge_netns.sh up --arq-queue-depth 64  # bigger ingress queue
 #     sudo ./scripts/bridge_netns.sh status                  # what's running?
 #     sudo ./scripts/bridge_netns.sh down                    # tear down
 #
@@ -28,8 +26,8 @@ set -euo pipefail
 # ── Config ───────────────────────────────────────────────────────────────
 NS_A=arq-a
 NS_B=arq-b
-IP_A=10.0.0.0
-IP_B=10.0.0.1
+IP_A=10.0.0.1
+IP_B=10.0.0.2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJ_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -54,9 +52,6 @@ TUN_NAME=pluto0
 
 TX_GAIN=-20
 MTU=1500
-WINDOW=15
-ARQ_QUEUE_DEPTH=32      # ARQ ingress queue; bump for bursty UDP (streaming, etc.)
-RETRANSMIT_TIMEOUT=0.15 # seconds before ARQ re-sends unacked frames (ping RTT × 2-3)
 SHAPE_RATE="1500kbit"   # "off" to skip; override with --shape-rate / --no-shape
 STARTUP_WAIT=6
 
@@ -73,9 +68,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --tx-gain)    TX_GAIN=$2; shift 2 ;;
         --mtu)        MTU=$2; shift 2 ;;
-        --window)     WINDOW=$2; shift 2 ;;
-        --arq-queue-depth) ARQ_QUEUE_DEPTH=$2; shift 2 ;;
-        --retransmit-timeout) RETRANSMIT_TIMEOUT=$2; shift 2 ;;
         --shape-rate) SHAPE_RATE=$2; shift 2 ;;
         --no-shape)   SHAPE_RATE="off"; shift ;;
         --startup-wait) STARTUP_WAIT=$2; shift 2 ;;
@@ -152,10 +144,10 @@ cmd_down() {
     # 1. Kill tracked bridges; best-effort sweep for anything leftover.
     kill_bridge "$PID_A"
     kill_bridge "$PID_B"
-    if pgrep -f "pluto\.bridge" >/dev/null; then
-        pkill -INT -f "pluto\.bridge" 2>/dev/null || true
+    if pgrep -f "pluto\.tun_link" >/dev/null; then
+        pkill -INT -f "pluto\.tun_link" 2>/dev/null || true
         sleep 1
-        pkill -KILL -f "pluto\.bridge" 2>/dev/null || true
+        pkill -KILL -f "pluto\.tun_link" 2>/dev/null || true
     fi
 
     # 2. Drain each netns and restore the USB iface IPs.
@@ -275,21 +267,17 @@ cmd_up() {
     : > "$LOG_A"; : > "$LOG_B"
     cd "$PROJ_ROOT"
 
-    echo "[info] Starting bridge A (window=$WINDOW, arq-queue=$ARQ_QUEUE_DEPTH, log: $LOG_A)…"
-    ip netns exec "$NS_A" "$PYTHON" -m pluto.bridge \
+    echo "[info] Starting bridge A (log: $LOG_A)…"
+    ip netns exec "$NS_A" "$PYTHON" -m pluto.tun_link \
         --node A --tx-ip "$PLUTO_A_TX_IP" --rx-ip "$PLUTO_A_RX_IP" \
-        --tx-gain "$TX_GAIN" --mtu "$MTU" --window "$WINDOW" \
-        --arq-queue-depth "$ARQ_QUEUE_DEPTH" \
-        --retransmit-timeout "$RETRANSMIT_TIMEOUT" \
+        --gain "$TX_GAIN" --mtu "$MTU" --tun-name "$TUN_NAME" \
         >"$LOG_A" 2>&1 &
     echo $! > "$PID_A"
 
-    echo "[info] Starting bridge B (window=$WINDOW, arq-queue=$ARQ_QUEUE_DEPTH, log: $LOG_B)…"
-    ip netns exec "$NS_B" "$PYTHON" -m pluto.bridge \
+    echo "[info] Starting bridge B (log: $LOG_B)…"
+    ip netns exec "$NS_B" "$PYTHON" -m pluto.tun_link \
         --node B --tx-ip "$PLUTO_B_TX_IP" --rx-ip "$PLUTO_B_RX_IP" \
-        --tx-gain "$TX_GAIN" --mtu "$MTU" --window "$WINDOW" \
-        --arq-queue-depth "$ARQ_QUEUE_DEPTH" \
-        --retransmit-timeout "$RETRANSMIT_TIMEOUT" \
+        --gain "$TX_GAIN" --mtu "$MTU" --tun-name "$TUN_NAME" \
         >"$LOG_B" 2>&1 &
     echo $! > "$PID_B"
 
