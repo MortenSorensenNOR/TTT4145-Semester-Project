@@ -38,6 +38,7 @@ pluto.setup_config for the schema.
 """
 
 import argparse
+import collections
 import queue
 import sys
 import threading
@@ -53,6 +54,8 @@ import numpy as np
 import adi
 
 from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
+from modules.parallel_pipeline import RXWorkerPool, TXWorkerPool
+from modules.pulse_shaping.pulse_shaping import match_filter
 from pluto.config import (
     DAC_SCALE,
     FREQ_A_TO_B,
@@ -109,6 +112,20 @@ parser.add_argument("--save-rx-buf", type=str, default=None,
 parser.add_argument("--save-n",      type=int, default=4,
                     help="How many RX buffers to dump (default: 4). Only buffers that "
                          "produced ≥1 detected packet are saved.")
+parser.add_argument("--workers",     type=int, default=0,
+                    help="Number of worker processes used for TX packet build / "
+                         "RX packet decode. 0 = run inline on the TX/RX threads "
+                         "(default). Useful on hybrid Intel CPUs where pinning "
+                         "work into separate processes lets the OS scheduler "
+                         "park us on P-cores instead of bouncing one Python "
+                         "thread between P/E cores.")
+parser.add_argument("--rx-slots",    type=int, default=4,
+                    help="Number of shared-memory slots in the RX worker ring "
+                         "(default: 4). Only applies when --workers > 0.")
+parser.add_argument("--mp-start",    type=str, default=None,
+                    choices=("spawn", "fork", "forkserver"),
+                    help="multiprocessing start method for the worker pools "
+                         "(default: 'spawn').")
 args = parser.parse_args()
 
 if args.mode not in ("tx", "rx", "both"):
@@ -213,29 +230,148 @@ if args.mode in ("rx", "both"):
     print(f"RX buf    : {rx_buf_size} samples  ({rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
 print(f"Gap       : {args.interval} ms")
 print(f"Packets   : {args.packets} per burst")
-print(f"TX gain   : {args.gain} dB\n")
+print(f"TX gain   : {args.gain} dB")
+
+# ---------------------------------------------------------------------------
+# Worker pools — only created when --workers > 0.
+# ---------------------------------------------------------------------------
+
+tx_pool: TXWorkerPool | None = None
+rx_pool: RXWorkerPool | None = None
+
+if args.workers > 0:
+    if args.mode in ("tx", "both"):
+        tx_pool = TXWorkerPool(pipe_cfg, n_workers=args.workers,
+                               start_method=args.mp_start)
+    if args.mode in ("rx", "both"):
+        rx_slot_samples = 2 * rx_buf_size + 1024
+        rx_pool = RXWorkerPool(pipe_cfg, n_workers=args.workers,
+                               slot_samples=rx_slot_samples,
+                               n_slots=args.rx_slots,
+                               start_method=args.mp_start)
+        print(f"RX slots  : {args.rx_slots} × {rx_slot_samples} samples")
+    print(f"Workers   : {args.workers}  (start={args.mp_start or 'spawn'})")
+else:
+    print("Workers   : 0  (inline TX build / RX decode on the threads)")
+print()
 
 # ---------------------------------------------------------------------------
 # TX helpers
 # ---------------------------------------------------------------------------
 
-def _build_packet(seq: int, payload_bytes: int) -> np.ndarray:
-    """Build a single packet with the given seq number and payload size.
+def _make_payload_bytes(seq: int, payload_bytes: int) -> bytes:
+    """Build the per-packet payload as bytes: 32-bit big-endian seq + random pad.
 
-    Returns DAC-scaled complex64 samples ready for TxStream.send().
+    Identical layout to the prior bit-level builder once unpacked at the
+    modulator (np.unpackbits is MSB-first within each byte).
     """
     seq = seq % (2**32)
-    seq_bytes     = np.array([(seq >> 24) & 0xFF, (seq >> 16) & 0xFF,
-                               (seq >>  8) & 0xFF,  seq        & 0xFF], dtype=np.uint8)
-    sequence_bits = np.unpackbits(seq_bytes)
-    random_bits   = rng.integers(0, 2, payload_bytes * 8 - 32, dtype=np.uint8)
-    payload_bits  = np.concatenate([sequence_bits, random_bits])
-    pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=payload_bytes, payload=payload_bits)
+    if payload_bytes < 4:
+        raise ValueError("payload must be at least 4 bytes (seq prefix)")
+    head = np.array([(seq >> 24) & 0xFF, (seq >> 16) & 0xFF,
+                     (seq >>  8) & 0xFF,  seq        & 0xFF], dtype=np.uint8)
+    tail = rng.integers(0, 256, payload_bytes - 4, dtype=np.uint8)
+    return np.concatenate([head, tail]).tobytes()
+
+
+def _build_packet_inline(payload: bytes) -> np.ndarray:
+    """In-thread packet build (no MP). Returns DAC-scaled complex64 samples."""
+    bits = np.unpackbits(np.frombuffer(payload, dtype=np.uint8))
+    pkt = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0,
+                 length=len(payload), payload=bits)
     samples = tx_pipe.transmit(pkt)
-    peak    = np.max(np.abs(samples))
+    peak = float(np.max(np.abs(samples)))
     if peak > 0:
         samples = samples / peak
     return (samples * DAC_SCALE).astype(np.complex64)
+
+
+def _build_packet(seq: int, payload_bytes: int) -> np.ndarray:
+    """Inline build that takes the (seq, payload_size) tuple — kept for callers
+    that don't bother with the pool path (build-once probes, etc.)."""
+    return _build_packet_inline(_make_payload_bytes(seq, payload_bytes))
+
+
+# ---------------------------------------------------------------------------
+# RX MP shim — same return shape as rx_pipe.receive() so run_rx / the both-
+# mode RX thread don't need to know which path is in use.
+# ---------------------------------------------------------------------------
+
+def _result_to_packet(result, abs_payload_start: int) -> Packet:
+    """Translate an RXResult back into a Packet so legacy consumers (run_rx,
+    save_rx_buf, constellation plotter) keep working unchanged."""
+    if result.payload_bytes:
+        bits = np.unpackbits(np.frombuffer(result.payload_bytes, dtype=np.uint8))
+        payload = bits.reshape(-1, 1).astype(int)
+    else:
+        payload = np.empty((0, 1), dtype=int)
+    return Packet(
+        src_mac=result.src_mac,
+        dst_mac=result.dst_mac,
+        type=result.type,
+        seq_num=result.seq_num,
+        length=result.length,
+        payload=payload,
+        valid=result.valid,
+        sample_start=abs_payload_start,
+        rx_symbols=result.rx_symbols,
+    )
+
+
+def _mp_receive(raw: np.ndarray, search_from: int) -> tuple[list[Packet], int]:
+    """Drop-in replacement for rx_pipe.receive() that decodes via rx_pool.
+
+    Mirrors the break-on-tail-cutoff semantics: detections after a tail-cut
+    are discarded so they remain eligible for retry on the next iteration.
+    """
+    search_buf = raw[search_from:]
+    filtered   = match_filter(search_buf, rx_pipe.rrc_taps)
+    detections = rx_pipe.detect(filtered)
+
+    packets: list[Packet] = []
+    payload_failures = 0
+    max_det = search_from
+
+    if not detections:
+        rx_pipe.last_payload_failures = 0
+        rx_pipe.last_tail_cutoffs = 0
+        return packets, max_det
+
+    sub = rx_pool.submit_buffer(filtered, detections, search_from_abs=search_from)
+
+    tail_cut = False
+    n_tail_cutoffs = 0
+    for ar, abs_offset in zip(sub.futures, sub.abs_offsets):
+        try:
+            result = ar.get(timeout=10.0)
+        except Exception:
+            payload_failures += 1
+            max_det = max(max_det, abs_offset)
+            continue
+        if tail_cut:
+            continue
+        if result.status == "ok":
+            packets.append(_result_to_packet(result, abs_offset))
+            max_det = max(max_det, abs_offset)
+        elif result.status == "tail_cutoff":
+            tail_cut = True
+            n_tail_cutoffs += 1
+        else:
+            payload_failures += 1
+            max_det = max(max_det, abs_offset)
+
+    # Surface the per-call counters where rx_pipe.receive() would have set them
+    # so existing stats-gathering callsites keep working.
+    rx_pipe.last_payload_failures = payload_failures
+    rx_pipe.last_tail_cutoffs     = n_tail_cutoffs
+    return packets, max_det
+
+
+def _receive(raw: np.ndarray, search_from: int) -> tuple[list[Packet], int]:
+    """Wrapper that dispatches between inline rx_pipe.receive and the MP pool."""
+    if rx_pool is None:
+        return rx_pipe.receive(raw, search_from=search_from)
+    return _mp_receive(raw, search_from=search_from)
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +392,21 @@ def run_tx():
     global_seq = 0
     burst_num  = 0
 
+    # Bounded inflight queue for the MP path. Keep ~2 jobs/worker queued so the
+    # pool stays saturated without hoarding memory.
+    inflight: collections.deque = collections.deque()
+    inflight_depth = max(2, tx_pool.n_workers * 2) if tx_pool else 0
+
+    def _drain_inflight():
+        """Pull one finished job off the head of inflight (blocks for it)."""
+        ar, payload_len, seq = inflight.popleft()
+        samples = ar.get(timeout=10.0)
+        stream.send(samples)
+        rate.add(payload_len)
+        status.set(0, f"  [TX] seq={seq:>10d}  burst={burst_num:>4d}  "
+                      f"pending={stream.pending:>3d}  rate={_fmt_rate(rate.rate_bps)}  "
+                      f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
+
     try:
         while True:
             burst_num  += 1
@@ -267,13 +418,29 @@ def run_tx():
                     pay_size = int(rng.integers(args.min_payload, args.payload + 1))
                 else:
                     pay_size = args.payload
-                samples = _build_packet(global_seq, pay_size)
-                stream.send(samples)
-                rate.add(pay_size)
+
+                if tx_pool is None:
+                    samples = _build_packet(global_seq, pay_size)
+                    stream.send(samples)
+                    rate.add(pay_size)
+                    status.set(0, f"  [TX] seq={global_seq+1:>10d}  burst={burst_num:>4d}  "
+                                  f"pending={stream.pending:>3d}  rate={_fmt_rate(rate.rate_bps)}  "
+                                  f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
+                else:
+                    payload_bytes = _make_payload_bytes(global_seq, pay_size)
+                    ar = tx_pool.submit(payload_bytes, 0, 1, 0, 0, float(DAC_SCALE))
+                    inflight.append((ar, pay_size, global_seq + 1))
+                    # Apply back-pressure: if the queue is at depth, drain one
+                    # before submitting more.
+                    while len(inflight) >= inflight_depth:
+                        _drain_inflight()
+
                 global_seq += 1
-                status.set(0, f"  [TX] seq={global_seq:>10d}  burst={burst_num:>4d}  "
-                              f"pending={stream.pending:>3d}  rate={_fmt_rate(rate.rate_bps)}  "
-                              f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
+
+            # End of burst: drain remaining inflight before reporting timing,
+            # otherwise the burst time is misleading (work is still queued).
+            while inflight:
+                _drain_inflight()
 
             t1 = time.perf_counter()
             status.log(f"  [TX] burst {burst_num}: {args.packets} pkts "
@@ -383,7 +550,7 @@ def run_rx():
 
             _t0 = time.perf_counter()
             _rx_search_from = search_from
-            packets, max_det = rx_pipe.receive(raw, search_from=search_from)
+            packets, max_det = _receive(raw, search_from=search_from)
             _proc_ms = (time.perf_counter() - _t0) * 1e3
             _proc_times.append(_proc_ms)
             _buf_count += 1
@@ -541,20 +708,47 @@ else:  # "both" — original threaded loopback behaviour
         stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
         stream.start()
 
+        # MP path: keep ~2× n_workers builds in flight; non-MP: build inline.
+        inflight: collections.deque = collections.deque()
+        inflight_depth = max(2, tx_pool.n_workers * 2) if tx_pool else 0
+
+        def _drain_one():
+            ar, payload_len, seq_disp = inflight.popleft()
+            samples = ar.get(timeout=10.0)
+            stream.send(samples)
+            tx_rate.add(payload_len)
+            status.set(0, f"  [TX] seq={seq_disp:>10d}/{args.packets}  "
+                          f"pending={stream.pending:>3d}  "
+                          f"rate={_fmt_rate(tx_rate.rate_bps)}  "
+                          f"avg={_fmt_rate(tx_rate.avg_bps)}  "
+                          f"total={_fmt_bytes(tx_rate.total_bytes)}")
+
         t0 = time.perf_counter()
         for seq in range(args.packets):
             if args.variable:
                 pay_size = int(rng.integers(args.min_payload, args.payload + 1))
             else:
                 pay_size = args.payload
-            samples = _build_packet(seq, pay_size)
-            stream.send(samples)
-            tx_rate.add(pay_size)
-            status.set(0, f"  [TX] seq={seq+1:>10d}/{args.packets}  "
-                          f"pending={stream.pending:>3d}  "
-                          f"rate={_fmt_rate(tx_rate.rate_bps)}  "
-                          f"avg={_fmt_rate(tx_rate.avg_bps)}  "
-                          f"total={_fmt_bytes(tx_rate.total_bytes)}")
+
+            if tx_pool is None:
+                samples = _build_packet(seq, pay_size)
+                stream.send(samples)
+                tx_rate.add(pay_size)
+                status.set(0, f"  [TX] seq={seq+1:>10d}/{args.packets}  "
+                              f"pending={stream.pending:>3d}  "
+                              f"rate={_fmt_rate(tx_rate.rate_bps)}  "
+                              f"avg={_fmt_rate(tx_rate.avg_bps)}  "
+                              f"total={_fmt_bytes(tx_rate.total_bytes)}")
+            else:
+                payload_bytes = _make_payload_bytes(seq, pay_size)
+                ar = tx_pool.submit(payload_bytes, 0, 1, 0, 0, float(DAC_SCALE))
+                inflight.append((ar, pay_size, seq + 1))
+                while len(inflight) >= inflight_depth:
+                    _drain_one()
+
+        # Drain any remaining inflight builds before reporting timing.
+        while inflight:
+            _drain_one()
 
         # Wait for the stream to drain the queue
         while stream.pending > 0:
@@ -598,7 +792,7 @@ else:  # "both" — original threaded loopback behaviour
             prev_len = len(prev_buf) if prev_buf is not None else 0
             raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
 
-            packets, max_det = rx_pipe.receive(raw, search_from=search_from)
+            packets, max_det = _receive(raw, search_from=search_from)
 
             prev_buf = curr_buf
             if packets:
@@ -709,6 +903,11 @@ if tx_sdr is not None:
     del tx_sdr
 if rx_sdr is not None:
     del rx_sdr
+
+if tx_pool is not None:
+    tx_pool.shutdown()
+if rx_pool is not None:
+    rx_pool.shutdown()
 
 sys.exit(0)
 
