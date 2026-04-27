@@ -127,6 +127,12 @@ if __name__ == "__main__":
                         choices=("spawn", "fork", "forkserver"),
                         help="multiprocessing start method for the worker pools "
                              "(default: 'spawn').")
+    parser.add_argument("--worker-cpus", type=str, default=None,
+                        help="Pin workers to these CPU IDs (Linux only). "
+                             "Forms: '0,1,2,3', '0-3', '0-3,8', or 'p-cores' "
+                             "to auto-detect Intel hybrid P-cores. Default: "
+                             "no pinning. On 12th-gen Intel laptops the "
+                             "P-cores are the low-numbered CPUs.")
     args = parser.parse_args()
 
     if args.mode not in ("tx", "rx", "both"):
@@ -226,15 +232,23 @@ if __name__ == "__main__":
     rx_pool: RXWorkerPool | None = None
 
     if args.workers > 0:
+        if args.worker_cpus:
+            from modules.parallel_pipeline import parse_cpu_spec
+            worker_cpus = parse_cpu_spec(args.worker_cpus)
+            print(f"Worker CPUs: {worker_cpus}")
+        else:
+            worker_cpus = None
         if args.mode in ("tx", "both"):
             tx_pool = TXWorkerPool(pipe_cfg, n_workers=args.workers,
-                                   start_method=args.mp_start)
+                                   start_method=args.mp_start,
+                                   cpu_set=worker_cpus)
         if args.mode in ("rx", "both"):
             rx_slot_samples = 2 * rx_buf_size + 1024
             rx_pool = RXWorkerPool(pipe_cfg, n_workers=args.workers,
                                    slot_samples=rx_slot_samples,
                                    n_slots=args.rx_slots,
-                                   start_method=args.mp_start)
+                                   start_method=args.mp_start,
+                                   cpu_set=worker_cpus)
             print(f"RX slots  : {args.rx_slots} × {rx_slot_samples} samples")
         # Atexit so the shared-memory ring gets unlinked even when the SDR
         # raises (libiio TimeoutError, USB unplug, etc.) and skips the

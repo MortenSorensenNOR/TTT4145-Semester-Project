@@ -107,6 +107,16 @@ if __name__ == "__main__":
                         help="multiprocessing start method for the worker pools. "
                              "Default: 'spawn' (safest). Override via "
                              "RADIO_MP_START_METHOD or this flag.")
+    parser.add_argument("--worker-cpus", type=str, default=None,
+                        help="CPU IDs the workers should pin themselves to. "
+                             "Linux only — uses os.sched_setaffinity() in each "
+                             "worker's initializer. Forms: comma list "
+                             "('0,1,2,3'), range ('0-3'), mix ('0-3,8'), or "
+                             "the keyword 'p-cores' to auto-detect Intel "
+                             "hybrid P-cores via /sys/devices/cpu_core/cpus. "
+                             "Default: no pinning. On a 12th-gen Intel laptop "
+                             "the P-cores are CPUs 0..2N-1 (with hyperthreads) "
+                             "and the E-cores follow.")
     args = parser.parse_args()
 
     setup = load_setup()
@@ -196,12 +206,19 @@ if __name__ == "__main__":
 
     if args.workers > 0:
         rx_slot_samples = 2 * rx_buf_size + 1024
+        if args.worker_cpus:
+            from modules.parallel_pipeline import parse_cpu_spec
+            worker_cpus = parse_cpu_spec(args.worker_cpus)
+        else:
+            worker_cpus = None
         tx_pool = TXWorkerPool(pipe_cfg, n_workers=args.workers,
-                               start_method=args.mp_start)
+                               start_method=args.mp_start,
+                               cpu_set=worker_cpus)
         rx_pool = RXWorkerPool(pipe_cfg, n_workers=args.workers,
                                slot_samples=rx_slot_samples,
                                n_slots=args.rx_slots,
-                               start_method=args.mp_start)
+                               start_method=args.mp_start,
+                               cpu_set=worker_cpus)
         # Atexit so the shared-memory ring gets unlinked even when the SDR
         # raises (libiio TimeoutError, USB unplug, etc.) and skips the
         # finally-cleanup at the bottom of the script.

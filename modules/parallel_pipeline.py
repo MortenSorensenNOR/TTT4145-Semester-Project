@@ -102,7 +102,24 @@ class RXResult:
 # TX worker functions.
 # ---------------------------------------------------------------------------
 
-def _tx_init(pipe_cfg: "PipelineConfig", init_barrier=None) -> None:
+def _apply_cpu_affinity(cpu_set: list[int] | None) -> None:
+    """Pin the *current* worker to the given CPU set (no-op if empty/None).
+
+    Used to keep workers on Intel hybrid P-cores instead of letting the OS
+    scheduler bounce a Python process onto E-cores. On Linux only — silently
+    skipped on platforms without ``os.sched_setaffinity``.
+    """
+    if not cpu_set:
+        return
+    try:
+        import os
+        os.sched_setaffinity(0, set(cpu_set))
+    except (AttributeError, OSError) as e:
+        logger.warning(f"CPU affinity not applied ({type(e).__name__}: {e})")
+
+
+def _tx_init(pipe_cfg: "PipelineConfig", init_barrier=None,
+             cpu_set: list[int] | None = None) -> None:
     """Worker initializer: build a TXPipeline, warm caches with a small probe.
 
     If ``init_barrier`` is given (a multiprocessing.Barrier sized to the worker
@@ -112,7 +129,12 @@ def _tx_init(pipe_cfg: "PipelineConfig", init_barrier=None) -> None:
     initialized — essential when the next thing the parent does is open an
     SDR over libiio (its 1 s default refill timeout is short enough that
     background spawn-import CPU pressure can blow past it).
+
+    If ``cpu_set`` is given the worker pins itself to those CPU IDs before
+    importing modules so that even the heavy spawn-import work runs on the
+    intended cores (P-cores, typically).
     """
+    _apply_cpu_affinity(cpu_set)
     global _TX_PIPE
     # Heavy imports happen here under spawn so the parent stays light.
     from modules.pipeline import Packet, TXPipeline
@@ -145,15 +167,17 @@ def _tx_build(payload_bytes: bytes, src_mac: int, dst_mac: int, ftype: int,
 # ---------------------------------------------------------------------------
 
 def _rx_init(pipe_cfg: "PipelineConfig", shm_names: list[str], slot_samples: int,
-             include_rx_symbols: bool, init_barrier=None) -> None:
+             include_rx_symbols: bool, init_barrier=None,
+             cpu_set: list[int] | None = None) -> None:
     """Worker initializer: build RXPipeline + attach to every shared-memory slot.
 
     The attached shared-memory blocks live for the lifetime of the worker; their
     backing pages are reused across decode jobs (each job just picks the slot
     by name and reads its slice).
 
-    See ``_tx_init`` for the rationale behind ``init_barrier``.
+    See ``_tx_init`` for the rationale behind ``init_barrier`` and ``cpu_set``.
     """
+    _apply_cpu_affinity(cpu_set)
     global _RX_PIPE, _RX_SHM, _RX_INCLUDE_SYMBOLS
     from modules.pipeline import RXPipeline
     _RX_PIPE = RXPipeline(pipe_cfg)
@@ -218,6 +242,57 @@ def _resolve_context(start_method: str | None) -> mp.context.BaseContext:
     return mp.get_context(start_method)
 
 
+def detect_p_cores() -> list[int] | None:
+    """Return the list of P-core CPU IDs on Intel hybrid CPUs, or None.
+
+    Reads ``/sys/devices/cpu_core/cpus`` (Intel ITMT/Thread-Director sysfs).
+    Format is a comma-separated list of single CPU IDs and ranges, e.g.
+    ``0-15`` on a 12th-gen i7 (8P × 2 hyperthreads). On non-hybrid hosts the
+    sysfs entry doesn't exist; returns None there so callers can fall back
+    to "no pinning" without surprising the user.
+    """
+    path = "/sys/devices/cpu_core/cpus"
+    try:
+        with open(path) as f:
+            spec = f.read().strip()
+    except FileNotFoundError:
+        return None
+    if not spec:
+        return None
+    return parse_cpu_spec(spec)
+
+
+def parse_cpu_spec(spec: str) -> list[int]:
+    """Parse a CPU-list specifier into a sorted list of CPU IDs.
+
+    Accepted forms (mirrors the Linux ``cpuset`` syntax):
+        "0,1,2,3"     → [0, 1, 2, 3]
+        "0-3"         → [0, 1, 2, 3]
+        "0-3,8,10-11" → [0, 1, 2, 3, 8, 10, 11]
+        "p-cores"     → list returned by detect_p_cores()
+    """
+    spec = spec.strip()
+    if spec.lower() in ("p-cores", "p_cores", "pcores"):
+        cpus = detect_p_cores()
+        if cpus is None:
+            raise ValueError(
+                "p-cores requested but /sys/devices/cpu_core/cpus is missing — "
+                "this CPU isn't reporting hybrid topology to the kernel."
+            )
+        return cpus
+    out: list[int] = []
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            lo, hi = chunk.split("-", 1)
+            out.extend(range(int(lo), int(hi) + 1))
+        else:
+            out.append(int(chunk))
+    return sorted(set(out))
+
+
 class TXWorkerPool:
     """Multi-process TX builder.
 
@@ -227,7 +302,8 @@ class TXWorkerPool:
     """
 
     def __init__(self, pipe_cfg: "PipelineConfig", n_workers: int,
-                 start_method: str | None = None):
+                 start_method: str | None = None,
+                 cpu_set: list[int] | None = None):
         if n_workers < 1:
             raise ValueError("n_workers must be >= 1")
         self._ctx = _resolve_context(start_method)
@@ -241,11 +317,12 @@ class TXWorkerPool:
         self._pool = self._ctx.Pool(
             processes=n_workers,
             initializer=_tx_init,
-            initargs=(pipe_cfg, init_barrier),
+            initargs=(pipe_cfg, init_barrier, cpu_set),
         )
         self._n_workers = n_workers
         self._shutdown_done = False
-        logger.info(f"TXWorkerPool: {n_workers} workers ({self._ctx._name}) — waiting for init …")
+        affinity_str = f", cpus={cpu_set}" if cpu_set else ""
+        logger.info(f"TXWorkerPool: {n_workers} workers ({self._ctx._name}{affinity_str}) — waiting for init …")
         # Block here until every worker has completed _tx_init.
         self._pool.apply(_no_op)
         logger.info("TXWorkerPool: workers ready")
@@ -389,7 +466,8 @@ class RXWorkerPool:
     def __init__(self, pipe_cfg: "PipelineConfig", n_workers: int,
                  slot_samples: int, n_slots: int = 4,
                  include_rx_symbols: bool = False,
-                 start_method: str | None = None):
+                 start_method: str | None = None,
+                 cpu_set: list[int] | None = None):
         if n_workers < 1:
             raise ValueError("n_workers must be >= 1")
         if n_slots < 1:
@@ -402,15 +480,16 @@ class RXWorkerPool:
             processes=n_workers,
             initializer=_rx_init,
             initargs=(pipe_cfg, list(self._ring.names), slot_samples,
-                      include_rx_symbols, init_barrier),
+                      include_rx_symbols, init_barrier, cpu_set),
         )
         self._n_workers = n_workers
         self._slot_samples = slot_samples
         self._n_slots = n_slots
         self._shutdown_done = False
+        affinity_str = f", cpus={cpu_set}" if cpu_set else ""
         logger.info(
             f"RXWorkerPool: {n_workers} workers × {n_slots} slots "
-            f"× {slot_samples} samples ({self._ctx._name}) — waiting for init …"
+            f"× {slot_samples} samples ({self._ctx._name}{affinity_str}) — waiting for init …"
         )
         # Block here until every worker has completed _rx_init.
         self._pool.apply(_no_op)
