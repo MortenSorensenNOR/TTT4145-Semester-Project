@@ -1,5 +1,5 @@
 # iio_setup.ps1 — Windows equivalent of iio_setup.sh
-# Builds libiio v0.25 and libad9361-iio from the vendor submodules,
+# Builds libiio v0.26 and libad9361-iio from the vendor submodules,
 # installs them into vendor\install (no admin rights required), then runs uv sync.
 #
 # Requirements: git, Visual Studio Build Tools (cl.exe + cmake component), uv,
@@ -60,12 +60,12 @@ Write-Host "==> Initializing submodules..."
 git submodule update --init --recursive
 
 # ---------------------------------------------------------------------------
-# libiio v0.25
+# libiio v0.26
 # ---------------------------------------------------------------------------
-Write-Host "==> Building libiio v0.25..."
+Write-Host "==> Building libiio v0.26..."
 
 Push-Location (Join-Path $Root "vendor\libiio")
-git checkout v0.25
+git checkout v0.26
 
 if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
 New-Item -ItemType Directory "build" | Out-Null

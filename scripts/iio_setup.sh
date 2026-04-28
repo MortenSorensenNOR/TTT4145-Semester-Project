@@ -12,9 +12,9 @@ fi
 echo "==> Removing any conflicting libiio v1.x libraries..."
 sudo rm -f /usr/lib/libiio.so.1* /usr/local/lib/libiio.so.1*
 
-echo "==> Building libiio v0.25..."
+echo "==> Building libiio v0.26..."
 cd vendor/libiio
-git checkout v0.25
+git checkout v0.26
 rm -rf build && mkdir build && cd build
 cmake -DCMAKE_INSTALL_PREFIX=/usr/local ..
 make -j$(nproc)
