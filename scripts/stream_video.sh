@@ -17,9 +17,9 @@ VF="scale=-2:1080,format=yuv420p"
 
 exec ffmpeg -re -i "$INPUT" \
     -c:v libx264 -preset fast -tune zerolatency \
-    -b:v 2280k -maxrate 2400k -bufsize 4800k \
+    -b:v 2000k -maxrate 2800k -bufsize 4800k \
     -x264-params "keyint=30:min-keyint=30:scenecut=0:bframes=0:slices=4:rc-lookahead=20" \
-    -vf "$VF" -r 30 \
+    -vf "$VF" -r 60 \
     -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv \
     -c:a libopus -b:a 96k -ac 2 -application audio \
     -fec 1 -packet_loss 10 \
