@@ -23,6 +23,8 @@
 #
 # Usage:
 #     sudo ./scripts/oneway_netns.sh up
+#     sudo ./scripts/oneway_netns.sh up --only A     # node A only (10.0.0.1, TX)
+#     sudo ./scripts/oneway_netns.sh up --only B     # node B only (10.0.0.2, RX)
 #     sudo ./scripts/oneway_netns.sh up --tx-gain -15
 #     sudo ./scripts/oneway_netns.sh up --rx-gain-mode slow_attack    # for dense traffic only
 #     sudo ./scripts/oneway_netns.sh up --rx-gain 55                  # tweak manual gain
@@ -72,6 +74,7 @@ TX_FILLER_AMP=0         # 0 = silent zeros between packets (legacy). Bump to ~20
                         # is bursty (e.g. low-bitrate ffmpeg). DAC_SCALE/4 ≈ 4096.
 MTU=1500
 STARTUP_WAIT=6
+ONLY=""                 # "" = both nodes, "A" = TX-only side, "B" = RX-only side
 
 PID_A=/tmp/oneway-A.pid
 PID_B=/tmp/oneway-B.pid
@@ -90,15 +93,21 @@ while [[ $# -gt 0 ]]; do
         --tx-filler-amp) TX_FILLER_AMP=$2; shift 2 ;;
         --mtu)           MTU=$2; shift 2 ;;
         --startup-wait)  STARTUP_WAIT=$2; shift 2 ;;
-        -h|--help)       sed -n '1,30p' "$0"; exit 0 ;;
+        --only)          ONLY=$2; shift 2 ;;
+        -h|--help)       sed -n '1,32p' "$0"; exit 0 ;;
         *)               echo "Unknown arg: $1" >&2; exit 2 ;;
     esac
 done
 
 case "$SUBCMD" in
     up|down|status) ;;
-    ""|-h|--help) sed -n '1,30p' "$0"; exit 0 ;;
+    ""|-h|--help) sed -n '1,32p' "$0"; exit 0 ;;
     *) echo "Unknown subcommand: $SUBCMD (expected up|down|status)" >&2; exit 2 ;;
+esac
+
+case "$ONLY" in
+    ""|A|B) ;;
+    *) echo "Unknown --only value: $ONLY (expected A or B)" >&2; exit 2 ;;
 esac
 
 if [[ $EUID -ne 0 ]]; then
@@ -205,110 +214,139 @@ cmd_status() {
 
 # ── Subcommand: up ───────────────────────────────────────────────────────
 cmd_up() {
-    if ip netns list | grep -qE "^($NS_A|$NS_B)\b"; then
-        echo "ERROR: netns $NS_A or $NS_B already exists — run 'down' first" >&2
+    local do_a=1 do_b=1
+    case "$ONLY" in
+        A) do_b=0 ;;
+        B) do_a=0 ;;
+    esac
+
+    if (( do_a )) && ip netns list | grep -qE "^$NS_A\b"; then
+        echo "ERROR: netns $NS_A already exists — run 'down' first" >&2
+        exit 1
+    fi
+    if (( do_b )) && ip netns list | grep -qE "^$NS_B\b"; then
+        echo "ERROR: netns $NS_B already exists — run 'down' first" >&2
         exit 1
     fi
 
-    # 1. Find the two USB ifaces by host-side IP.
-    local IFACE_A_TX IFACE_B_RX
-    IFACE_A_TX=$(detect_iface "$HOST_A_TX_IP")
-    IFACE_B_RX=$(detect_iface "$HOST_B_RX_IP")
+    # 1. Find the USB ifaces by host-side IP (only the side(s) we need).
+    local IFACE_A_TX="" IFACE_B_RX=""
     local missing=""
-    [[ -z "$IFACE_A_TX" ]] && missing="$missing $HOST_A_TX_IP (A-TX, $PLUTO_A_TX_IP)"
-    [[ -z "$IFACE_B_RX" ]] && missing="$missing $HOST_B_RX_IP (B-RX, $PLUTO_B_RX_IP)"
+    if (( do_a )); then
+        IFACE_A_TX=$(detect_iface "$HOST_A_TX_IP")
+        [[ -z "$IFACE_A_TX" ]] && missing="$missing $HOST_A_TX_IP (A-TX, $PLUTO_A_TX_IP)"
+    fi
+    if (( do_b )); then
+        IFACE_B_RX=$(detect_iface "$HOST_B_RX_IP")
+        [[ -z "$IFACE_B_RX" ]] && missing="$missing $HOST_B_RX_IP (B-RX, $PLUTO_B_RX_IP)"
+    fi
     if [[ -n "$missing" ]]; then
         echo "ERROR: could not find USB-ethernet interface(s) for:$missing" >&2
-        echo "       Check 'ip -4 addr' — both Plutos plugged in?" >&2
+        echo "       Check 'ip -4 addr' — Pluto plugged in?" >&2
         exit 1
     fi
     echo "[info] Plutos:"
-    echo "  A TX: $IFACE_A_TX ($HOST_A_TX_IP ↔ $PLUTO_A_TX_IP)"
-    echo "  B RX: $IFACE_B_RX ($HOST_B_RX_IP ↔ $PLUTO_B_RX_IP)"
+    (( do_a )) && echo "  A TX: $IFACE_A_TX ($HOST_A_TX_IP ↔ $PLUTO_A_TX_IP)"
+    (( do_b )) && echo "  B RX: $IFACE_B_RX ($HOST_B_RX_IP ↔ $PLUTO_B_RX_IP)"
 
     # 2. Build netns and move ifaces in.
-    echo "[info] Creating netns $NS_A, $NS_B …"
-    ip netns add "$NS_A"
-    ip netns add "$NS_B"
+    echo "[info] Creating netns…"
+    (( do_a )) && ip netns add "$NS_A"
+    (( do_b )) && ip netns add "$NS_B"
 
     trap 'echo "[err] setup aborted — tearing down" >&2; cmd_down; exit 1' ERR
 
-    ip link set "$IFACE_A_TX" netns "$NS_A"
-    ip link set "$IFACE_B_RX" netns "$NS_B"
+    if (( do_a )); then
+        ip link set "$IFACE_A_TX" netns "$NS_A"
+        ip -n "$NS_A" link set lo up
+        ip -n "$NS_A" link set "$IFACE_A_TX" up
+        ip -n "$NS_A" addr add "$HOST_A_TX_IP/24" dev "$IFACE_A_TX"
+    fi
+    if (( do_b )); then
+        ip link set "$IFACE_B_RX" netns "$NS_B"
+        ip -n "$NS_B" link set lo up
+        ip -n "$NS_B" link set "$IFACE_B_RX" up
+        ip -n "$NS_B" addr add "$HOST_B_RX_IP/24" dev "$IFACE_B_RX"
+    fi
 
-    ip -n "$NS_A" link set lo up
-    ip -n "$NS_B" link set lo up
-    ip -n "$NS_A" link set "$IFACE_A_TX" up
-    ip -n "$NS_B" link set "$IFACE_B_RX" up
-    ip -n "$NS_A" addr add "$HOST_A_TX_IP/24" dev "$IFACE_A_TX"
-    ip -n "$NS_B" addr add "$HOST_B_RX_IP/24" dev "$IFACE_B_RX"
-
-    # 3. Sanity-check Plutos are reachable from their netns.
-    if ! ip netns exec "$NS_A" ping -c1 -W2 "$PLUTO_A_TX_IP" >/dev/null; then
+    # 3. Sanity-check Pluto(s) reachable from their netns.
+    if (( do_a )) && ! ip netns exec "$NS_A" ping -c1 -W2 "$PLUTO_A_TX_IP" >/dev/null; then
         echo "ERROR: Pluto A-TX ($PLUTO_A_TX_IP) unreachable from $NS_A" >&2
         exit 1
     fi
-    if ! ip netns exec "$NS_B" ping -c1 -W2 "$PLUTO_B_RX_IP" >/dev/null; then
+    if (( do_b )) && ! ip netns exec "$NS_B" ping -c1 -W2 "$PLUTO_B_RX_IP" >/dev/null; then
         echo "ERROR: Pluto B-RX ($PLUTO_B_RX_IP) unreachable from $NS_B" >&2
         exit 1
     fi
-    echo "[info] Both Plutos reachable inside their netns."
+    echo "[info] Pluto(s) reachable inside their netns."
 
     # 4. Launch tun_link in TX-only / RX-only mode.
-    : > "$LOG_A"; : > "$LOG_B"
     cd "$PROJ_ROOT"
 
-    echo "[info] Starting node A (TX-only, log: $LOG_A)…"
-    ip netns exec "$NS_A" "$PYTHON" -m pluto.tun_link \
-        --node A --mode tx --tx-ip "$PLUTO_A_TX_IP" \
-        --gain "$TX_GAIN" --tx-filler-amp "$TX_FILLER_AMP" \
-        --mtu "$MTU" --tun-name "$TUN_NAME" \
-        >"$LOG_A" 2>&1 &
-    echo $! > "$PID_A"
+    if (( do_a )); then
+        : > "$LOG_A"
+        echo "[info] Starting node A (TX-only, log: $LOG_A)…"
+        ip netns exec "$NS_A" "$PYTHON" -m pluto.tun_link \
+            --node A --mode tx --tx-ip "$PLUTO_A_TX_IP" \
+            --gain "$TX_GAIN" --tx-filler-amp "$TX_FILLER_AMP" \
+            --mtu "$MTU" --tun-name "$TUN_NAME" \
+            >"$LOG_A" 2>&1 &
+        echo $! > "$PID_A"
+    fi
 
-    echo "[info] Starting node B (RX-only, log: $LOG_B)…"
-    ip netns exec "$NS_B" "$PYTHON" -m pluto.tun_link \
-        --node B --mode rx --rx-ip "$PLUTO_B_RX_IP" \
-        --rx-gain-mode "$RX_GAIN_MODE" --rx-gain "$RX_GAIN" \
-        --mtu "$MTU" --tun-name "$TUN_NAME" \
-        >"$LOG_B" 2>&1 &
-    echo $! > "$PID_B"
+    if (( do_b )); then
+        : > "$LOG_B"
+        echo "[info] Starting node B (RX-only, log: $LOG_B)…"
+        ip netns exec "$NS_B" "$PYTHON" -m pluto.tun_link \
+            --node B --mode rx --rx-ip "$PLUTO_B_RX_IP" \
+            --rx-gain-mode "$RX_GAIN_MODE" --rx-gain "$RX_GAIN" \
+            --mtu "$MTU" --tun-name "$TUN_NAME" \
+            >"$LOG_B" 2>&1 &
+        echo $! > "$PID_B"
+    fi
 
     echo "[info] Waiting ${STARTUP_WAIT}s for tun_link to come up…"
     sleep "$STARTUP_WAIT"
 
-    for pf in "$PID_A" "$PID_B"; do
+    local entry tag pf log run pid
+    for entry in "A:$PID_A:$LOG_A:$do_a" "B:$PID_B:$LOG_B:$do_b"; do
+        IFS=: read -r tag pf log run <<<"$entry"
+        (( run )) || continue
         pid=$(cat "$pf")
         if ! kill -0 "$pid" 2>/dev/null; then
-            echo "ERROR: tun_link pid $pid died during startup — see logs" >&2
-            echo "--- $LOG_A (last 30 lines) ---"; tail -n 30 "$LOG_A"
-            echo "--- $LOG_B (last 30 lines) ---"; tail -n 30 "$LOG_B"
+            echo "ERROR: tun_link node $tag (pid $pid) died during startup — see logs" >&2
+            echo "--- $log (last 30 lines) ---"; tail -n 30 "$log"
             exit 1
         fi
     done
 
     trap - ERR
 
-    cat <<EOF
-
-========================================================================
-  One-way link is up.
-
-  Node A (netns $NS_A):  TUN $TUN_NAME = $IP_A   (TX-only)
-  Node B (netns $NS_B):  TUN $TUN_NAME = $IP_B   (RX-only)
-
-  Drive UDP traffic A → B:
-    sudo ip netns exec $NS_B iperf3 -s -1 &
-    sudo ip netns exec $NS_A iperf3 -c $IP_B -u -b 100k -t 30
-
-  Or with netcat:
-    sudo ip netns exec $NS_B nc -u -l 5000
-    echo hello | sudo ip netns exec $NS_A nc -u $IP_B 5000
-
-  TUN logs:    $LOG_A  $LOG_B
-  Tear down:   sudo $0 down
-========================================================================
-EOF
+    echo
+    echo "========================================================================"
+    echo "  One-way link is up."
+    echo
+    if (( do_a )); then
+        echo "  Node A (netns $NS_A):  TUN $TUN_NAME = $IP_A   (TX-only)"
+        echo "  TUN log:               $LOG_A"
+    fi
+    if (( do_b )); then
+        echo "  Node B (netns $NS_B):  TUN $TUN_NAME = $IP_B   (RX-only)"
+        echo "  TUN log:               $LOG_B"
+    fi
+    if (( do_a && do_b )); then
+        echo
+        echo "  Drive UDP traffic A → B:"
+        echo "    sudo ip netns exec $NS_B iperf3 -s -1 &"
+        echo "    sudo ip netns exec $NS_A iperf3 -c $IP_B -u -b 100k -t 30"
+        echo
+        echo "  Or with netcat:"
+        echo "    sudo ip netns exec $NS_B nc -u -l 5000"
+        echo "    echo hello | sudo ip netns exec $NS_A nc -u $IP_B 5000"
+    fi
+    echo
+    echo "  Tear down:   sudo $0 down"
+    echo "========================================================================"
 }
 
 case "$SUBCMD" in

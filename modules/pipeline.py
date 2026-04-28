@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineConfig:
-    SAMPLE_RATE: int = 6_000_000
+    SAMPLE_RATE: int = 4_000_000
     CENTER_FREQ: int = 2_410_000_000
     SPS: int = 4
     SPAN: int = 8
