@@ -31,6 +31,18 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 
+#ifdef _MSC_VER
+#include <BaseTsd.h>
+#include <intrin.h>
+typedef SSIZE_T ssize_t;
+static inline int __builtin_parityll(uint64_t x) { return (int)(__popcnt64(x) & 1ULL); }
+static inline int __builtin_ctzll(uint64_t x) {
+    unsigned long idx;
+    _BitScanForward64(&idx, x);
+    return (int)idx;
+}
+#endif
+
 namespace py = pybind11;
 
 // ---------------------------------------------------------------------------

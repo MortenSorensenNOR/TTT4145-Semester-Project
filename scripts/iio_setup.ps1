@@ -6,7 +6,7 @@
 #               chocolatey (winflexbison3), vcpkg with libxml2:x64-windows
 $ErrorActionPreference = "Stop"
 
-$Root    = $PSScriptRoot
+$Root    = Split-Path -Parent $PSScriptRoot
 $Install = Join-Path $Root "vendor\install"
 
 # ---------------------------------------------------------------------------
@@ -136,14 +136,19 @@ import os
 # Python 3.8+ no longer searches PATH for DLL dependencies loaded via ctypes.
 # These directories must be registered explicitly so libiio.dll and libxml2.dll
 # are found when ``import iio`` (via pyadi-iio) loads them with ctypes.
+#
+# We also prepend the dirs to PATH so ctypes.util.find_library() — which
+# iio.py calls before LoadLibrary and which does NOT consult
+# os.add_dll_directory() — can locate libiio.dll on Windows.
 _dll_dirs = [
-    r"$($Install -replace '\\', '\\')\bin",
-    r"$($VcpkgBin -replace '\\', '\\')",
+    r"$(Join-Path $Install 'bin')",
+    r"$VcpkgBin",
 ]
 
 for _d in _dll_dirs:
     if os.path.isdir(_d):
         os.add_dll_directory(_d)
+        os.environ["PATH"] = _d + os.pathsep + os.environ.get("PATH", "")
 "@ | Set-Content -Encoding UTF8 $SiteCustomize
 
 Write-Host "==> Done!"
