@@ -6,11 +6,15 @@ sparse bursts so the next packet then clips. The split-radio one-way test
 therefore runs with ``--rx-gain-mode=manual``, which holds whatever fixed
 gain we set — but a fixed gain only matches one operating point.
 
-:class:`RxAGC` closes the loop in software: it inspects the peak amplitude
-of each RX buffer that produced a valid packet decode and nudges
-``sdr.rx_hardwaregain_chan0`` toward a target peak. Buffers that produced
-no valid decode (silence, noise spike, header CRC fail) are ignored, so
-we never ramp gain up while waiting for traffic and clip the next packet.
+:class:`RxAGC` closes the loop in software with an asymmetric policy:
+
+* **Raising** gain (peak too low) only happens on buffers that produced a
+  valid packet decode. This is what stops the AGC ramping up during
+  silence between bursts and clipping the next real packet.
+* **Lowering** gain (peak hits the clip threshold) happens on any buffer
+  with clipping, decode or not. A clipped ADC by itself prevents any
+  decode from succeeding, so requiring a valid decode there would trap
+  the AGC at maximum gain forever.
 
 Sample-scale reminder: :class:`pluto.sdr_stream.RxStream` returns samples
 as int16 * 2 / DAC_SCALE = int16 / 8192. The AD9361 12-bit ADC fills
@@ -41,7 +45,8 @@ class RxAGCConfig:
     target_peak: float = 2.0          # ~ −6 dBFS, comfortable midpoint
     clip_threshold: float = 3.5       # peak above this counts as clipping
     low_threshold: float = 0.5        # peak below this means gain is too low
-    max_step_db: float = 3.0          # cap on a single adjustment
+    raise_step_db: float = 3.0        # cap on each "too low" adjustment (slow up)
+    clip_step_db: float = 6.0         # fixed step when backing off a clip (fast down)
     min_step_db: float = 0.5          # below this, don't bother changing
     min_gain_db: float = 0.0          # AD9361 lower rail
     max_gain_db: float = 71.0         # AD9361 upper rail
@@ -87,13 +92,6 @@ class RxAGC:
             self._cooldown -= 1
             return None
 
-        # Per the user's requirement: only act on buffers where the
-        # receiver actually decoded a packet. This avoids ramping gain
-        # up during silence (which would clip on the next real packet)
-        # and avoids reacting to a one-off noise spike.
-        if n_valid <= 0:
-            return None
-
         peak = float(np.max(np.abs(buf))) if buf.size else 0.0
         if peak <= 0.0:
             return None
@@ -101,15 +99,28 @@ class RxAGC:
         cfg = self._cfg
         clipping = peak >= cfg.clip_threshold
         too_low = peak <= cfg.low_threshold
-        if not (clipping or too_low):
-            return None
 
-        # Linear gain change in dB to bring this buffer's peak to target.
-        delta_db = 20.0 * math.log10(cfg.target_peak / peak)
-        if delta_db > cfg.max_step_db:
-            delta_db = cfg.max_step_db
-        elif delta_db < -cfg.max_step_db:
-            delta_db = -cfg.max_step_db
+        if clipping:
+            # Asymmetric policy: ALWAYS back off on clipping, even with
+            # zero valid decodes. A clipped ADC kills the decoder, so
+            # requiring a successful decode here would lock the AGC at
+            # the rail and the gain would never come back down.
+            # Peak is unreliable when saturated (it just reports the
+            # clip level), so use a fixed step instead of solving for
+            # target_peak / peak.
+            delta_db = -cfg.clip_step_db
+            reason = "clip"
+        elif too_low and n_valid > 0:
+            # Only RAISE gain when we have at least one valid decode in
+            # the buffer. This is what prevents the AGC from ramping
+            # up during silence between bursts (and then clipping the
+            # next real packet). Pure noise/silence stays untouched.
+            delta_db = 20.0 * math.log10(cfg.target_peak / peak)
+            if delta_db > cfg.raise_step_db:
+                delta_db = cfg.raise_step_db
+            reason = "low"
+        else:
+            return None
 
         new_gain = max(cfg.min_gain_db, min(cfg.max_gain_db, self._gain + delta_db))
         if abs(new_gain - self._gain) < cfg.min_step_db:
@@ -122,7 +133,6 @@ class RxAGC:
                            new_gain, e)
             return None
 
-        reason = "clip" if clipping else "low"
         logger.info("[RX-AGC] %s peak=%.2f  gain %.1f dB -> %.1f dB",
                     reason, peak, self._gain, new_gain)
         self._gain = new_gain
