@@ -668,7 +668,7 @@ if __name__ == "__main__":
         _const_save_path: str | None = None  # set if PNG-save mode is active
         _sym_buf: list[np.ndarray] = []   # post-Costas symbols accumulated across packets
         _pkt_count = 0                    # valid packets since last plot refresh
-        _PLOT_EVERY = 2                   # update plot every N valid packets
+        _PLOT_EVERY = 10                   # update plot every N valid packets
         # --constellation-save implies --constellation
         if args.constellation_save and not args.constellation:
             args.constellation = True
