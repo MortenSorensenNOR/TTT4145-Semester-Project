@@ -429,6 +429,45 @@ def _check_node_update(
             c2v[check_order[j]] = alpha * sign_excl * min_excl
 
 
+def ldpc_decode_batch(
+    llrs: np.ndarray,
+    config: LDPCConfig,
+    max_iterations: int = 50,
+    alpha: float = 0.75,
+) -> np.ndarray:
+    """Decode `n_cw` concatenated codewords sharing one parity-check matrix.
+
+    `llrs` has shape (n_cw, n) or shape (n_cw * n,) — both accepted.
+    Returns uint8[n_cw, k], one row per decoded message.
+
+    Single C++ call amortises pybind11 marshalling and scratch allocation
+    across the batch — was the dominant cost for short-codeword pipelines.
+    """
+    n, k = config.n, config.k
+    flat = np.ascontiguousarray(llrs, dtype=np.float32).ravel()
+    if flat.size % n != 0:
+        msg = f"llrs length {flat.size} not a multiple of n={n}"
+        raise ValueError(msg)
+    n_cw = flat.size // n
+
+    (h_sparse, _num_checks, _num_vars, edge_var, check_order, check_bounds) = _get_decode_structures(config)
+
+    if _ext is not None and hasattr(_ext, "decode_batch"):
+        return _ext.decode_batch(
+            flat, edge_var.astype(np.int64, copy=False),
+            check_order, check_bounds,
+            int(n), int(k), int(n_cw),
+            int(max_iterations), float(alpha),
+        )
+
+    # Fallback: per-codeword loop.
+    out = np.empty((n_cw, k), dtype=np.uint8)
+    for i in range(n_cw):
+        out[i] = ldpc_decode(flat[i * n:(i + 1) * n], config,
+                             max_iterations=max_iterations, alpha=alpha).astype(np.uint8)
+    return out
+
+
 def ldpc_decode(
     llr_channel: np.ndarray,
     config: LDPCConfig,

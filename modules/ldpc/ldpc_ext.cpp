@@ -215,51 +215,49 @@ static py::array_t<uint8_t> encode_batch_ext(
 // (modulo float rounding) — same min-sum check update, same scatter-add for
 // the variable update, same per-iteration syndrome early-exit.
 
-static py::array_t<uint8_t> decode_ext(
-    py::array_t<float, py::array::c_style | py::array::forcecast>   llr_in,
-    py::array_t<int64_t, py::array::c_style | py::array::forcecast> edge_var_in,
-    py::array_t<int64_t, py::array::c_style | py::array::forcecast> check_order_in,
-    py::array_t<int64_t, py::array::c_style | py::array::forcecast> check_bounds_in,
-    int k,
-    int max_iter,
-    float alpha
-) {
-    auto llr_buf  = llr_in.unchecked<1>();
-    auto var_buf  = edge_var_in.unchecked<1>();
-    auto ord_buf  = check_order_in.unchecked<1>();
-    auto bnd_buf  = check_bounds_in.unchecked<1>();
-
-    const ssize_t n         = llr_buf.shape(0);
-    const ssize_t num_edges = var_buf.shape(0);
-    const ssize_t num_checks = bnd_buf.shape(0) - 1;
-
-    if (ord_buf.shape(0) != num_edges) {
-        throw std::invalid_argument("check_order length must match edge_var");
-    }
-
-    py::array_t<uint8_t> out(k);
-    auto out_buf = out.mutable_unchecked<1>();
-
-    // Pull arrays into local pointers — the Python objects don't move during
-    // the call, but the pointer-deref shaves a small amount of indirection.
-    const float*   llr  = llr_buf.data(0);
-    const int64_t* ev   = var_buf.data(0);
-    const int64_t* co   = ord_buf.data(0);
-    const int64_t* bnd  = bnd_buf.data(0);
-
-    py::gil_scoped_release nogil;
-
-    std::vector<float> v2c(num_edges);
-    std::vector<float> c2v(num_edges, 0.0f);
-    std::vector<float> l_total(n);
-    std::vector<uint8_t> hard(n);
+// Per-codeword core; reused by decode_ext and decode_batch_ext.  Caller owns
+// the scratch buffers (v2c, c2v, l_total, hard) so we can reuse them across
+// codewords in the batch path.
+static inline void decode_one(
+    const float*   llr,
+    const int64_t* ev,
+    const int64_t* co,
+    const int64_t* bnd,
+    ssize_t n, ssize_t num_edges, ssize_t num_checks,
+    int max_iter, float alpha,
+    float*   v2c,
+    float*   c2v,
+    float*   l_total,
+    uint8_t* hard)
+{
+    constexpr int MIN_CHECK_DEGREE = 2;
 
     // v2c initialized to llr[edge_var[e]]
     for (ssize_t e = 0; e < num_edges; ++e) {
         v2c[e] = llr[ev[e]];
     }
+    // c2v starts at zero.
+    std::fill(c2v, c2v + num_edges, 0.0f);
 
-    constexpr int MIN_CHECK_DEGREE = 2;
+    // Pre-iteration syndrome check on raw hard decisions.  Real-world clean
+    // signals (e.g. recorded rx_buffs over coax) usually pass without any BP
+    // iterations — every skipped iteration removes ~3·num_edges float ops.
+    {
+        for (ssize_t v = 0; v < n; ++v) {
+            hard[v] = (llr[v] < 0.0f) ? 1 : 0;
+        }
+        bool all_zero = true;
+        for (ssize_t ci = 0; ci < num_checks && all_zero; ++ci) {
+            uint8_t parity = 0;
+            const int64_t start = bnd[ci];
+            const int64_t end   = bnd[ci + 1];
+            for (int64_t j = start; j < end; ++j) {
+                parity ^= hard[ev[co[j]]];
+            }
+            if (parity) all_zero = false;
+        }
+        if (all_zero) return;
+    }
 
     for (int iter = 0; iter < max_iter; ++iter) {
         // ---- check node update (min-sum) ----
@@ -290,18 +288,20 @@ static py::array_t<uint8_t> decode_ext(
                 }
             }
 
+            const float a_min1 = alpha * min1;
+            const float a_min2 = alpha * min2;
             for (int64_t j = start; j < end; ++j) {
                 const float msg = v2c[co[j]];
                 const float sign = (msg < 0.0f) ? -1.0f : 1.0f;
                 const float sign_excl = total_sign * sign;
-                const float min_excl  = ((j - start) != argmin_local) ? min1 : min2;
-                c2v[co[j]] = alpha * sign_excl * min_excl;
+                const float min_excl  = ((j - start) != argmin_local) ? a_min1 : a_min2;
+                c2v[co[j]] = sign_excl * min_excl;
             }
         }
 
         // ---- variable node update + hard decision ----
         // l_total = llr + scatter-add(c2v, edge_var)
-        std::copy(llr, llr + n, l_total.begin());
+        std::copy(llr, llr + n, l_total);
         for (ssize_t e = 0; e < num_edges; ++e) {
             l_total[ev[e]] += c2v[e];
         }
@@ -326,8 +326,112 @@ static py::array_t<uint8_t> decode_ext(
         }
         if (all_zero) break;
     }
+}
+
+static py::array_t<uint8_t> decode_ext(
+    py::array_t<float, py::array::c_style | py::array::forcecast>   llr_in,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> edge_var_in,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> check_order_in,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> check_bounds_in,
+    int k,
+    int max_iter,
+    float alpha
+) {
+    auto llr_buf  = llr_in.unchecked<1>();
+    auto var_buf  = edge_var_in.unchecked<1>();
+    auto ord_buf  = check_order_in.unchecked<1>();
+    auto bnd_buf  = check_bounds_in.unchecked<1>();
+
+    const ssize_t n         = llr_buf.shape(0);
+    const ssize_t num_edges = var_buf.shape(0);
+    const ssize_t num_checks = bnd_buf.shape(0) - 1;
+
+    if (ord_buf.shape(0) != num_edges) {
+        throw std::invalid_argument("check_order length must match edge_var");
+    }
+
+    py::array_t<uint8_t> out(k);
+    auto out_buf = out.mutable_unchecked<1>();
+
+    const float*   llr  = llr_buf.data(0);
+    const int64_t* ev   = var_buf.data(0);
+    const int64_t* co   = ord_buf.data(0);
+    const int64_t* bnd  = bnd_buf.data(0);
+
+    py::gil_scoped_release nogil;
+
+    std::vector<float>   v2c(num_edges);
+    std::vector<float>   c2v(num_edges);
+    std::vector<float>   l_total(n);
+    std::vector<uint8_t> hard(n);
+
+    decode_one(llr, ev, co, bnd, n, num_edges, num_checks, max_iter, alpha,
+               v2c.data(), c2v.data(), l_total.data(), hard.data());
 
     for (int v = 0; v < k; ++v) out_buf(v) = hard[v];
+    return out;
+}
+
+// Batched decoder: amortizes Python ↔ C++ marshalling and per-call scratch
+// allocation across `n_cw` codewords.  Each codeword uses the same parity
+// graph (edge_var/check_order/check_bounds), so the structure inputs are
+// passed once.
+//
+// llrs:   float32[n_cw * n]      — concatenated channel LLRs per codeword
+// out:    uint8 [n_cw, k]        — message bits per decoded codeword
+static py::array_t<uint8_t> decode_batch_ext(
+    py::array_t<float, py::array::c_style | py::array::forcecast>   llrs_in,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> edge_var_in,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> check_order_in,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> check_bounds_in,
+    int n,
+    int k,
+    int n_cw,
+    int max_iter,
+    float alpha)
+{
+    auto llr_buf = llrs_in.unchecked<1>();
+    auto var_buf = edge_var_in.unchecked<1>();
+    auto ord_buf = check_order_in.unchecked<1>();
+    auto bnd_buf = check_bounds_in.unchecked<1>();
+
+    const ssize_t num_edges  = var_buf.shape(0);
+    const ssize_t num_checks = bnd_buf.shape(0) - 1;
+
+    if (n_cw <= 0 || n <= 0 || k <= 0 || k > n) {
+        throw std::invalid_argument("invalid n_cw / n / k");
+    }
+    if (llr_buf.shape(0) != (ssize_t)n_cw * n) {
+        throw std::invalid_argument("llrs length must equal n_cw * n");
+    }
+    if (ord_buf.shape(0) != num_edges) {
+        throw std::invalid_argument("check_order length must match edge_var");
+    }
+
+    py::array_t<uint8_t> out({(ssize_t)n_cw, (ssize_t)k});
+    auto out_buf = out.mutable_unchecked<2>();
+
+    const float*   llrs = llr_buf.data(0);
+    const int64_t* ev   = var_buf.data(0);
+    const int64_t* co   = ord_buf.data(0);
+    const int64_t* bnd  = bnd_buf.data(0);
+
+    py::gil_scoped_release nogil;
+
+    std::vector<float>   v2c(num_edges);
+    std::vector<float>   c2v(num_edges);
+    std::vector<float>   l_total(n);
+    std::vector<uint8_t> hard(n);
+
+    for (int i = 0; i < n_cw; ++i) {
+        const float* llr_i = llrs + (ssize_t)i * n;
+        decode_one(llr_i, ev, co, bnd, n, num_edges, num_checks,
+                   max_iter, alpha,
+                   v2c.data(), c2v.data(), l_total.data(), hard.data());
+        for (int v = 0; v < k; ++v) {
+            out_buf(i, v) = hard[v];
+        }
+    }
     return out;
 }
 
@@ -357,4 +461,11 @@ PYBIND11_MODULE(ldpc_ext, m, py::mod_gil_not_used()) {
           py::arg("check_order"), py::arg("check_bounds"),
           py::arg("k"), py::arg("max_iter"), py::arg("alpha"),
           "Min-sum BP decode using edge-grouped check structures.");
+
+    m.def("decode_batch", &decode_batch_ext,
+          py::arg("llrs"), py::arg("edge_var"),
+          py::arg("check_order"), py::arg("check_bounds"),
+          py::arg("n"), py::arg("k"), py::arg("n_cw"),
+          py::arg("max_iter"), py::arg("alpha"),
+          "Min-sum BP decode batched over n_cw codewords sharing the same H.");
 }

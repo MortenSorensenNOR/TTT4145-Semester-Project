@@ -3,8 +3,36 @@ from typing import runtime_checkable, Protocol
 import numpy as np
 from numpy.typing import NDArray
 
+try:
+    from modules import modulators_ext as _mod_ext
+except ImportError:  # pragma: no cover - extension may not be built yet
+    _mod_ext = None
+
 EMPTY_COMPLEX = np.empty(0, dtype=np.complex64)
 EMPTY_INT = np.empty(0, dtype=np.uint8)
+
+
+def _build_psk_llr_tables(symbol_mapping: np.ndarray, bits_per_symbol: int) -> tuple:
+    """Pack constellation + per-bit subset indices for the C++ LLR kernel.
+
+    Returns (sym_re, sym_im, c0_idx, c1_idx) — c*_idx are int32 (nbits, M/2).
+    Caller is expected to keep these alive for the lifetime of the modulator.
+    """
+    M = symbol_mapping.size
+    sym_re = np.ascontiguousarray(symbol_mapping.real, dtype=np.float32)
+    sym_im = np.ascontiguousarray(symbol_mapping.imag, dtype=np.float32)
+    idx = np.arange(M)
+    bits_for_idx = np.stack(
+        [(idx >> (bits_per_symbol - 1 - b)) & 1 for b in range(bits_per_symbol)],
+        axis=1,
+    )
+    per_bit = M // 2
+    c0_idx = np.empty((bits_per_symbol, per_bit), dtype=np.int32)
+    c1_idx = np.empty((bits_per_symbol, per_bit), dtype=np.int32)
+    for b in range(bits_per_symbol):
+        c0_idx[b] = np.flatnonzero(bits_for_idx[:, b] == 0)
+        c1_idx[b] = np.flatnonzero(bits_for_idx[:, b] == 1)
+    return sym_re, sym_im, c0_idx, c1_idx
 
 @runtime_checkable
 class Modulator(Protocol):
@@ -89,15 +117,22 @@ class PSK8(Modulator):
                                          0 - np.sqrt(2)*1j, 1 - 1j, 1 + 1j, np.sqrt(2)+ 0j], dtype=np.complex64) / np.sqrt(2)
         self._BIN_TO_IDX = np.array([7, 6, 2, 3, 1, 0, 4, 5], dtype=np.uint8)
 
-        # max-log LLR partitions: for each bit position b ∈ {0,1,2}, list the
-        # constellation points whose corresponding bit is 0 vs 1.  The mapping is
-        # idx = (b0<<2) | (b1<<1) | b2 (matches bits2symbols).
+        # Precomputed real/imag of constellation points + per-bit subset indices
+        # for max-log LLR.  Operating on real+imag separately avoids np.abs's sqrt
+        # (which **2 then undoes) and lets us compute distances to all 8 points
+        # once per symbol instead of 8 times.
         idx = np.arange(8)
         bits_for_idx = np.stack([(idx >> 2) & 1, (idx >> 1) & 1, idx & 1], axis=1)
-        self._llr_c0 = [self.symbol_mapping[bits_for_idx[:, b] == 0].astype(np.complex64)
+        self._sym_re = self.symbol_mapping.real.astype(np.float32).copy()
+        self._sym_im = self.symbol_mapping.imag.astype(np.float32).copy()
+        self._c0_idx = [np.flatnonzero(bits_for_idx[:, b] == 0).astype(np.intp)
                         for b in range(3)]
-        self._llr_c1 = [self.symbol_mapping[bits_for_idx[:, b] == 1].astype(np.complex64)
+        self._c1_idx = [np.flatnonzero(bits_for_idx[:, b] == 1).astype(np.intp)
                         for b in range(3)]
+        # C++ kernel tables (separate dtype/shape — held alongside the numpy
+        # ones so the pure-Python fallback still works if the extension is
+        # missing).
+        self._llr_tables = _build_psk_llr_tables(self.symbol_mapping, 3)
 
     def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
         if bitstream.size == 0:
@@ -128,12 +163,23 @@ class PSK8(Modulator):
         # (positive ⇒ bit 0 closer ⇒ bit=0 more likely).
         if symbols.size == 0:
             return np.empty((0, 3), dtype=np.float32)
-        r = symbols.astype(np.complex64).reshape(-1, 1)
-        out = np.empty((r.shape[0], 3), dtype=np.float32)
+        if _mod_ext is not None:
+            sr, si, c0, c1 = self._llr_tables
+            return _mod_ext.psk_llr_unit_norm(
+                np.ascontiguousarray(symbols, dtype=np.complex64),
+                sr, si, c0, c1, 3,
+            )
+        # Numpy fallback: compute squared distance to all 8 constellation
+        # points once and take min over the per-bit subsets.
+        r = np.ascontiguousarray(symbols, dtype=np.complex64)
+        rr = r.real[:, np.newaxis]
+        ri = r.imag[:, np.newaxis]
+        dr = rr - self._sym_re
+        di = ri - self._sym_im
+        d2 = dr * dr + di * di
+        out = np.empty((r.size, 3), dtype=np.float32)
         for b in range(3):
-            d0 = np.abs(r - self._llr_c0[b][np.newaxis, :]) ** 2
-            d1 = np.abs(r - self._llr_c1[b][np.newaxis, :]) ** 2
-            out[:, b] = (d1.min(axis=1) - d0.min(axis=1)).astype(np.float32)
+            out[:, b] = d2[:, self._c1_idx[b]].min(axis=1) - d2[:, self._c0_idx[b]].min(axis=1)
         return out
 
 
@@ -156,14 +202,18 @@ class PSK16(Modulator):
         ring = np.arange(16, dtype=np.uint8)
         self._BIN_TO_IDX = (ring ^ (ring >> 1)).astype(np.uint8)
 
-        # Pre-split constellation by bit value at each position for max-log LLR.
+        # Precomputed real/imag arrays + per-bit subset indices for max-log LLR.
+        # See PSK8 for the rationale (avoid sqrt, compute all-point distances once).
         idx = np.arange(16)
         bits_for_idx = np.stack([(idx >> 3) & 1, (idx >> 2) & 1,
                                  (idx >> 1) & 1, idx & 1], axis=1)
-        self._llr_c0 = [self.symbol_mapping[bits_for_idx[:, b] == 0].astype(np.complex64)
+        self._sym_re = self.symbol_mapping.real.astype(np.float32).copy()
+        self._sym_im = self.symbol_mapping.imag.astype(np.float32).copy()
+        self._c0_idx = [np.flatnonzero(bits_for_idx[:, b] == 0).astype(np.intp)
                         for b in range(4)]
-        self._llr_c1 = [self.symbol_mapping[bits_for_idx[:, b] == 1].astype(np.complex64)
+        self._c1_idx = [np.flatnonzero(bits_for_idx[:, b] == 1).astype(np.intp)
                         for b in range(4)]
+        self._llr_tables = _build_psk_llr_tables(self.symbol_mapping, 4)
 
     def bits2symbols(self, bitstream: np.ndarray) -> np.ndarray:
         if bitstream.size == 0:
@@ -190,12 +240,21 @@ class PSK16(Modulator):
         # max-log MAP: LLR(b) = min_{s∈C1} |r-s|² − min_{s∈C0} |r-s|²
         if symbols.size == 0:
             return np.empty((0, 4), dtype=np.float32)
-        r = symbols.astype(np.complex64).reshape(-1, 1)
-        out = np.empty((r.shape[0], 4), dtype=np.float32)
+        if _mod_ext is not None:
+            sr, si, c0, c1 = self._llr_tables
+            return _mod_ext.psk_llr_unit_norm(
+                np.ascontiguousarray(symbols, dtype=np.complex64),
+                sr, si, c0, c1, 4,
+            )
+        r = np.ascontiguousarray(symbols, dtype=np.complex64)
+        rr = r.real[:, np.newaxis]
+        ri = r.imag[:, np.newaxis]
+        dr = rr - self._sym_re
+        di = ri - self._sym_im
+        d2 = dr * dr + di * di
+        out = np.empty((r.size, 4), dtype=np.float32)
         for b in range(4):
-            d0 = np.abs(r - self._llr_c0[b][np.newaxis, :]) ** 2
-            d1 = np.abs(r - self._llr_c1[b][np.newaxis, :]) ** 2
-            out[:, b] = (d1.min(axis=1) - d0.min(axis=1)).astype(np.float32)
+            out[:, b] = d2[:, self._c1_idx[b]].min(axis=1) - d2[:, self._c0_idx[b]].min(axis=1)
         return out
 """
 

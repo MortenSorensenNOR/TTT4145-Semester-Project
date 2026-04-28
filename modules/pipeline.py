@@ -9,7 +9,7 @@ from modules.frame_constructor.frame_constructor import *
 from modules.golay import *
 from modules.frame_sync.frame_sync import *
 from modules.costas_loop.costas import *
-from modules.ldpc.ldpc import LDPCConfig, ldpc_encode, ldpc_decode, ldpc_encode_batch
+from modules.ldpc.ldpc import LDPCConfig, ldpc_encode, ldpc_decode, ldpc_encode_batch, ldpc_decode_batch
 from modules.ldpc.channel_coding import *
 from modules.gardner_ted.gardner import *
 
@@ -416,21 +416,21 @@ class RXPipeline:
 
         if self.config.gardner_ted:
             # New NDA gardner has two quirks vs the old one:
-            #   1) intrinsic 1-sample bias — its first output is signal[1],
-            #      not signal[0]. Prepend a duplicate of the first sample so
-            #      the bias cancels and outputs land on the symbol peaks.
+            #   1) intrinsic 1-sample bias — passing prepend_first=True makes
+            #      the kernel duplicate the first sample internally so the
+            #      bias cancels and outputs land on the symbol peaks.
             #   2) output is (Ns-1) symbols short of naïve decimation —
             #      extend the trailing guard by sps*sps so downstream
             #      slicing has enough symbols.
             guard = self.config.SPS * self.config.SPS
             gardner_in = buffer[:header_end*self.config.SPS+guard]
-            gardner_in = np.concatenate([gardner_in[:1], gardner_in])
             header_syms = apply_gardner_ted(
                 gardner_in,
                 self.config.SPS,
                 BnTs=self.config.GARDNER_BN_TS,
                 zeta=self.config.GARDNER_ZETA,
                 L=self.config.GARDNER_L,
+                prepend_first=True,
             )
             timing_est = [0.0]  # new NDA gardner does not expose state for handoff
         else:
@@ -482,17 +482,16 @@ class RXPipeline:
             raise IndexError(msg)
 
         if self.config.gardner_ted:
-            # See header_decode for why we prepend a duplicate sample and use
-            # a sps*sps trailing guard.
+            # See header_decode for prepend_first / sps*sps trailing-guard rationale.
             guard = self.config.SPS * self.config.SPS
             gardner_in = buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard]
-            gardner_in = np.concatenate([gardner_in[:1], gardner_in])
             rx_syms = apply_gardner_ted(
                 gardner_in,
                 self.config.SPS,
                 BnTs=self.config.GARDNER_BN_TS,
                 zeta=self.config.GARDNER_ZETA,
                 L=self.config.GARDNER_L,
+                prepend_first=True,
             )
             timing_est = [0.0]  # new NDA gardner does not expose state for handoff
         else:
@@ -523,12 +522,12 @@ class RXPipeline:
         k = _k
         n = n_air_bits // n_cw
         cfg = LDPCConfig(k=k, code_rate=code_rate)
-        decoded = np.empty(n_cw * k, dtype=np.uint8)
-        for i in range(n_cw):
-            decoded[i*k:(i+1)*k] = ldpc_decode(
-                llrs[i*n:(i+1)*n], cfg,
-                max_iterations=self.config.LDPC_MAX_ITER,
-            ).astype(np.uint8)
+        # One C++ call for all n_cw codewords — was dominated by per-codeword
+        # pybind11 marshalling and scratch alloc.
+        decoded = ldpc_decode_batch(
+            llrs.reshape(n_cw, n), cfg,
+            max_iterations=self.config.LDPC_MAX_ITER,
+        ).ravel()
 
         # Trim the random pad we appended on TX to align with LDPC k.
         payload_bits_pre_ldpc = decoded[:pre_ldpc_n_bits]

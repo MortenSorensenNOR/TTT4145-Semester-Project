@@ -114,6 +114,7 @@ def apply_gardner_ted(
     BnTs: float = 0.01,
     zeta: float = 0.707,
     L: int = 2,
+    prepend_first: bool = False,
 ) -> np.ndarray:
     """NDA symbol timing synchroniser with Farrow cubic interpolation.
 
@@ -131,6 +132,11 @@ def apply_gardner_ted(
         Loop damping factor. 0.707 = maximally flat (Butterworth).
     L : int
         TED smoothing half-length. Smoothing window = 2*L+1 symbols.
+    prepend_first : bool
+        If True the kernel duplicates the first input sample internally to
+        cancel the NDA Gardner 1-sample bias.  This replaces the previous
+        Python-side ``np.concatenate([signal[:1], signal])`` and skips a
+        full input-array copy on the hot RX path.
 
     Returns
     -------
@@ -140,6 +146,8 @@ def apply_gardner_ted(
     signal = np.asarray(signal, dtype=np.complex64)
 
     if _ext is not None:
-        return _ext.gardner_ted(signal, int(sps), float(BnTs), float(zeta), int(L))
-    else:
-        return _nda_py(signal, int(sps), int(L), float(BnTs), float(zeta))
+        return _ext.gardner_ted(signal, int(sps), float(BnTs), float(zeta), int(L),
+                                bool(prepend_first))
+    if prepend_first and signal.size > 0:
+        signal = np.concatenate([signal[:1], signal])
+    return _nda_py(signal, int(sps), int(L), float(BnTs), float(zeta))

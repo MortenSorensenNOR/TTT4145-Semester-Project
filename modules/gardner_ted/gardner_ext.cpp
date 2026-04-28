@@ -77,27 +77,36 @@ static inline void farrow3(
 
 py::array_t<c64> nda_symb_sync(
     py::array_t<c64, py::array::c_style | py::array::forcecast> symbols,
-    int Ns, int L, f32 BnTs, f32 zeta)
+    int Ns, int L, f32 BnTs, f32 zeta,
+    bool prepend_first = false)
 {
     auto in = symbols.unchecked<1>();
     int  N  = static_cast<int>(in.shape(0));
 
-    // SoA layout — real and imag separate for NEON vectorisation
-    // Prepend one zero sample (matches the Python hstack([0], z))
-    std::vector<f32> re(N + 1, 0.f), im(N + 1, 0.f);
-    int n_total = N + 1;
+    // Layout always prepends one zero sample (matches Python hstack([0], z)).
+    // When prepend_first is true the kernel additionally duplicates the first
+    // input sample, replacing what was previously a Python-side concat.
+    int prepend = prepend_first ? 2 : 1;
+    int n_total = N + prepend;
+
+    std::vector<f32> re(n_total, 0.f), im(n_total, 0.f);
 
     // Output size depends on the inner loop's progress, so accumulate in
     // std::vectors here and allocate the py::array_t once we know the length.
-    int max_out = N / Ns + 2;
+    int max_out = n_total / Ns + 2;
     std::vector<f32> out_r(max_out, 0.f), out_i(max_out, 0.f);
     int mm = 1;  // output write index (index 0 left as zero, matches Python)
 
     {
     py::gil_scoped_release nogil;
+    if (N > 0 && prepend_first) {
+        // index 0 is the structural zero; index 1 duplicates input[0].
+        re[1] = in(0).real();
+        im[1] = in(0).imag();
+    }
     for (int i = 0; i < N; ++i) {
-        re[i + 1] = in(i).real();
-        im[i + 1] = in(i).imag();
+        re[i + prepend] = in(i).real();
+        im[i + prepend] = in(i).imag();
     }
 
     // Loop filter gains (Rice eq. 8.89)
@@ -107,10 +116,28 @@ py::array_t<c64> nda_symb_sync(
     f32 K1 = 4.f * zeta / denom * BnTs / Ns / Kp / K0;
     f32 K2 = 4.f / (denom * denom) * (BnTs / Ns) * (BnTs / Ns) / Kp / K0;
 
+    // NDA TED twiddle factors: exp(-j*2*pi/Ns*kk) for kk in 0..Ns-1.
+    // These depend only on Ns; precompute once instead of calling cos/sin
+    // every output sample × every kk.
+    std::vector<f32> ted_cos(Ns), ted_sin(Ns);
+    {
+        const f32 base = -2.f * static_cast<f32>(M_PI) / static_cast<f32>(Ns);
+        for (int kk = 0; kk < Ns; ++kk) {
+            f32 angle = base * static_cast<f32>(kk);
+            ted_cos[kk] = std::cos(angle);
+            ted_sin[kk] = std::sin(angle);
+        }
+    }
+    const f32* tcos = ted_cos.data();
+    const f32* tsin = ted_sin.data();
+    const f32 inv_Ns = 1.f / static_cast<f32>(Ns);
+    const f32 inv_two_pi = -1.f / (2.f * static_cast<f32>(M_PI));
+
     // c1 smoothing buffer (circular, length 2*L+1)
     int  buf_len  = 2 * L + 1;
     std::vector<f32> c1_buf_r(buf_len, 0.f), c1_buf_i(buf_len, 0.f);
     int  buf_ptr  = 0;  // circular write pointer
+    const f32 inv_buf_len = 1.f / static_cast<f32>(buf_len);
 
     f32 vi        = 0.f;
     f32 CNT_next  = 0.f;
@@ -120,8 +147,7 @@ py::array_t<c64> nda_symb_sync(
     f32 mu        = 0.f;
     f32 CNT       = 0.f;
 
-    int loop_end = Ns * static_cast<int>(std::floor(
-        static_cast<f32>(n_total) / static_cast<f32>(Ns)) - (Ns - 1));
+    int loop_end = Ns * (n_total / Ns - (Ns - 1));
 
     for (int nn = 1; nn < loop_end; ++nn) {
         CNT = CNT_next;
@@ -153,18 +179,17 @@ py::array_t<c64> nda_symb_sync(
                     ti = im[std::min(idx, n_total-1)];
                 }
                 f32 mag2  = tr*tr + ti*ti;
-                // exp(-j*2*pi/Ns*kk) = cos(...) - j*sin(...)
-                f32 angle = -2.f * static_cast<f32>(M_PI) / Ns * kk;
-                c1r += mag2 * std::cos(angle);
-                c1i += mag2 * std::sin(angle);
+                // exp(-j*2*pi/Ns*kk) twiddle precomputed (depends only on Ns).
+                c1r += mag2 * tcos[kk];
+                c1i += mag2 * tsin[kk];
             }
-            c1r /= Ns;
-            c1i /= Ns;
+            c1r *= inv_Ns;
+            c1i *= inv_Ns;
 
             // Update circular smoothing buffer
             c1_buf_r[buf_ptr] = c1r;
             c1_buf_i[buf_ptr] = c1i;
-            buf_ptr = (buf_ptr + 1) % buf_len;
+            buf_ptr = (buf_ptr + 1 == buf_len) ? 0 : (buf_ptr + 1);
 
             // Smoothed c1 sum
             f32 sum_r = 0.f, sum_i = 0.f;
@@ -172,10 +197,10 @@ py::array_t<c64> nda_symb_sync(
                 sum_r += c1_buf_r[k];
                 sum_i += c1_buf_i[k];
             }
-            sum_r /= buf_len;
-            sum_i /= buf_len;
+            sum_r *= inv_buf_len;
+            sum_i *= inv_buf_len;
 
-            epsilon = -1.f / (2.f * static_cast<f32>(M_PI)) * std::atan2(sum_i, sum_r);
+            epsilon = inv_two_pi * std::atan2(sum_i, sum_r);
 
             // Store output
             if (mm < max_out) {
@@ -254,13 +279,16 @@ PYBIND11_MODULE(gardner_ext, m, py::mod_gil_not_used()) {
 
     m.def("gardner_ted",
         [](py::array_t<c64, py::array::c_style | py::array::forcecast> symbols,
-           int sps, f32 BnTs, f32 zeta, int L) {
-            return nda_symb_sync(symbols, sps, L, BnTs, zeta);
+           int sps, f32 BnTs, f32 zeta, int L, bool prepend_first) {
+            return nda_symb_sync(symbols, sps, L, BnTs, zeta, prepend_first);
         },
         py::arg("symbols"),
         py::arg("sps"),
         py::arg("BnTs")  = 0.01f,
         py::arg("zeta")  = 0.707f,
         py::arg("L")     = 2,
-        "NDA symbol timing sync with Farrow cubic interpolation");
+        py::arg("prepend_first") = false,
+        "NDA symbol timing sync with Farrow cubic interpolation. "
+        "prepend_first=True duplicates the first input sample internally to "
+        "cancel the new-NDA 1-sample bias (saves a Python-side concatenate).");
 }

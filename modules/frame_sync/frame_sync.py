@@ -400,27 +400,43 @@ def full_buffer_xcorr_sync(
     if n_z == 0:
         return empty
 
-    z_mag2 = (z.real.astype(np.float64) ** 2 + z.imag.astype(np.float64) ** 2)
+    if _ext is not None and hasattr(_ext, "xcorr_ncc_post"):
+        # Single C++ pass replaces a chain of numpy ops (z²+sig_pwr cumsum+NCC
+        # +mask+cluster+CFO).
+        result = _ext.xcorr_ncc_post(
+            z, samples.astype(np.complex64, copy=False), long_ref,
+            float(ncc_threshold), int(fs), 0.05,
+        )
+        if result.sample_idxs.size == 0:
+            return empty
+        return (
+            FineResult(
+                sample_idxs=result.sample_idxs,
+                peak_ratios=result.peak_ratios,
+                phase_estimates=result.phase_estimates,
+            ),
+            result.cfo_hats,
+        )
 
-    # Sliding window |s|² energy aligned with z indexing.
-    sig_pwr = (samples.real.astype(np.float64) ** 2 + samples.imag.astype(np.float64) ** 2)
+    # Pure-numpy fallback (kept for environments without the extension).
+    z_re, z_im = z.real, z.imag
+    z_mag2 = z_re * z_re + z_im * z_im
+
+    s_re, s_im = samples.real, samples.imag
+    sig_pwr = s_re * s_re + s_im * s_im
     csum = np.empty(len(sig_pwr) + 1, dtype=np.float64)
     csum[0] = 0.0
     np.cumsum(sig_pwr, out=csum[1:])
-    sig_energy = csum[n_ref:n_ref + n_z] - csum[:n_z]
+    sig_energy = (csum[n_ref:n_ref + n_z] - csum[:n_z]).astype(np.float32)
 
-    ref_energy = float(np.sum((long_ref.real.astype(np.float64)) ** 2
-                              + (long_ref.imag.astype(np.float64)) ** 2))
+    lr_re, lr_im = long_ref.real, long_ref.imag
+    ref_energy = float(np.sum(lr_re * lr_re + lr_im * lr_im))
     denom = sig_energy * ref_energy
-    ncc = z_mag2 / np.maximum(denom, np.finfo(np.float64).tiny)
+    ncc = z_mag2 / np.maximum(denom, np.float32(np.finfo(np.float32).tiny))
 
-    # Silent gaps make sig_energy tiny — any numerical noise in z then yields
-    # an undefined NCC that overflows.  Force NCC=0 wherever the windowed
-    # signal energy is below 5% of the buffer's peak; this is well below any
-    # real preamble window and well above pure-zero / silence regions.
     max_sig_energy = float(sig_energy.max()) if n_z > 0 else 0.0
     if max_sig_energy > 0:
-        ncc[sig_energy < 0.05 * max_sig_energy] = 0.0
+        ncc[sig_energy < np.float32(0.05 * max_sig_energy)] = 0.0
     else:
         return empty
 
@@ -428,9 +444,6 @@ def full_buffer_xcorr_sync(
     if above.size == 0:
         return empty
 
-    # Cluster peaks within one long_ref length — those belong to the same frame
-    # (sidelobes / pulse-shape smearing).  Real frames are at least one payload
-    # + preamble apart, so this gap is safe.
     half = n_ref // 2
     long_ref_conj = np.conj(long_ref).astype(np.complex64)
 
@@ -440,20 +453,14 @@ def full_buffer_xcorr_sync(
         cluster = above[splits[i]:splits[i + 1]]
         peak = int(cluster[np.argmax(ncc[cluster])])
         if peak + n_ref > len(samples):
-            continue  # window runs off the buffer end
+            continue
 
-        # CFO via half-window phase difference.  Multiplying samples by
-        # conj(long_ref) cancels the ZC modulation, leaving exp(jωn+jθ).  The
-        # phase diff between the two halves is ω·N/2 → CFO = angle(P)·fs/(π·N).
         window = samples[peak:peak + n_ref] * long_ref_conj
-        p = np.vdot(window[:half], window[half:half * 2])  # sum conj(h1)·h2
+        p = np.vdot(window[:half], window[half:half * 2])
         cfo_hat = float(np.angle(p)) * fs / (np.pi * n_ref)
 
         sample_idxs.append(peak)
         peak_ratios.append(float(ncc[peak]))
-        # angle(z[peak]) is the channel phase at the middle of long_ref (CFO
-        # rotates symmetrically across the correlator window).  Project forward
-        # to payload start by adding CFO phase over the back-half.
         phase_mid = float(np.angle(z[peak]))
         phase_at_payload = phase_mid + 2 * np.pi * cfo_hat / fs * (n_ref / 2)
         phase_estimates.append(phase_at_payload % (2 * np.pi))
