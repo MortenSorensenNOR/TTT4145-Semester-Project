@@ -782,9 +782,11 @@ if __name__ == "__main__":
                         if gap > 0:
                             status.log(f"  [RX] *** GAP: {gap} dropped before seq={seq} ***")
 
+                        gain_str = (f"  gain={agc.gain_db:>4.1f}dB" if agc is not None
+                                    else (f"  gain={args.rx_gain:>4.1f}dB" if args.rx_gain_mode == "manual" else ""))
                         status.set(0, f"  [RX] #{n_total:>6d}  seq={seq:>10d}  valid=True   "
                                       f"(ok={n_valid}, dropped≈{n_dropped})  "
-                                      f"q={stream._q.qsize():>3d}/{stream._q.maxsize}  "
+                                      f"q={stream._q.qsize():>3d}/{stream._q.maxsize}{gain_str}  "
                                       f"rate={_fmt_rate(rate.rate_bps)}  "
                                       f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
 
@@ -990,9 +992,11 @@ if __name__ == "__main__":
                         seq      = (int(b[0]) << 24) | (int(b[1]) << 16) | (int(b[2]) << 8) | int(b[3])
                         n_valid += 1
                         rx_rate.add(pkt.length)
+                        gain_str = (f"  gain={agc.gain_db:>4.1f}dB" if agc is not None
+                                    else (f"  gain={args.rx_gain:>4.1f}dB" if args.rx_gain_mode == "manual" else ""))
                         status.set(1, f"  [RX] #{n_total:>6d}  seq={seq:>10d}  valid=True   "
                                       f"(ok={n_valid})  "
-                                      f"q={stream._q.qsize():>3d}/{stream._q.maxsize}  "
+                                      f"q={stream._q.qsize():>3d}/{stream._q.maxsize}{gain_str}  "
                                       f"rate={_fmt_rate(rx_rate.rate_bps)}  "
                                       f"avg={_fmt_rate(rx_rate.avg_bps)}  "
                                       f"total={_fmt_bytes(rx_rate.total_bytes)}")
