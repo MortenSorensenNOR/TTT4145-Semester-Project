@@ -74,6 +74,7 @@ NODE_FREQS = {
     "B": {"tx": FREQ_B_TO_A, "rx": FREQ_A_TO_B},
 }
 from pluto.sdr_stream import RxStream, TxStream
+from pluto.rx_agc import RxAGC
 from pluto.live_status import (
     LiveStatus, RateMeter, _fmt_rate, _fmt_bytes, _install_live_logging,
 )
@@ -111,6 +112,17 @@ if __name__ == "__main__":
                         help="Fixed RX hardware gain in dB when "
                              "--rx-gain-mode=manual (default: 50, AD9361 range "
                              "~0–71). Ignored for any auto AGC mode.")
+    parser.add_argument("--rx-agc", type=str, default="auto",
+                        choices=("auto", "off"),
+                        help="Software AGC for --rx-gain-mode=manual. "
+                             "'auto' (default) watches the peak amplitude of "
+                             "every RX buffer that produced a valid decode "
+                             "and nudges rx_hardwaregain toward a target "
+                             "below ADC clip; idle buffers are ignored so "
+                             "gain doesn't ramp up during silence. 'off' "
+                             "leaves --rx-gain fixed. No effect when "
+                             "--rx-gain-mode is not 'manual' (the AD9361 is "
+                             "already running its own AGC).")
     parser.add_argument("--tx-freq", type=float, default=None, help="TX center frequency in Hz (default: derived from --node via NODE_FREQS)")
     parser.add_argument("--rx-freq", type=float, default=None, help="RX center frequency in Hz (default: derived from --node via NODE_FREQS)")
     parser.add_argument("--constellation", action="store_true", help="Collect post-Costas PSK8 symbols and refresh a constellation plot. Live X11 by default; falls back to PNG-on-disk if X11 is unreachable (sudo+netns strips DISPLAY auth). Use --constellation-save to force the PNG path.")
@@ -643,6 +655,12 @@ if __name__ == "__main__":
         stream = RxStream(rx_sdr, maxsize=128, lossless=True)
         stream.start(flush=16)
 
+        # Software AGC — only useful when the AD9361's own AGC is off.
+        agc = None
+        if args.rx_gain_mode == "manual" and args.rx_agc == "auto":
+            agc = RxAGC(rx_sdr, initial_gain_db=args.rx_gain)
+            status.log(f"  [RX] software AGC enabled (start gain {args.rx_gain} dB)")
+
         status.log("  [RX] listening …")
 
         # --- optional constellation plot ---
@@ -793,6 +811,13 @@ if __name__ == "__main__":
                         status.log(f"  [RX] #{n_total}  header CRC failed  "
                                    f"(ok={n_valid}, dropped≈{n_dropped})")
 
+                if agc is not None:
+                    n_valid_in_buf = sum(1 for p in packets if p.valid)
+                    res = agc.update(curr_buf, n_valid_in_buf)
+                    if res is not None:
+                        peak, new_g = res
+                        status.log(f"  [RX-AGC] peak={peak:.2f} → gain={new_g:.1f} dB")
+
         except KeyboardInterrupt:
             status.log(f"  [RX] interrupted — decoded {n_valid} valid / {n_total} total frames, ~{n_dropped} dropped by seq gap")
         finally:
@@ -923,6 +948,11 @@ if __name__ == "__main__":
             stream.start(flush=16)
             rx_ready.set()
 
+            agc = None
+            if args.rx_gain_mode == "manual" and args.rx_agc == "auto":
+                agc = RxAGC(rx_sdr, initial_gain_db=args.rx_gain)
+                status.log(f"  [RX] software AGC enabled (start gain {args.rx_gain} dB)")
+
             prev_buf    = None
             search_from = 0
             n_after_tx  = 0
@@ -977,6 +1007,13 @@ if __name__ == "__main__":
                             _decoded_seqs.add(seq)
                             if len(_decoded_seqs) >= args.packets:
                                 _all_decoded.set()
+
+                if agc is not None:
+                    n_valid_in_buf = sum(1 for p in packets if p.valid)
+                    res = agc.update(curr_buf, n_valid_in_buf)
+                    if res is not None:
+                        peak, new_g = res
+                        status.log(f"  [RX-AGC] peak={peak:.2f} → gain={new_g:.1f} dB")
 
             stream.stop()
             status.log(f"  [RX] done — decoded {n_valid}/{n_total} (avg {_fmt_rate(rx_rate.avg_bps)})")
