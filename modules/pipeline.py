@@ -45,6 +45,18 @@ def _on_air_payload_n_bits(pre_ldpc_n_bits: int, code_rate: CodeRates) -> tuple[
 _LDPC_PAD_RNG = np.random.default_rng(seed=0xA5A5A5A5)
 _LDPC_PAD_BITS = _LDPC_PAD_RNG.integers(0, 2, max(_LDPC_BLOCK_PARAMS.values(), key=lambda kn: kn[0])[0], dtype=np.uint8)
 
+# Bit-level whitener PRBS, XOR'd over the LDPC k-message on TX and undone on
+# RX after ldpc_decode_batch. _LDPC_PAD_BITS only randomises the trailing
+# pad — structured user data (iperf UDP, IP headers, zero-filled tails) hits
+# the same Costas/Gardner failure mode on the systematic bits. Scrambling
+# extends the fix to the data bits too: after XOR the systematic stream is
+# uniform random, so LDPC parity is also random-looking, and the modulator
+# never sees the long runs of identical symbols. Sized for the largest
+# possible msg under any current code rate (max n_cw × k ≈ 13k bits at MTU
+# 1500); 65536 leaves headroom for jumbo MTUs without runtime checks.
+_SCRAMBLE_RNG = np.random.default_rng(seed=0xC3C3C3C3)
+_SCRAMBLE_BITS = _SCRAMBLE_RNG.integers(0, 2, 1 << 16, dtype=np.uint8)
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -56,7 +68,7 @@ class PipelineConfig:
     SPAN: int = 8
     RRC_ALPHA: np.float32 = np.float32(0.25)
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
-    CODING_RATE: CodeRates = CodeRates.TWO_THIRDS_RATE
+    CODING_RATE: CodeRates = CodeRates.FIVE_SIXTH_RATE
     LDPC_MAX_ITER: int = 20
     PRE_HEADER_GUARD_BITS: int = 0
     GUARD_SYMS_LENGTH: int = 16
@@ -168,6 +180,7 @@ class TXPipeline:
         n_cw, k, n_air = _on_air_payload_n_bits(len(flat), code_rate)
         pad = n_cw * k - len(flat)
         msg = np.concatenate([flat, _LDPC_PAD_BITS[:pad]]) if pad else flat
+        msg = msg ^ _SCRAMBLE_BITS[:len(msg)]
         cfg = LDPCConfig(k=k, code_rate=code_rate)
         # Single C++ call for all n_cw codewords — was the per-call pybind11
         # marshalling that dominated runtime, not the XOR work.
@@ -529,8 +542,9 @@ class RXPipeline:
             max_iterations=self.config.LDPC_MAX_ITER,
         ).ravel()
 
-        # Trim the random pad we appended on TX to align with LDPC k.
-        payload_bits_pre_ldpc = decoded[:pre_ldpc_n_bits]
+        # Trim the random pad we appended on TX to align with LDPC k, and
+        # undo the TX-side _SCRAMBLE_BITS XOR on the systematic data bits.
+        payload_bits_pre_ldpc = decoded[:pre_ldpc_n_bits] ^ _SCRAMBLE_BITS[:pre_ldpc_n_bits]
         payload_bits = self.frame_constructor.decode_payload(header, payload_bits_pre_ldpc)
         return payload_bits.reshape(-1, 1), rx_syms
 
