@@ -183,7 +183,7 @@ class TxStream:
     """
 
     def __init__(self, sdr: adi.Pluto, sample_rate: int, buf_size: int, *,
-                 maxsize: int = 64):
+                 maxsize: int = 64, filler_amp: float = 0.0):
         """
         Args:
             sdr:         configured adi.Pluto instance (tx_cyclic_buffer=False)
@@ -192,6 +192,14 @@ class TxStream:
                          is exactly this many samples)
             maxsize:     maximum number of packet sample arrays to queue before
                          send() blocks
+            filler_amp:  per-component (I, Q) std-dev of complex Gaussian noise
+                         used to fill buffer slots NOT occupied by packet
+                         samples. Same units as the DAC-scaled packet samples
+                         (so DAC_SCALE/32 sits ~30 dB below packet peak).
+                         0.0 (default) preserves the legacy zero-fill. Non-zero
+                         values keep RX AGC / Costas / Gardner / DC-blocker
+                         loops engaged during sparse traffic so the receiver
+                         doesn't have to re-converge on every preamble.
         """
         self._sdr = sdr
         self._sample_rate = sample_rate
@@ -201,6 +209,9 @@ class TxStream:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._packer, daemon=True)
         self._bufs_sent = 0
+        self._bufs_with_payload = 0
+        self._filler_amp = float(filler_amp)
+        self._filler_rng = np.random.default_rng()
 
     def start(self) -> None:
         """Launch the background packer/sender thread."""
@@ -235,6 +246,11 @@ class TxStream:
         """Total TX buffers pushed to the SDR so far."""
         return self._bufs_sent
 
+    @property
+    def bufs_with_payload(self) -> int:
+        """TX buffers that carried real packet samples (vs all-silence)."""
+        return self._bufs_with_payload
+
     # ------------------------------------------------------------------
 
     def _packer(self) -> None:
@@ -244,7 +260,13 @@ class TxStream:
         pending: np.ndarray | None = None
 
         while not self._stop.is_set():
-            buf = np.zeros(self._buf_size, dtype=np.complex64)
+            if self._filler_amp > 0.0:
+                # Complex Gaussian noise with per-component std = filler_amp.
+                re = self._filler_rng.standard_normal(self._buf_size).astype(np.float32)
+                im = self._filler_rng.standard_normal(self._buf_size).astype(np.float32)
+                buf = (re + 1j * im).astype(np.complex64) * self._filler_amp
+            else:
+                buf = np.zeros(self._buf_size, dtype=np.complex64)
             write_pos = 0
 
             # Place held-over packet from previous buffer at the start.
@@ -279,9 +301,11 @@ class TxStream:
             # — an explicit time.sleep() after tx() was causing repeated
             # DMA underruns between buffers and silently dropping ~5–10 %
             # of packets on coax.
-            t0 = time.perf_counter()
             self._sdr.tx(buf)
-            t1 = time.perf_counter()
-
-            logger.error(f"Time for sdr.tx: {(t1 - t0) * 1000:.2f} ms")
             self._bufs_sent += 1
+            if write_pos > 0:
+                self._bufs_with_payload += 1
+                logger.info(
+                    "TX buf #%d: %d/%d samples carry payload",
+                    self._bufs_sent, write_pos, self._buf_size,
+                )

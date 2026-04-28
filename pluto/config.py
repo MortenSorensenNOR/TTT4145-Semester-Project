@@ -45,12 +45,25 @@ def configure_rx(
     sample_rate: int = PIPELINE.SAMPLE_RATE,
     buffer_size: int = RX_BUFFER_SIZE,
     gain_mode: str = "slow_attack",
+    gain: float = 40.0,
     kernel_buffers_count: int = KERNEL_BUFFERS_COUNT,
 ) -> None:
-    """Apply standard RX settings to an SDR."""
-    sdr.gain_control_mode_chan0 = "slow_attack"
-    # sdr.gain_control_mode_chan0 = "manual"
-    # sdr.rx_hardwaregain_chan0 = 50
+    """Apply standard RX settings to an SDR.
+
+    Args:
+        gain_mode: AD9361 AGC mode — "slow_attack", "fast_attack", "hybrid",
+                   or "manual". slow_attack is fine for dense / continuous
+                   traffic but drifts during silence between sparse bursts
+                   (gain ramps up while waiting, next packet then clips at the
+                   ADC and the constellation widens 3–5×). For sparse-traffic
+                   links (e.g. UDP video at low bitrate, control traffic, ARP)
+                   use "manual" with a fixed --rx-gain.
+        gain:      Fixed RX hardware gain in dB when gain_mode="manual"
+                   (AD9361 range ~0–71 dB; ignored in any auto mode).
+    """
+    sdr.gain_control_mode_chan0 = gain_mode
+    if gain_mode == "manual":
+        sdr.rx_hardwaregain_chan0 = float(gain)
     sdr.rx_lo = int(freq)
     sdr.sample_rate = sample_rate
     sdr.rx_rf_bandwidth = int(sample_rate)

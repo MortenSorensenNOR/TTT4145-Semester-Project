@@ -100,12 +100,36 @@ if __name__ == "__main__":
                              "Default: value from the cfo block of pluto/setup.json "
                              "for --node (run scripts/cfo_calibrate.py to generate "
                              "it), or 0 if no calibration is present. Only affects RX.")
+    parser.add_argument("--rx-gain-mode", type=str, default="slow_attack",
+                        choices=("slow_attack", "fast_attack", "hybrid", "manual"),
+                        help="AD9361 RX AGC mode (default: slow_attack). Set to "
+                             "'manual' for sparse traffic — slow_attack drifts "
+                             "during the silence between bursts, ramping gain up "
+                             "so the next packet clips the ADC and the "
+                             "constellation widens 3–5×.")
+    parser.add_argument("--rx-gain", type=float, default=50.0,
+                        help="Fixed RX hardware gain in dB when "
+                             "--rx-gain-mode=manual (default: 50, AD9361 range "
+                             "~0–71). Ignored for any auto AGC mode.")
     parser.add_argument("--tx-freq", type=float, default=None, help="TX center frequency in Hz (default: derived from --node via NODE_FREQS)")
     parser.add_argument("--rx-freq", type=float, default=None, help="RX center frequency in Hz (default: derived from --node via NODE_FREQS)")
-    parser.add_argument("--constellation", action="store_true", help="Show live PSK8 constellation plot (RX mode only)")
+    parser.add_argument("--constellation", action="store_true", help="Collect post-Costas PSK8 symbols and refresh a constellation plot. Live X11 by default; falls back to PNG-on-disk if X11 is unreachable (sudo+netns strips DISPLAY auth). Use --constellation-save to force the PNG path.")
+    parser.add_argument("--constellation-save", type=str, default=None,
+                        help="Force-save the constellation to this PNG path "
+                             "instead of opening an X11 window. Refreshed "
+                             "every few packets — view with `feh -R 1 PATH` "
+                             "or `eog PATH` for live updates. Implies "
+                             "--constellation.")
     parser.add_argument("--variable", action="store_true", help="Randomize payload size per packet (between --min-payload and --payload)")
     parser.add_argument("--min-payload", type=int, default=4, help="Minimum payload bytes when --variable is set (default: 4, must hold seq number)")
     parser.add_argument("--tx-buf-mult", type=int, default=8, help="TX buffer size as multiple of next-power-of-2 frame length (default: 8)")
+    parser.add_argument("--tx-filler-amp", type=float, default=0.0,
+                        help="Per-component amplitude of complex Gaussian noise filler emitted "
+                             "between packets (DAC-scale units). 0.0 = silent zero-fill (default, "
+                             "original behaviour). Recommended ~512 (DAC_SCALE/32, ~30 dB below "
+                             "packet peak): keeps RX AGC/Costas/Gardner loops engaged during "
+                             "sparse traffic so the receiver doesn't have to re-converge on "
+                             "every preamble.")
     parser.add_argument("--hardware-rrc", action="store_true", help="Use the FPGA hardware RRC/4x interpolation path on TX (toggles the pluto_custom firmware GPIO). TX only — RX always uses software match filter.")
     parser.add_argument("--save-rx-buf", type=str, default=None,
                         help="Directory to dump raw RX buffers (.npz) for offline replay by "
@@ -292,7 +316,8 @@ if __name__ == "__main__":
 
     if args.mode in ("rx", "both"):
         rx_sdr = adi.Pluto("ip:" + rx_ip)
-        configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz, gain_mode="slow_attack")
+        configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz,
+                     gain_mode=args.rx_gain_mode, gain=args.rx_gain)
         rx_sdr.rx_buffer_size = rx_buf_size
 
     # ---------------------------------------------------------------------------
@@ -422,7 +447,8 @@ if __name__ == "__main__":
         status = LiveStatus(n_lines=1)
         _install_live_logging(status)
 
-        stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
+        stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size,
+                          filler_amp=args.tx_filler_amp)
         stream.start()
         status.log(f"  [TX] streaming (buf={tx_buf_size} samples / "
                    f"{tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms, "
@@ -538,12 +564,40 @@ if __name__ == "__main__":
     # ---------------------------------------------------------------------------
 
     def _setup_constellation_plot():
-        """Set up a live PSK8 constellation figure. Returns (fig, ax, scatter_handle)."""
-        import matplotlib
-        matplotlib.use("TkAgg" if "DISPLAY" in __import__("os").environ else "Agg")
-        import matplotlib.pyplot as plt
+        """Set up a constellation figure. Returns (fig, ax, scatter, save_path).
 
-        plt.ion()
+        When ``save_path`` is None, the plot updates live in an X11 window;
+        when set (either via --constellation-save, or auto-fallback when X11
+        is unavailable under sudo+netns), the plot is rendered to that PNG on
+        every refresh.
+        """
+        import os
+        import matplotlib
+
+        save_path = args.constellation_save
+        live = save_path is None and "DISPLAY" in os.environ
+
+        if live:
+            try:
+                matplotlib.use("TkAgg")
+                import matplotlib.pyplot as plt
+                plt.ion()
+                _probe = plt.figure()    # cheap test that the backend is actually usable
+                plt.close(_probe)
+            except Exception as e:
+                logger.warning(
+                    "X11 unavailable (%s) — falling back to PNG save", e)
+                live = False
+                save_path = save_path or "oneway-constellation.png"
+
+        if not live:
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            save_path = save_path or "oneway-constellation.png"
+            logger.info("constellation will be written to %s "
+                        "(view with `feh -R 1 %s` or `eog %s` for live updates)",
+                        save_path, save_path, save_path)
+
         fig, ax = plt.subplots(figsize=(6, 6))
         ax.set_aspect("equal")
         ax.set_xlim(-1.6, 1.6)
@@ -573,8 +627,11 @@ if __name__ == "__main__":
                           label="Received", linewidths=0)
         ax.legend(loc="upper right", fontsize=8)
         fig.tight_layout()
-        plt.pause(0.01)
-        return fig, ax, scat
+        if live:
+            plt.pause(0.01)
+        else:
+            fig.savefig(save_path)
+        return fig, ax, scat, save_path
 
 
     def run_rx():
@@ -590,12 +647,16 @@ if __name__ == "__main__":
 
         # --- optional constellation plot ---
         _fig = _ax = _scat = None
+        _const_save_path: str | None = None  # set if PNG-save mode is active
         _sym_buf: list[np.ndarray] = []   # post-Costas symbols accumulated across packets
         _pkt_count = 0                    # valid packets since last plot refresh
-        _PLOT_EVERY = 20                  # update plot every N valid packets
+        _PLOT_EVERY = 2                   # update plot every N valid packets
+        # --constellation-save implies --constellation
+        if args.constellation_save and not args.constellation:
+            args.constellation = True
         if args.constellation:
             import matplotlib.pyplot as plt
-            _fig, _ax, _scat = _setup_constellation_plot()
+            _fig, _ax, _scat, _const_save_path = _setup_constellation_plot()
 
         rate        = RateMeter()
         n_total     = 0
@@ -622,7 +683,7 @@ if __name__ == "__main__":
                 try:
                     curr_buf = stream.get(timeout=0.05)
                 except queue.Empty:
-                    if args.constellation and _fig is not None:
+                    if args.constellation and _fig is not None and _const_save_path is None:
                         import matplotlib.pyplot as plt
                         plt.pause(0.001)
                     continue
@@ -721,8 +782,11 @@ if __name__ == "__main__":
                                     f"PSK8 constellation — last {_pkt_count} pkts "
                                     f"({len(all_syms)} symbols)"
                                 )
-                                _fig.canvas.flush_events()
-                                plt.pause(0.001)
+                                if _const_save_path is None:
+                                    _fig.canvas.flush_events()
+                                    plt.pause(0.001)
+                                else:
+                                    _fig.savefig(_const_save_path)
                                 _sym_buf.clear()
                                 _pkt_count = 0
                     else:
@@ -736,7 +800,11 @@ if __name__ == "__main__":
             stream.stop()
             if args.constellation and _fig is not None:
                 import matplotlib.pyplot as plt
-                plt.ioff()
+                if _const_save_path is None:
+                    plt.ioff()
+                else:
+                    _fig.savefig(_const_save_path)
+                    print(f"[info] constellation saved to {_const_save_path}")
                 plt.show()  # keep window open after run ends
 
     # ---------------------------------------------------------------------------
@@ -787,7 +855,8 @@ if __name__ == "__main__":
         def tx_thread():
             rx_ready.wait()
 
-            stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
+            stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size,
+                          filler_amp=args.tx_filler_amp)
             stream.start()
 
             # MP path: keep ~2× n_workers builds in flight; non-MP: build inline.

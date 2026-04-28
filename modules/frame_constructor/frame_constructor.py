@@ -90,12 +90,12 @@ class FrameHeader:
 @dataclass
 class FrameHeaderConfig:
     """Bit-width configuration for frame header fields."""
-    payload_length_bits: int = 12
-    src_bits: int = 1
-    dst_bits: int = 1
-    frame_type_bits: int = 2
-    mod_scheme_bits: int = 2
-    sequence_number_bits: int = 5
+    payload_length_bits: int = 11
+    src_bits: int = 2
+    dst_bits: int = 2
+    frame_type_bits: int = 1
+    mod_scheme_bits: int = 3
+    sequence_number_bits: int = 4
     coding_rate_bits: int = 2
     crc_bits: int = 8
     header_total_size: int = field(init=False)

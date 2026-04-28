@@ -1,22 +1,26 @@
 """TUN-mode radio link — Linux network interface over the SDR (no ARQ).
 
-Per-node, full-duplex bridge between a Linux TUN device and the radio.
-Packets that fail to decode are dropped — there's no retransmit layer.
+Per-node bridge between a Linux TUN device and the radio. Defaults to
+full-duplex (one TX Pluto + one RX Pluto open simultaneously) but
+``--mode tx`` and ``--mode rx`` enable half-duplex one-way operation
+when only one Pluto is plugged in for that node — useful for the
+2-radio A→B test where node A only has its TX Pluto and node B only
+has its RX Pluto.
 
-Each node opens a dedicated TX Pluto and a dedicated RX Pluto (IPs from
-pluto/setup.json), creates a TUN at /dev/net/tun, and runs three threads:
+Threads (only those needed for the chosen mode start):
 
-  * tun-rd : reads IP packets from TUN, hands them to the TX queue
-  * tx     : pulls packets, builds Packet, transmits via TxStream
-  * rx     : drains RxStream, decodes frames, writes payload to TUN
+  * tun-rd : reads IP packets from TUN, hands them to the TX queue   (TX only)
+  * tx     : pulls packets, builds Packet, transmits via TxStream    (TX only)
+  * rx     : drains RxStream, decodes frames, writes payload to TUN  (RX only)
 
 Default IP plan:
   --node A → TUN pluto0 = 10.0.0.1/24
   --node B → TUN pluto0 = 10.0.0.2/24
 
 Usage:
-    sudo .venv/bin/python -m pluto.tun_link --node A
-    sudo .venv/bin/python -m pluto.tun_link --node B
+    sudo .venv/bin/python -m pluto.tun_link --node A                 # full-duplex
+    sudo .venv/bin/python -m pluto.tun_link --node A --mode tx       # TX-only
+    sudo .venv/bin/python -m pluto.tun_link --node B --mode rx       # RX-only
 """
 
 import argparse
@@ -53,7 +57,15 @@ from pluto.live_status import (
 )
 
 import logging
-logging.basicConfig(level=logging.INFO)
+# Timestamps so log files (oneway-A.log / oneway-B.log) can be correlated to
+# sweep cells / wall-clock test events without having to instrument each call
+# site individually. msec precision is plenty (TX buf turnover is ~tens of ms).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 # FDD frequency plan: same as pluto.one_way_threaded — A transmits on
 # FREQ_A_TO_B and listens on FREQ_B_TO_A; B does the opposite.
@@ -75,6 +87,13 @@ DEFAULT_TUN_IP = {"A": "10.0.0.1", "B": "10.0.0.2"}
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--node",     type=str,   default="A",    help="Node identity A or B; picks default TX/RX IPs from pluto/setup.json and TUN IP from DEFAULT_TUN_IP")
+    parser.add_argument("--mode",     type=str,   default="both",
+                        choices=("tx", "rx", "both"),
+                        help="Half-duplex mode. 'tx': open only the TX Pluto, "
+                             "send TUN packets out the radio, never receive. "
+                             "'rx': open only the RX Pluto, write received "
+                             "packets to TUN, never transmit. 'both' (default): "
+                             "full-duplex, open both Plutos.")
     parser.add_argument("--gain",     type=float, default=-10,    help="TX gain in dB (default: -10)")
     parser.add_argument("--tx-ip",    type=str,   default=None,   help="Override TX Pluto IP (default: derived from --node via pluto/setup.json)")
     parser.add_argument("--rx-ip",    type=str,   default=None,   help="Override RX Pluto IP (default: derived from --node via pluto/setup.json)")
@@ -85,7 +104,26 @@ if __name__ == "__main__":
                              "Default: value from the cfo block of pluto/setup.json "
                              "for --node (run scripts/cfo_calibrate.py to generate "
                              "it), or 0 if no calibration is present.")
+    parser.add_argument("--rx-gain-mode", type=str, default="slow_attack",
+                        choices=("slow_attack", "fast_attack", "hybrid", "manual"),
+                        help="AD9361 RX AGC mode (default: slow_attack). Set to "
+                             "'manual' for sparse traffic — slow_attack drifts "
+                             "during the silence between bursts, ramping gain "
+                             "up so the next packet clips the ADC and the "
+                             "constellation widens 3–5×.")
+    parser.add_argument("--rx-gain", type=float, default=50.0,
+                        help="Fixed RX hardware gain in dB when "
+                             "--rx-gain-mode=manual (default: 50, AD9361 range "
+                             "~0–71). Ignored for any auto AGC mode.")
     parser.add_argument("--tx-buf-mult", type=int, default=8,     help="TX buffer size as multiple of next-power-of-2 frame length (default: 8)")
+    parser.add_argument("--tx-filler-amp", type=float, default=0.0,
+                        help="Per-component amplitude of complex Gaussian noise "
+                             "filler emitted between packets (DAC-scale units). "
+                             "0.0 = silent zero-fill (default, original behaviour). "
+                             "Recommended ~512 (DAC_SCALE/32, ~30 dB below packet "
+                             "peak): keeps RX AGC/Costas/Gardner loops engaged "
+                             "during sparse traffic so the receiver doesn't have "
+                             "to re-converge on every preamble.")
     parser.add_argument("--hardware-rrc", action="store_true",    help="Use the FPGA hardware RRC/4x interpolation path on TX (toggles the pluto_custom firmware GPIO).")
     parser.add_argument("--tun-name", type=str,   default="pluto0", help="TUN interface name (default: pluto0)")
     parser.add_argument("--tun-ip",   type=str,   default=None,   help="TUN IPv4 address with /24 implicit (default: 10.0.0.1 for A, 10.0.0.2 for B)")
@@ -140,22 +178,28 @@ if __name__ == "__main__":
         print(f"ERROR: --node must be 'A' or 'B' for the TUN-link bridge, got '{args.node}'")
         sys.exit(1)
 
-    tx_ip = args.tx_ip or setup.tx_ip(args.node)
-    rx_ip = args.rx_ip or setup.rx_ip(args.node)
+    do_tx = args.mode in ("tx", "both")
+    do_rx = args.mode in ("rx", "both")
+
+    tx_ip = (args.tx_ip or setup.tx_ip(args.node)) if do_tx else None
+    rx_ip = (args.rx_ip or setup.rx_ip(args.node)) if do_rx else None
 
     # Resolve RX-LO CFO offset: manual CLI override wins; otherwise pull the
     # measured value for this node from the calibration; otherwise 0.
-    if args.cfo_offset is not None:
-        rx_cfo_hz = args.cfo_offset
-        cfo_src   = "cli"
-    elif setup.cfo is None:
-        rx_cfo_hz = 0
-        cfo_src   = "unset"
-        print(f"  [warn] no CFO calibration in {SETUP_PATH} — using 0 Hz. "
-              f"Run 'uv run python scripts/cfo_calibrate.py' to generate one.")
-    else:
-        rx_cfo_hz = setup.cfo.rx_offset_for(args.node)
-        cfo_src   = f"calibration ({setup.cfo.measured_at or 'unknown date'})"
+    # Skipped entirely in TX-only mode (no RX LO to correct).
+    rx_cfo_hz = 0
+    cfo_src   = "n/a"
+    if do_rx:
+        if args.cfo_offset is not None:
+            rx_cfo_hz = args.cfo_offset
+            cfo_src   = "cli"
+        elif setup.cfo is None:
+            cfo_src   = "unset"
+            print(f"  [warn] no CFO calibration in {SETUP_PATH} — using 0 Hz. "
+                  f"Run 'uv run python scripts/cfo_calibrate.py' to generate one.")
+        else:
+            rx_cfo_hz = setup.cfo.rx_offset_for(args.node)
+            cfo_src   = f"calibration ({setup.cfo.measured_at or 'unknown date'})"
 
     peer       = "B" if args.node == "A" else "A"
     my_addr    = NODE_ADDR[args.node]
@@ -172,7 +216,7 @@ if __name__ == "__main__":
     # silence whose ratios sit ~4–5 vs ~10–12 for real packets.
     pipe_cfg.SYNC_CONFIG.fine_peak_ratio_min = np.float32(7.0)
     tx_pipe = TXPipeline(pipe_cfg)
-    rx_pipe = RXPipeline(pipe_cfg)
+    rx_pipe = RXPipeline(pipe_cfg) if do_rx else None
 
     rng = np.random.default_rng(0)
 
@@ -196,16 +240,29 @@ if __name__ == "__main__":
     tx_freq = int(args.tx_freq) if args.tx_freq is not None else NODE_FREQS[args.node]["tx"]
     rx_freq = int(args.rx_freq) if args.rx_freq is not None else NODE_FREQS[args.node]["rx"]
 
-    print(f"Node      : {args.node}  (peer {peer})")
+    print(f"Node      : {args.node}  (peer {peer})  mode={args.mode}")
     print(f"TUN       : {args.tun_name} = {tun_ip}/24  (peer {peer_tun_ip})  MTU {args.mtu}")
-    print(f"TX radio  : {tx_ip}   @ {tx_freq / 1e6:.3f} MHz")
-    print(f"RX radio  : {rx_ip}   @ {(rx_freq + rx_cfo_hz) / 1e6:.3f} MHz  "
-          f"(CFO {rx_cfo_hz:+d} Hz, {cfo_src})")
+    if do_tx:
+        print(f"TX radio  : {tx_ip}   @ {tx_freq / 1e6:.3f} MHz")
+    else:
+        print(f"TX radio  : disabled (--mode {args.mode})")
+    if do_rx:
+        if args.rx_gain_mode == "manual":
+            rx_gain_desc = f"manual {args.rx_gain:.1f} dB"
+        else:
+            rx_gain_desc = f"AGC={args.rx_gain_mode}"
+        print(f"RX radio  : {rx_ip}   @ {(rx_freq + rx_cfo_hz) / 1e6:.3f} MHz  "
+              f"(CFO {rx_cfo_hz:+d} Hz, {cfo_src}; {rx_gain_desc})")
+    else:
+        print(f"RX radio  : disabled (--mode {args.mode})")
     print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
     print(f"Frame len : {frame_len} samples  ({frame_len / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
-    print(f"TX buf    : {tx_buf_size} samples  ({tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
-    print(f"RX buf    : {rx_buf_size} samples  ({rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
-    print(f"TX gain   : {args.gain} dB")
+    if do_tx:
+        print(f"TX buf    : {tx_buf_size} samples  ({tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
+    if do_rx:
+        print(f"RX buf    : {rx_buf_size} samples  ({rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
+    if do_tx:
+        print(f"TX gain   : {args.gain} dB")
 
     # ---------------------------------------------------------------------------
     # Worker pools — only created when --workers > 0.
@@ -219,21 +276,22 @@ if __name__ == "__main__":
 
     if args.workers > 0:
         rx_slot_samples = 2 * rx_buf_size + 1024
-        tx_pool = TXWorkerPool(pipe_cfg, n_workers=args.workers,
-                               start_method=args.mp_start,
-                               cpu_set=worker_cpus)
-        rx_pool = RXWorkerPool(pipe_cfg, n_workers=args.workers,
-                               slot_samples=rx_slot_samples,
-                               n_slots=args.rx_slots,
-                               start_method=args.mp_start,
-                               cpu_set=worker_cpus)
-        # Atexit so the shared-memory ring gets unlinked even when the SDR
-        # raises (libiio TimeoutError, USB unplug, etc.) and skips the
-        # finally-cleanup at the bottom of the script.
         import atexit as _atexit
-        _atexit.register(tx_pool.shutdown)
-        _atexit.register(rx_pool.shutdown)
-        print(f"Workers   : {args.workers}  (TX + RX pools, "
+        if do_tx:
+            tx_pool = TXWorkerPool(pipe_cfg, n_workers=args.workers,
+                                   start_method=args.mp_start,
+                                   cpu_set=worker_cpus)
+            _atexit.register(tx_pool.shutdown)
+        if do_rx:
+            rx_pool = RXWorkerPool(pipe_cfg, n_workers=args.workers,
+                                   slot_samples=rx_slot_samples,
+                                   n_slots=args.rx_slots,
+                                   start_method=args.mp_start,
+                                   cpu_set=worker_cpus)
+            _atexit.register(rx_pool.shutdown)
+        pools = [name for name, on in (("TX", do_tx), ("RX", do_rx)) if on]
+        print(f"Workers   : {args.workers}  ({'+'.join(pools)} pool"
+              f"{'s' if len(pools) > 1 else ''}, "
               f"rx_slot={rx_slot_samples} samples × {args.rx_slots} slots, "
               f"start={args.mp_start or 'spawn'})")
     else:
@@ -249,12 +307,16 @@ if __name__ == "__main__":
     # while spawn workers boot up.
     # ---------------------------------------------------------------------------
 
-    tx_sdr = adi.Pluto("ip:" + tx_ip)
-    configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
-
-    rx_sdr = adi.Pluto("ip:" + rx_ip)
-    configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz, gain_mode="slow_attack")
-    rx_sdr.rx_buffer_size = rx_buf_size
+    tx_sdr = None
+    rx_sdr = None
+    if do_tx:
+        tx_sdr = adi.Pluto("ip:" + tx_ip)
+        configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
+    if do_rx:
+        rx_sdr = adi.Pluto("ip:" + rx_ip)
+        configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz,
+                     gain_mode=args.rx_gain_mode, gain=args.rx_gain)
+        rx_sdr.rx_buffer_size = rx_buf_size
 
     # ---------------------------------------------------------------------------
     # TUN bring-up — open device, then assign address and bring the link up.
@@ -280,10 +342,14 @@ if __name__ == "__main__":
 
     send_q: queue.Queue = queue.Queue(maxsize=args.queue_depth)
     stop_event = threading.Event()
-    status = LiveStatus(n_lines=2)
+    n_status_lines = (1 if do_tx else 0) + (1 if do_rx else 0)
+    status = LiveStatus(n_lines=n_status_lines)
     tx_rate = RateMeter()
     rx_rate = RateMeter()
     _install_live_logging(status)
+    # Status line indices depend on which threads are running.
+    tx_line = 0 if do_tx else None
+    rx_line = (1 if do_tx else 0) if do_rx else None
 
     stats = {
         "tun_in":      0,  # IP packets pulled from TUN
@@ -311,12 +377,25 @@ if __name__ == "__main__":
                 stats["tun_dropped"] += 1
 
 
+    # Last-time-logged for the periodic [TX]/[RX] log mirror. Single-element
+    # lists so the closures can mutate without `nonlocal` gymnastics.
+    _last_tx_log_t = [0.0]
+    _last_rx_log_t = [0.0]
+    _LOG_INTERVAL_S = 1.0  # how often the [TX]/[RX] line is mirrored to logger.info
+
     def _tx_status(stream: TxStream) -> None:
-        status.set(0, f"  [TX] in={stats['tun_in']:>8d}  drop={stats['tun_dropped']:>4d}  "
-                      f"pending={stream.pending:>3d}  "
-                      f"rate={_fmt_rate(tx_rate.rate_bps)}  "
-                      f"avg={_fmt_rate(tx_rate.avg_bps)}  "
-                      f"total={_fmt_bytes(tx_rate.total_bytes)}")
+        msg = (f"[TX] in={stats['tun_in']:>8d}  drop={stats['tun_dropped']:>4d}  "
+               f"pending={stream.pending:>3d}  "
+               f"rate={_fmt_rate(tx_rate.rate_bps)}  "
+               f"avg={_fmt_rate(tx_rate.avg_bps)}  "
+               f"total={_fmt_bytes(tx_rate.total_bytes)}")
+        status.set(tx_line, "  " + msg)
+        # Mirror to logger ~once/second so oneway-A.log captures stats per
+        # second — invaluable for correlating sweep cells with TX behaviour.
+        now = time.monotonic()
+        if now - _last_tx_log_t[0] >= _LOG_INTERVAL_S:
+            logger.info(msg)
+            _last_tx_log_t[0] = now
 
 
     def _tx_build_inline(payload: bytes) -> np.ndarray:
@@ -332,7 +411,8 @@ if __name__ == "__main__":
 
 
     def tx_thread_fn():
-        stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
+        stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size,
+                          filler_amp=args.tx_filler_amp)
         stream.start()
 
         if tx_pool is None:
@@ -394,14 +474,19 @@ if __name__ == "__main__":
 
 
     def _rx_status(stream: RxStream) -> None:
-        status.set(1, f"  [RX] ok={stats['data_rx_ok']:>8d}  "
-                      f"hdr_bad={stats['data_rx_header_bad']:>4d}  "
-                      f"pay_bad={stats['data_rx_payload_bad']:>4d}  "
-                      f"foreign={stats['data_rx_foreign']:>4d}  "
-                      f"q={stream._q.qsize():>3d}/{stream._q.maxsize}  "
-                      f"rate={_fmt_rate(rx_rate.rate_bps)}  "
-                      f"avg={_fmt_rate(rx_rate.avg_bps)}  "
-                      f"total={_fmt_bytes(rx_rate.total_bytes)}")
+        msg = (f"[RX] ok={stats['data_rx_ok']:>8d}  "
+               f"hdr_bad={stats['data_rx_header_bad']:>4d}  "
+               f"pay_bad={stats['data_rx_payload_bad']:>4d}  "
+               f"foreign={stats['data_rx_foreign']:>4d}  "
+               f"q={stream._q.qsize():>3d}/{stream._q.maxsize}  "
+               f"rate={_fmt_rate(rx_rate.rate_bps)}  "
+               f"avg={_fmt_rate(rx_rate.avg_bps)}  "
+               f"total={_fmt_bytes(rx_rate.total_bytes)}")
+        status.set(rx_line, "  " + msg)
+        now = time.monotonic()
+        if now - _last_rx_log_t[0] >= _LOG_INTERVAL_S:
+            logger.info(msg)
+            _last_rx_log_t[0] = now
 
 
     def _rx_handle_packet(*, valid: bool, dst_mac: int, length: int,
@@ -550,13 +635,18 @@ if __name__ == "__main__":
             stream.stop()
 
 
-    t_tun = threading.Thread(target=tun_reader_thread, name="tun-rd", daemon=True)
-    t_tx  = threading.Thread(target=tx_thread_fn,      name="tx",     daemon=True)
-    t_rx  = threading.Thread(target=rx_thread_fn,      name="rx",     daemon=True)
-
-    t_rx.start()
-    t_tx.start()
-    t_tun.start()
+    threads: list[threading.Thread] = []
+    if do_rx:
+        t_rx = threading.Thread(target=rx_thread_fn, name="rx", daemon=True)
+        t_rx.start()
+        threads.append(t_rx)
+    if do_tx:
+        t_tx = threading.Thread(target=tx_thread_fn, name="tx", daemon=True)
+        t_tx.start()
+        threads.append(t_tx)
+        t_tun = threading.Thread(target=tun_reader_thread, name="tun-rd", daemon=True)
+        t_tun.start()
+        threads.append(t_tun)
 
     # ---------------------------------------------------------------------------
     # Idle in main thread; daemons do the work. Ctrl-C exits.
@@ -570,32 +660,36 @@ if __name__ == "__main__":
     finally:
         stop_event.set()
         status.stop()
-        for t in (t_tun, t_tx, t_rx):
+        for t in threads:
             t.join(timeout=2.0)
 
         print()
         print("=" * 50)
-        print("FINAL STATS")
+        print(f"FINAL STATS  (mode={args.mode})")
         print("=" * 50)
-        print(f"TUN in       : {stats['tun_in']}")
-        print(f"TUN out      : {stats['tun_out']}")
-        print(f"TUN dropped  : {stats['tun_dropped']}  (send queue full)")
-        print(f"RX valid     : {stats['data_rx_ok']}")
-        print(f"RX hdr bad   : {stats['data_rx_header_bad']}   (header CRC failed)")
-        print(f"RX pay bad   : {stats['data_rx_payload_bad']}   (header OK, payload CRC/LDPC failed)")
-        print(f"RX foreign   : {stats['data_rx_foreign']}  (dst_mac != us)")
-        print(f"TX bytes     : {tx_rate.total_bytes}  (avg {_fmt_rate(tx_rate.avg_bps)})")
-        print(f"RX bytes     : {rx_rate.total_bytes}  (avg {_fmt_rate(rx_rate.avg_bps)})")
+        if do_tx:
+            print(f"TUN in       : {stats['tun_in']}")
+            print(f"TUN dropped  : {stats['tun_dropped']}  (send queue full)")
+            print(f"TX bytes     : {tx_rate.total_bytes}  (avg {_fmt_rate(tx_rate.avg_bps)})")
+        if do_rx:
+            print(f"TUN out      : {stats['tun_out']}")
+            print(f"RX valid     : {stats['data_rx_ok']}")
+            print(f"RX hdr bad   : {stats['data_rx_header_bad']}   (header CRC failed)")
+            print(f"RX pay bad   : {stats['data_rx_payload_bad']}   (header OK, payload CRC/LDPC failed)")
+            print(f"RX foreign   : {stats['data_rx_foreign']}  (dst_mac != us)")
+            print(f"RX bytes     : {rx_rate.total_bytes}  (avg {_fmt_rate(rx_rate.avg_bps)})")
         print("=" * 50)
 
         subprocess.run(["ip", "link", "set", args.tun_name, "down"], check=False)
         tun.close()
-        try:
-            tx_sdr.tx_destroy_buffer()
-        except Exception:
-            pass
-        del tx_sdr
-        del rx_sdr
+        if tx_sdr is not None:
+            try:
+                tx_sdr.tx_destroy_buffer()
+            except Exception:
+                pass
+            del tx_sdr
+        if rx_sdr is not None:
+            del rx_sdr
 
         if tx_pool is not None:
             tx_pool.shutdown()

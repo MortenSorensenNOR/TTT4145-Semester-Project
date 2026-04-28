@@ -89,11 +89,11 @@ struct FrameHeader {
 };
 
 struct FrameHeaderConfig {
-    int  payload_length_bits  = 12;
+    int  payload_length_bits  = 11;
     int  src_bits             = 2;
     int  dst_bits             = 2;
-    int  frame_type_bits      = 2;
-    int  mod_scheme_bits      = 2;
+    int  frame_type_bits      = 1;
+    int  mod_scheme_bits      = 3;
     int  sequence_number_bits = 4;
     int  coding_rate_bits     = 2;
     int  crc_bits             = 8;
