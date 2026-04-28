@@ -6,10 +6,12 @@ from modules.frame_constructor.frame_constructor import *
 
 MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
 
+_MAX_PAYLOAD_LEN = (1 << FrameHeaderConfig().payload_length_bits) - 1
+
 @composite
 def random_frame_header(draw):
     return FrameHeader(
-        length=draw(st.integers(min_value=1, max_value=(2**12)-1)),
+        length=draw(st.integers(min_value=1, max_value=_MAX_PAYLOAD_LEN)),
         src=0,
         dst=1,
         frame_type=0,
