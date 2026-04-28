@@ -815,10 +815,19 @@ if __name__ == "__main__":
 
                 if agc is not None:
                     n_valid_in_buf = sum(1 for p in packets if p.valid)
-                    res = agc.update(curr_buf, n_valid_in_buf)
-                    if res is not None:
-                        peak, new_g = res
-                        status.log(f"  [RX-AGC] peak={peak:.2f} → gain={new_g:.1f} dB")
+                    agc.update(curr_buf, n_valid_in_buf)
+
+                # Refresh the live line every buffer (even on idle ones) so
+                # the displayed gain tracks the AGC in real time instead of
+                # only updating when a valid packet lands.
+                gain_str = (f"  gain={agc.gain_db:>4.1f}dB" if agc is not None
+                            else (f"  gain={args.rx_gain:>4.1f}dB" if args.rx_gain_mode == "manual" else ""))
+                last_seq_str = f"{last_seq:>10d}" if last_seq is not None else "         -"
+                status.set(0, f"  [RX] #{n_total:>6d}  seq={last_seq_str}            "
+                              f"(ok={n_valid}, dropped≈{n_dropped})  "
+                              f"q={stream._q.qsize():>3d}/{stream._q.maxsize}{gain_str}  "
+                              f"rate={_fmt_rate(rate.rate_bps)}  "
+                              f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
 
         except KeyboardInterrupt:
             status.log(f"  [RX] interrupted — decoded {n_valid} valid / {n_total} total frames, ~{n_dropped} dropped by seq gap")
@@ -1014,10 +1023,18 @@ if __name__ == "__main__":
 
                 if agc is not None:
                     n_valid_in_buf = sum(1 for p in packets if p.valid)
-                    res = agc.update(curr_buf, n_valid_in_buf)
-                    if res is not None:
-                        peak, new_g = res
-                        status.log(f"  [RX-AGC] peak={peak:.2f} → gain={new_g:.1f} dB")
+                    agc.update(curr_buf, n_valid_in_buf)
+
+                # Refresh the live line every buffer so the gain field reflects
+                # AGC adjustments in real time, not only when a valid packet lands.
+                gain_str = (f"  gain={agc.gain_db:>4.1f}dB" if agc is not None
+                            else (f"  gain={args.rx_gain:>4.1f}dB" if args.rx_gain_mode == "manual" else ""))
+                status.set(1, f"  [RX] #{n_total:>6d}            "
+                              f"(ok={n_valid})  "
+                              f"q={stream._q.qsize():>3d}/{stream._q.maxsize}{gain_str}  "
+                              f"rate={_fmt_rate(rx_rate.rate_bps)}  "
+                              f"avg={_fmt_rate(rx_rate.avg_bps)}  "
+                              f"total={_fmt_bytes(rx_rate.total_bytes)}")
 
             stream.stop()
             status.log(f"  [RX] done — decoded {n_valid}/{n_total} (avg {_fmt_rate(rx_rate.avg_bps)})")
