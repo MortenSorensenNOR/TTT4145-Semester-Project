@@ -16,7 +16,7 @@ Protocol:
     ``[send_base, next_seq)`` that are neither cumulatively nor SACK-acked
     — avoiding Go-Back-N's "one loss wastes the whole window" amplification.
 
-Two bytes of bitmap cover any ``window_size`` ≤ 16 (== SEQ_SPACE/2).
+Two bytes of bitmap cover any ``window_size`` ≤ 8 (== SEQ_SPACE/2).
 An ACK with ``length == 0`` (cumulative-only) is treated as bitmap = 0 so
 the sender falls back to Go-Back-N behaviour.
 
@@ -24,8 +24,13 @@ Frame types (2-bit ``frame_type`` field, see ``modules.pipeline.PacketType``):
   PacketType.DATA  — carries payload, seq_num = sender's TX seq
   PacketType.ACK   — carries SACK bitmap (2 bytes, big-endian), seq_num = cumulative ACK
 
-Sequence space: 5 bits → 0..31; window size must be < SEQ_SPACE/2 (= 16) so
-that circular-distance comparisons stay unambiguous.
+Sequence space: 4 bits → 0..15; window size must be < SEQ_SPACE/2 (= 8) so
+that circular-distance comparisons stay unambiguous. The 4-bit width is
+dictated by the on-wire frame header (``FrameHeaderConfig.sequence_number_bits
+= 4``); ARQ has to live within whatever the DSP frame header carries — if it
+sent seq_num=16 the encoder would silently truncate to 0 and the receiver
+would treat the frame as a stale duplicate of seq 0, breaking all forward
+progress.
 
 Addressing
 ----------
@@ -68,7 +73,8 @@ logger = logging.getLogger(__name__)
 FRAME_TYPE_DATA: int = int(PacketType.DATA)
 FRAME_TYPE_ACK:  int = int(PacketType.ACK)
 
-SEQ_SPACE: int = 32  # 5-bit sequence numbers: 0 .. 31
+SEQ_SPACE: int = 16  # 4-bit sequence numbers: 0 .. 15
+                     # (matches FrameHeaderConfig.sequence_number_bits)
 
 
 # ---------------------------------------------------------------------------
@@ -101,8 +107,8 @@ def seq_diff(a: int, b: int) -> int:
 
 @dataclass
 class ARQConfig:
-    window_size: int = 15              # max unacked in-flight frames (< SEQ_SPACE/2)
-    retransmit_timeout: float = 0.1    # seconds before Go-Back-N retransmit
+    window_size: int = 7               # max unacked in-flight frames (< SEQ_SPACE/2 = 8)
+    retransmit_timeout: float = 0.1    # seconds before retransmit
     send_queue_maxsize: int = 64       # TUN→TX queue depth; excess is dropped
     src: int = 0                       # this node's logical address (1 bit)
     dst: int = 1                       # peer's logical address    (1 bit)

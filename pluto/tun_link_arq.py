@@ -63,6 +63,11 @@ logging.basicConfig(
     format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+# Silence the per-frame ``HEADER: crc=...`` info log from the DSP pipeline.
+# Under ARQ both sides decode every retransmit + every ACK — at ~30 frames/s
+# the volume drowns the pinned status block and slows the RX thread enough
+# that ACKs queue up and look like real RTT.
+logging.getLogger("modules.pipeline").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 NODE_FREQS = {
@@ -187,10 +192,12 @@ if __name__ == "__main__":
     parser.add_argument("--window-size", type=int, default=7,
                         help="Selective-Repeat sender window in frames (default: 7). "
                              f"Must satisfy 1 <= window < SEQ_SPACE/2 (={SEQ_SPACE // 2}).")
-    parser.add_argument("--retransmit-timeout", type=float, default=0.15,
+    parser.add_argument("--retransmit-timeout", type=float, default=0.5,
                         help="Seconds with no ACK before unacked seqs are retransmitted "
-                             "(default: 0.15). Must exceed one round-trip of TX-buf airtime "
-                             "+ RX-buf airtime + per-frame DSP latency.")
+                             "(default: 0.5). With tx_buf_mult=8 and rx_buf=16x next_pow2, "
+                             "RTT is ~250-300 ms (one TX buffer + one RX buffer per "
+                             "direction); too short and the sender retransmits before the "
+                             "ACK can land, flooding the queue and starving the ACK path.")
     parser.add_argument("--send-queue-maxsize", type=int, default=64,
                         help="TUN→ARQ queue depth before TUN reads are dropped (default: 64).")
     # CPU pinning -----------------------------------------------------------
