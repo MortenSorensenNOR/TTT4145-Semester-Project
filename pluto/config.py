@@ -29,7 +29,7 @@ MAX_PACKET_SIZE_BYTES = 1500
 
 # FDD frequency pair for bidirectional bridge mode
 FREQ_A_TO_B = 2_475_000_000
-FREQ_B_TO_A = 2_473_000_000
+FREQ_B_TO_A = 2_470_000_000
 # FREQ_B_TO_A = 2_370_000_000
 
 # Split-radio layout: each node dedicates one Pluto to TX and another to RX
