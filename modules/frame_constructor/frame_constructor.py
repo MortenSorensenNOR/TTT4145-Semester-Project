@@ -93,7 +93,7 @@ class FrameHeaderConfig:
     payload_length_bits: int = 11
     src_bits: int = 2
     dst_bits: int = 2
-    frame_type_bits: int = 1
+    frame_type_bits: int = 2
     mod_scheme_bits: int = 3
     sequence_number_bits: int = 7
     coding_rate_bits: int = 2

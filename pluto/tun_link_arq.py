@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 import adi
 
-from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet
+from modules.pipeline import PipelineConfig, TXPipeline, RXPipeline, Packet, PacketType
 from modules.parallel_pipeline import apply_cpu_affinity, parse_cpu_spec
 from modules.arq import ARQConfig, ARQNode, SEQ_SPACE
 from modules.tun import TunDevice
@@ -83,6 +83,68 @@ DEFAULT_TUN_IP = {"A": "10.0.0.1", "B": "10.0.0.2"}
 
 
 # ---------------------------------------------------------------------------
+# IP-protocol fast-path: UDP bypasses ARQ.
+#
+# Why: UDP apps already accept loss; pushing them through ARQ wastes air on
+# retransmits and adds the BDP-cap-induced latency to flows that don't want
+# it. We tag UDP frames with PacketType.RAW so the receiver writes them
+# straight to TUN — no seq, no ACK, just one-shot delivery.
+# ---------------------------------------------------------------------------
+
+_IP_PROTO_UDP = 17  # IPv4 protocol field / IPv6 next-header field
+
+
+def _is_udp(ip_packet: bytes) -> bool:
+    """True iff ``ip_packet`` (raw L3 bytes from TUN) is a UDP datagram.
+
+    Handles IPv4 and the simple IPv6 case (no extension headers — fine for
+    typical iperf3/video traffic; ESP/AH/HBH-fragmented IPv6 falls through to
+    the ARQ path, which is conservative and harmless).
+    """
+    if len(ip_packet) < 20:
+        return False
+    version = ip_packet[0] >> 4
+    if version == 4:
+        return ip_packet[9] == _IP_PROTO_UDP
+    if version == 6 and len(ip_packet) >= 40:
+        return ip_packet[6] == _IP_PROTO_UDP
+    return False
+
+
+class BypassDemuxTun:
+    """TUN wrapper: UDP packets divert to ``on_udp``; everything else passes
+    through to ARQ as a normal ``read()``.
+
+    Sits between :class:`modules.tun.TunDevice` and ARQ's internal TUN reader
+    thread. ARQ never sees UDP packets, so they don't enter its window /
+    consume seq numbers — they're sent on the air via ``on_udp`` (which the
+    main module wires to a RAW-frame TxStream send).
+    """
+
+    def __init__(self, tun: TunDevice, on_udp):
+        self._tun = tun
+        self._on_udp = on_udp
+        self.mtu = tun.mtu
+
+    def read(self) -> bytes | None:
+        # Loop only while UDP keeps arriving; bail out on the first read
+        # that returns either a non-UDP packet or a None (no data this poll).
+        # Capping the inner loop bounds latency for the caller's stop-checks.
+        for _ in range(64):
+            data = self._tun.read()
+            if data is None:
+                return None
+            if _is_udp(data):
+                self._on_udp(data)
+                continue
+            return data
+        return None
+
+    def write(self, data: bytes) -> None:
+        self._tun.write(data)
+
+
+# ---------------------------------------------------------------------------
 # Radio adapters that satisfy the ARQNode pluto_tx / pluto_rx contract.
 # ---------------------------------------------------------------------------
 
@@ -91,25 +153,49 @@ class RadioTx:
 
     ARQNode hands us both DATA frames (default modulation / coding) and ACK
     frames (BPSK + uncoded — set on the Packet by ARQNode itself, the TX
-    pipeline honours per-packet overrides).
+    pipeline honours per-packet overrides). The bypass path also calls
+    :meth:`send_raw` directly to inject UDP frames without going through ARQ.
     """
 
     def __init__(self, tx_pipe: TXPipeline, tx_stream: TxStream,
-                 tx_rate: RateMeter):
+                 tx_rate: RateMeter, my_addr: int, peer_addr: int,
+                 stats_dict: dict):
         self._pipe = tx_pipe
         self._stream = tx_stream
         self._rate = tx_rate
+        self._my_addr = my_addr
+        self._peer_addr = peer_addr
+        self._stats = stats_dict
 
-    def __call__(self, packet: Packet) -> None:
+    def _push(self, packet: Packet) -> None:
         samples = self._pipe.transmit(packet)
         peak = float(np.max(np.abs(samples)))
         if peak > 0:
             samples = samples / peak
         self._stream.send((samples * DAC_SCALE).astype(np.complex64))
-        # Only count DATA payload bytes towards goodput; ACK bytes would
-        # inflate the rate meter without being user data.
-        if packet.length > 0 and packet.type == 0:
+
+    def __call__(self, packet: Packet) -> None:
+        self._push(packet)
+        # Only DATA bytes count as goodput; ACKs are protocol overhead.
+        if packet.length > 0 and packet.type == int(PacketType.DATA):
             self._rate.add(packet.length)
+
+    def send_raw(self, payload: bytes) -> None:
+        """Bypass-ARQ send for UDP. Builds a RAW-typed Packet and queues it
+        on the TxStream alongside ARQ's frames. No seq, no retransmit."""
+        bits = np.unpackbits(np.frombuffer(payload, dtype=np.uint8))
+        pkt = Packet(
+            src_mac=self._my_addr,
+            dst_mac=self._peer_addr,
+            type=int(PacketType.RAW),
+            seq_num=0,
+            length=len(payload),
+            payload=bits,
+            valid=True,
+        )
+        self._push(pkt)
+        self._rate.add(len(payload))
+        self._stats["udp_bypass_tx"] += 1
 
 
 class RadioRx:
@@ -119,14 +205,20 @@ class RadioRx:
     one previous buffer is kept around so frames straddling the DMA boundary
     still decode, and ``search_from`` is advanced past already-processed
     samples to avoid re-detecting the same preamble twice.
+
+    Also intercepts ``PacketType.RAW`` frames before they reach ARQ — those
+    are UDP bypass-mode packets and go straight to TUN with no ACK.
     """
 
     def __init__(self, rx_stream: RxStream, rx_pipe: RXPipeline,
-                 rx_rate: RateMeter, stats_dict: dict):
+                 rx_rate: RateMeter, stats_dict: dict, tun: TunDevice,
+                 my_addr: int):
         self._stream = rx_stream
         self._pipe = rx_pipe
         self._rate = rx_rate
         self._stats = stats_dict
+        self._tun = tun
+        self._my_addr = my_addr
         self._prev_buf: np.ndarray | None = None
         self._search_from = 0
 
@@ -150,12 +242,30 @@ class RadioRx:
         else:
             self._search_from = max(0, max_det - prev_len)
 
-        # Track DATA-byte ingress for the rate meter (ACKs deliberately
-        # excluded — they're protocol overhead).
+        # Split: RAW frames go straight to TUN; DATA/ACK forward to ARQ.
+        forwarded: list[Packet] = []
         for pkt in packets:
-            if pkt.valid and pkt.length > 0 and pkt.type == 0:
+            if not pkt.valid:
+                continue
+            if pkt.type == int(PacketType.RAW):
+                if pkt.dst_mac >= 0 and pkt.dst_mac != self._my_addr:
+                    continue  # not for us — drop silently
+                if pkt.length > 0:
+                    payload = np.packbits(
+                        pkt.payload[: pkt.length * 8].astype(np.uint8)
+                    ).tobytes()
+                    try:
+                        self._tun.write(payload)
+                    except OSError:
+                        pass
+                    self._rate.add(pkt.length)
+                    self._stats["udp_bypass_rx"] += 1
+                continue
+            # DATA/ACK: ARQ handles dst_mac filter + delivery itself.
+            if pkt.length > 0 and pkt.type == int(PacketType.DATA):
                 self._rate.add(pkt.length)
-        return packets
+            forwarded.append(pkt)
+        return forwarded
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +320,13 @@ if __name__ == "__main__":
                              "ACK can land, flooding the queue and starving the ACK path.")
     parser.add_argument("--send-queue-maxsize", type=int, default=64,
                         help="TUN→ARQ queue depth before TUN reads are dropped (default: 64).")
+    parser.add_argument("--no-bypass-udp", action="store_true",
+                        help="Disable the UDP fast-path. By default UDP packets read "
+                             "from TUN are sent as PacketType.RAW frames that bypass "
+                             "ARQ entirely (no seq, no ACK, no retransmit) — UDP apps "
+                             "tolerate loss but choke on the BDP-induced latency of "
+                             "ARQ. Use this flag if you want every packet through ARQ "
+                             "regardless of protocol.")
     # CPU pinning -----------------------------------------------------------
     parser.add_argument("--worker-cpus", type=str, default="0",
                         help="CPU IDs to pin the main process to. Same forms as tun_link "
@@ -298,6 +415,8 @@ if __name__ == "__main__":
     print(f"TX gain   : {args.gain} dB")
     print(f"ARQ       : window={args.window_size} (selective-repeat, SEQ_SPACE={SEQ_SPACE}) "
           f"timeout={args.retransmit_timeout}s  send_q={args.send_queue_maxsize}")
+    bypass_udp = not args.no_bypass_udp
+    print(f"UDP fast  : {'BYPASS (RAW frames, no ARQ)' if bypass_udp else 'OFF — UDP runs through ARQ'}")
     print(f"CPU pin   : {worker_cpus if worker_cpus else 'off'}")
     print()
 
@@ -342,7 +461,11 @@ if __name__ == "__main__":
     rx_rate  = RateMeter()
     _install_live_logging(status)
 
-    rx_stats = {"data_rx_payload_bad": 0}  # decode-time payload failures (LDPC/CRC)
+    rx_stats = {
+        "data_rx_payload_bad": 0,  # decode-time payload failures (LDPC/CRC)
+        "udp_bypass_tx":       0,  # RAW frames sent (UDP fast-path)
+        "udp_bypass_rx":       0,  # RAW frames received and delivered to TUN
+    }
 
     tx_stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size,
                          filler_amp=args.tx_filler_amp)
@@ -350,8 +473,13 @@ if __name__ == "__main__":
     tx_stream.start()
     rx_stream.start(flush=16)
 
-    radio_tx = RadioTx(tx_pipe, tx_stream, tx_rate)
-    radio_rx = RadioRx(rx_stream, rx_pipe, rx_rate, rx_stats)
+    radio_tx = RadioTx(tx_pipe, tx_stream, tx_rate, my_addr, peer_addr, rx_stats)
+    radio_rx = RadioRx(rx_stream, rx_pipe, rx_rate, rx_stats, tun, my_addr)
+
+    # Wrap the TUN in the bypass-demux unless the user explicitly opted out.
+    # ARQ's internal TUN reader will then never see UDP packets — they get
+    # diverted through ``radio_tx.send_raw`` and ride RAW frames on the wire.
+    arq_tun = BypassDemuxTun(tun, radio_tx.send_raw) if bypass_udp else tun
 
     arq_cfg = ARQConfig(
         window_size=args.window_size,
@@ -360,7 +488,7 @@ if __name__ == "__main__":
         src=my_addr,
         dst=peer_addr,
     )
-    arq = ARQNode(tun, radio_tx, radio_rx, arq_cfg)
+    arq = ARQNode(arq_tun, radio_tx, radio_rx, arq_cfg)
     arq.start()
 
     # ---------------------------------------------------------------------------
@@ -377,6 +505,7 @@ if __name__ == "__main__":
             tx_msg = (
                 f"[TX] tun_in={s.tun_in:>7d} drop={s.tun_dropped:>4d} "
                 f"data={s.data_tx:>7d} retx={s.data_retransmit:>5d} "
+                f"raw_tx={rx_stats['udp_bypass_tx']:>6d} "
                 f"acks_rx={s.ack_rx:>6d} sack={s.sack_rx:>5d} timeouts={s.timeouts:>4d}  "
                 f"goodput={_fmt_rate(tx_rate.rate_bps)} "
                 f"avg={_fmt_rate(tx_rate.avg_bps)} "
@@ -385,6 +514,7 @@ if __name__ == "__main__":
             rx_msg = (
                 f"[RX] data_ok={s.data_rx_ok:>7d} buf={s.data_rx_buffered:>4d} "
                 f"dup={s.data_rx_dup:>4d} foreign={s.data_rx_foreign:>4d} "
+                f"raw_rx={rx_stats['udp_bypass_rx']:>6d} "
                 f"pay_bad={rx_stats['data_rx_payload_bad']:>4d} "
                 f"acks_tx={s.ack_tx:>6d} tun_out={s.tun_out:>7d}  "
                 f"goodput={_fmt_rate(rx_rate.rate_bps)} "
@@ -446,6 +576,8 @@ if __name__ == "__main__":
         print(f"DATA rx pbad : {rx_stats['data_rx_payload_bad']}  (header OK, payload CRC/LDPC failed)")
         print(f"ACK  rx      : {s.ack_rx}  (sack-confirmed: {s.sack_rx})")
         print(f"Timeouts     : {s.timeouts}")
+        print(f"UDP raw tx   : {rx_stats['udp_bypass_tx']}  (bypassed ARQ)")
+        print(f"UDP raw rx   : {rx_stats['udp_bypass_rx']}  (delivered straight to TUN)")
         print(f"TX goodput   : {_fmt_rate(tx_rate.avg_bps)}  total {_fmt_bytes(tx_rate.total_bytes)}")
         print(f"RX goodput   : {_fmt_rate(rx_rate.avg_bps)}  total {_fmt_bytes(rx_rate.total_bytes)}")
         print("=" * 50)

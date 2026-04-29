@@ -68,7 +68,7 @@ class PipelineConfig:
     SPAN: int = 8
     RRC_ALPHA: np.float32 = np.float32(0.25)
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
-    CODING_RATE: CodeRates = CodeRates.THREE_QUARTER_RATE
+    CODING_RATE: CodeRates = CodeRates.FIVE_SIXTH_RATE
     LDPC_MAX_ITER: int = 20
     PRE_HEADER_GUARD_BITS: int = 0
     GUARD_SYMS_LENGTH: int = 16
@@ -112,9 +112,11 @@ class PacketType(IntEnum):
 
     Values fit FrameHeaderConfig.frame_type_bits = 2 (range 0..3).
     """
-    DATA = 0  # carries a TUN payload
+    DATA = 0  # ARQ-protected payload (seq_num + retransmit-on-timeout)
     ACK  = 1  # cumulative ACK; seq_num = last in-order DATA seq received
-    NAK  = 2  # reserved
+    RAW  = 2  # bypass-ARQ payload — write straight to TUN, no seq, no ACK.
+              # Used by tun_link_arq to fast-path UDP so loss-tolerant flows
+              # don't pay retransmit airtime.
     CTRL = 3  # reserved (link control / probe)
 
 
