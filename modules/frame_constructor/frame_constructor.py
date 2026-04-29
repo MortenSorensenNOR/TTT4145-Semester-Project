@@ -42,7 +42,7 @@ class ModulationSchemes(Enum):
     PSK16 = 3
 
 
-DEFAULT_CODING_RATE = 3  # CodeRates.FIVE_SIXTH_RATE.value — kept as int to avoid an import cycle
+DEFAULT_CODING_RATE = 4  # CodeRates.FIVE_SIXTH_RATE.value — kept as int to avoid an import cycle
 
 @dataclass
 class FrameHeader:
@@ -53,7 +53,7 @@ class FrameHeader:
     frame_type: int
     mod_scheme: ModulationSchemes
     sequence_number: int
-    coding_rate: int = DEFAULT_CODING_RATE  # 2-bit field carrying CodeRates.value
+    coding_rate: int = DEFAULT_CODING_RATE  # 3-bit field carrying CodeRates.value
     crc: int = field(default=0, compare=False)
     crc_passed: bool = True
 
@@ -96,7 +96,7 @@ class FrameHeaderConfig:
     frame_type_bits: int = 2
     mod_scheme_bits: int = 3
     sequence_number_bits: int = 7
-    coding_rate_bits: int = 2
+    coding_rate_bits: int = 3
     crc_bits: int = 8
     header_total_size: int = field(init=False)
 
