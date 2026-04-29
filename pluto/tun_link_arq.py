@@ -14,8 +14,11 @@ Default IP plan (matches tun_link):
     --node B → TUN pluto0 = 10.0.0.2/24
 
 Usage:
-    sudo .venv/bin/python -m pluto.tun_link_arq --node B --gain 0
-    sudo .venv/bin/python -m pluto.tun_link_arq --node A --rx-gain-mode manual --rx-gain 45
+    sudo .venv/bin/python -m pluto.tun_link_arq --node B
+    sudo .venv/bin/python -m pluto.tun_link_arq --node A
+
+Defaults match the reliable tun_link config (TX gain 0, RX manual 45 dB) so
+both ends only need ``--node`` flipped — flags are otherwise symmetric.
 
 After both ends are up, IP traffic between 10.0.0.1 ↔ 10.0.0.2 (ping, ssh,
 iperf3 -t 0, etc.) flows through ARQ. TCP sees a clean, ordered, lossy-but-
@@ -160,17 +163,18 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--node",     type=str,   default="A",    help="Node identity A or B; picks default TX/RX IPs from pluto/setup.json and TUN IP from DEFAULT_TUN_IP")
-    parser.add_argument("--gain",     type=float, default=-10,    help="TX gain in dB (default: -10)")
+    parser.add_argument("--gain",     type=float, default=0,      help="TX gain in dB (default: 0 — matches the reliable tun_link config)")
     parser.add_argument("--tx-ip",    type=str,   default=None,   help="Override TX Pluto IP (default: derived from --node via pluto/setup.json)")
     parser.add_argument("--rx-ip",    type=str,   default=None,   help="Override RX Pluto IP (default: derived from --node via pluto/setup.json)")
     parser.add_argument("--tx-freq",  type=float, default=None,   help="TX center frequency in Hz (default: NODE_FREQS[node]['tx'])")
     parser.add_argument("--rx-freq",  type=float, default=None,   help="RX center frequency in Hz (default: NODE_FREQS[node]['rx'])")
     parser.add_argument("--cfo-offset", type=int, default=None,   help="Manual override for the RX-LO CFO correction in Hz. Default: value from pluto/setup.json or 0.")
-    parser.add_argument("--rx-gain-mode", type=str, default="slow_attack",
+    parser.add_argument("--rx-gain-mode", type=str, default="manual",
                         choices=("slow_attack", "fast_attack", "hybrid", "manual"),
-                        help="AD9361 RX AGC mode (default: slow_attack). Use 'manual' for sparse traffic.")
-    parser.add_argument("--rx-gain", type=float, default=50.0,
-                        help="Fixed RX gain in dB when --rx-gain-mode=manual (default: 50, range ~0–71).")
+                        help="AD9361 RX AGC mode (default: manual — matches the reliable tun_link config; "
+                             "auto AGC drifts during silence between bursts).")
+    parser.add_argument("--rx-gain", type=float, default=45.0,
+                        help="Fixed RX gain in dB when --rx-gain-mode=manual (default: 45, range ~0–71).")
     parser.add_argument("--tx-buf-mult", type=int, default=8,     help="TX buffer size as multiple of next-power-of-2 frame length (default: 8)")
     parser.add_argument("--tx-filler-amp", type=float, default=0.0,
                         help="Per-component amplitude of complex Gaussian noise filler emitted between packets. "
