@@ -95,7 +95,7 @@ class FrameHeaderConfig:
     dst_bits: int = 2
     frame_type_bits: int = 1
     mod_scheme_bits: int = 3
-    sequence_number_bits: int = 4
+    sequence_number_bits: int = 7
     coding_rate_bits: int = 2
     crc_bits: int = 8
     header_total_size: int = field(init=False)

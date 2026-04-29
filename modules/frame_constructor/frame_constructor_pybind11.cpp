@@ -94,7 +94,7 @@ struct FrameHeaderConfig {
     int  dst_bits             = 2;
     int  frame_type_bits      = 1;
     int  mod_scheme_bits      = 3;
-    int  sequence_number_bits = 4;
+    int  sequence_number_bits = 7;
     int  coding_rate_bits     = 2;
     int  crc_bits             = 8;
     bool use_golay            = false;

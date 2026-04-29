@@ -197,9 +197,11 @@ if __name__ == "__main__":
     parser.add_argument("--tun-ip",   type=str,   default=None,   help="TUN IPv4 address with /24 implicit (default: 10.0.0.1 for A, 10.0.0.2 for B)")
     parser.add_argument("--mtu",      type=int,   default=1500,   help="TUN MTU in bytes (default: 1500)")
     # ARQ parameters --------------------------------------------------------
-    parser.add_argument("--window-size", type=int, default=7,
-                        help="Selective-Repeat sender window in frames (default: 7). "
-                             f"Must satisfy 1 <= window < SEQ_SPACE/2 (={SEQ_SPACE // 2}).")
+    parser.add_argument("--window-size", type=int, default=63,
+                        help=f"Selective-Repeat sender window in frames (default: 63). "
+                             f"Must satisfy 1 <= window < SEQ_SPACE/2 (={SEQ_SPACE // 2}). "
+                             f"Larger windows lift the bandwidth-delay-product cap "
+                             f"(throughput ≈ window × MTU / RTT).")
     parser.add_argument("--retransmit-timeout", type=float, default=0.5,
                         help="Seconds with no ACK before unacked seqs are retransmitted "
                              "(default: 0.5). With tx_buf_mult=8 and rx_buf=16x next_pow2, "
