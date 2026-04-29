@@ -180,7 +180,15 @@ if __name__ == "__main__":
                              "auto AGC drifts during silence between bursts).")
     parser.add_argument("--rx-gain", type=float, default=45.0,
                         help="Fixed RX gain in dB when --rx-gain-mode=manual (default: 45, range ~0–71).")
-    parser.add_argument("--tx-buf-mult", type=int, default=8,     help="TX buffer size as multiple of next-power-of-2 frame length (default: 8)")
+    parser.add_argument("--tx-buf-mult", type=int, default=8,     help="TX buffer size as multiple of next-power-of-2 frame length (default: 8). "
+                                                                       "Drop to 1-2 to slash RTT — bandwidth-delay product caps ARQ throughput, "
+                                                                       "so halving the TX buffer doubles the throughput ceiling.")
+    parser.add_argument("--rx-buf-mult", type=int, default=16,    help="RX buffer size as multiple of next-power-of-2 frame length (default: 16). "
+                                                                       "Drop to 4 for low-latency ARQ; the ~22 ms cycle still fits a frame plus jitter. "
+                                                                       "Same RTT trade-off as --tx-buf-mult.")
+    parser.add_argument("--kernel-buffers", type=int, default=4,  help="libiio kernel-side DMA ring depth on both TX and RX (default: 4). "
+                                                                       "Each slot adds tx_buf_mult × frame airtime of latency before the air. "
+                                                                       "Going below 2 risks DMA underruns under USB scheduling jitter.")
     parser.add_argument("--tx-filler-amp", type=float, default=0.0,
                         help="Per-component amplitude of complex Gaussian noise filler emitted between packets. "
                              "0.0 = silent zero-fill. ~512 keeps RX AGC/Costas/Gardner engaged in sparse traffic.")
@@ -266,7 +274,7 @@ if __name__ == "__main__":
                             length=args.mtu, payload=_probe_bits)
     _probe_samples = tx_pipe.transmit(_probe_pkt)
     frame_len      = len(_probe_samples)
-    rx_buf_size    = 16 * int(2 ** np.ceil(np.log2(frame_len)))
+    rx_buf_size    = args.rx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
     tx_buf_size    = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
 
     tx_freq = int(args.tx_freq) if args.tx_freq is not None else NODE_FREQS[args.node]["tx"]
@@ -296,11 +304,13 @@ if __name__ == "__main__":
     # ---------------------------------------------------------------------------
 
     tx_sdr = adi.Pluto("ip:" + tx_ip)
-    configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
+    configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False,
+                 kernel_buffers_count=args.kernel_buffers)
 
     rx_sdr = adi.Pluto("ip:" + rx_ip)
     configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz,
-                 gain_mode=args.rx_gain_mode, gain=args.rx_gain)
+                 gain_mode=args.rx_gain_mode, gain=args.rx_gain,
+                 kernel_buffers_count=args.kernel_buffers)
     rx_sdr.rx_buffer_size = rx_buf_size
 
     # ---------------------------------------------------------------------------
