@@ -87,7 +87,7 @@ class PipelineConfig:
     # corrupts the parity symbols that follow.
     GARDNER_BN_TS: float = 0.0025
     GARDNER_ZETA: float = 2.000
-    GARDNER_L: int = 2             # TED smoothing half-length (window = 2L+1 symbols)
+    GARDNER_L: int = 16             # TED smoothing half-length (window = 2L+1 symbols)
 
     pulse_shaping: bool = True
     pilots: bool = False
