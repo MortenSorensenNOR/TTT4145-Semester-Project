@@ -132,6 +132,12 @@ if __name__ == "__main__":
                              "every few packets — view with `feh -R 1 PATH` "
                              "or `eog PATH` for live updates. Implies "
                              "--constellation.")
+    parser.add_argument("--constellation-csv", type=str, default=None,
+                        help="Stream post-Costas PSK8 symbols to this CSV "
+                             "file (columns: seq,I,Q — one row per symbol, "
+                             "seq is the per-packet 32-bit counter). "
+                             "Independent of --constellation; use this for "
+                             "offline plotting without matplotlib.")
     parser.add_argument("--variable", action="store_true", help="Randomize payload size per packet (between --min-payload and --payload)")
     parser.add_argument("--min-payload", type=int, default=4, help="Minimum payload bytes when --variable is set (default: 4, must hold seq number)")
     parser.add_argument("--tx-buf-mult", type=int, default=8, help="TX buffer size as multiple of next-power-of-2 frame length (default: 8)")
@@ -676,6 +682,12 @@ if __name__ == "__main__":
             import matplotlib.pyplot as plt
             _fig, _ax, _scat, _const_save_path = _setup_constellation_plot()
 
+        _csv_file = None
+        if args.constellation_csv:
+            _csv_file = open(args.constellation_csv, "w", buffering=1)
+            _csv_file.write("seq,I,Q\n")
+            status.log(f"  [RX] streaming constellation symbols to {args.constellation_csv}")
+
         rate        = RateMeter()
         n_total     = 0
         n_valid     = 0
@@ -790,6 +802,13 @@ if __name__ == "__main__":
                                       f"rate={_fmt_rate(rate.rate_bps)}  "
                                       f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
 
+                        if _csv_file is not None and pkt.rx_symbols is not None:
+                            syms = pkt.rx_symbols
+                            lines = "".join(
+                                f"{seq},{z.real:.7g},{z.imag:.7g}\n" for z in syms
+                            )
+                            _csv_file.write(lines)
+
                         # Collect symbols for constellation plot
                         if args.constellation and pkt.rx_symbols is not None:
                             _sym_buf.append(pkt.rx_symbols)
@@ -834,6 +853,9 @@ if __name__ == "__main__":
         finally:
             status.stop()
             stream.stop()
+            if _csv_file is not None:
+                _csv_file.close()
+                print(f"[info] constellation CSV written to {args.constellation_csv}")
             if args.constellation and _fig is not None:
                 import matplotlib.pyplot as plt
                 if _const_save_path is None:
