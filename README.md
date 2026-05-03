@@ -1,10 +1,17 @@
 # Radiokommunikasjon
 
 Layer-1/2 radio link on ADALM-Pluto SDRs, exposed to Linux as a TUN
-interface.  Runs in the 2.4 GHz ISM band with a self-built helix antenna.
+interface. Runs in the 2.4 GHz ISM band with a self-built helix antenna,
+and carries unmodified TCP/UDP traffic — SSH, iperf, 1080p H.265 video,
+live webcam call.
 
-NTNU course project (TTT4145), 2026.  Authors: Kim Hamberg, Mathias Huse,
-Morten Sørensen.  Full write-up: `Radiokommunikasjon.pdf`.
+<p align="center">
+  <img src="report/pipeline.png" alt="TX/RX block diagram" width="100%">
+</p>
+
+NTNU course project (TTT4145), 2026. Authors: Kim Hamberg, Mathias Huse,
+Morten Sørensen — Department of Electronic Systems. The full write-up is
+in [`report/Radiokommunikasjon.pdf`](report/Radiokommunikasjon.pdf).
 
 ## Performance
 
@@ -15,10 +22,8 @@ Morten Sørensen.  Full write-up: `Radiokommunikasjon.pdf`.
 | Ping (avg / max) | 69 ms / 86 ms |
 | RMS EVM at 3 m | 2.6 % |
 | Eb/N0 at 3 m | 31.7 dB |
-| 99 % occupied bandwidth | 1.84 MHz |
+| 99 % occupied bandwidth | 1.84 MHz (ETSI EN 300 328 compliant) |
 | Helix antenna gain | 10.5 dBi @ 2.478 GHz |
-
-Tested with 1080p H.265 streaming, SSH, and a live webcam call over the link.
 
 ## Parameters
 
@@ -31,42 +36,28 @@ Tested with 1080p H.265 streaming, SSH, and a live webcam call over the link.
 | Pulse shape | RRC, span 8, roll-off 0.25 |
 | Header | BPSK, uncoded, CRC-8 |
 | Payload | 8-PSK, LDPC (1/2, 2/3, 3/4, 5/6), block 1944 bit |
-| LDPC decoder | normalised soft min-sum, α=0.75 |
+| LDPC decoder | normalised soft min-sum, α = 0.75 |
 | Preamble | Zadoff-Chu, root 13, length 89 |
 | Symbol timing | non-data-aided TED (Rice 2009) |
-| Carrier phase | Costas loop |
+| Carrier phase | Costas loop (BPSK / QPSK / 8-PSK) |
 | ARQ | Selective Repeat, window 63 |
 
-## Pipeline
-
-```
-TX  TUN -> ARQ -> Frame Constructor -> Scrambler -> LDPC Enc ->
-        BPSK + 8-PSK Mod -> Preamble -> RRC Pulse Shape -> Pluto TX
-
-RX  Pluto RX -> RRC Match Filter -> Frame Sync ->
-        NDA TED -> Costas -> BPSK + 8-PSK Demod ->
-        LDPC Dec -> Descrambler -> Frame Decoder -> ARQ -> TUN
-```
-
+The DSP blocks are Python with pybind11 C++ extensions on the hot paths;
+pure-Python fallbacks remain in place if an extension fails to import.
 Frame sync is a full-buffer normalised cross-correlation against the
-Zadoff-Chu preamble.  Peaks above 0.3 are accepted as detections; the
-correlation phase seeds the Costas loop.
-
-DSP blocks are Python with pybind11 C++ extensions for the hot paths;
-pure-Python fallbacks are used if an extension fails to import.
+Zadoff-Chu preamble — peaks above 0.3 are accepted, and the correlation
+phase seeds the Costas loop so it never has to acquire blind.
 
 ## Frame format
 
-```
-[ Preamble (89) | Header (38) | Payload (1..1500 B) | CRC-16 ]
+<p align="center">
+  <img src="report/frame_format.png" alt="Frame and header format" width="100%">
+</p>
 
-Header (38 bit):  length (11) | src (2) | dst (2) | type (3) |
-                  mod (3) | seq_num (7) | coding (3) | CRC-8 (8)
-```
-
-`type` ∈ {DATA, ACK, RAW (UDP, ARQ-bypass), CTRL}.  Payload CRC-16-CCITT
-(poly 0x1021).  ACK frames are zero-length, BPSK, uncoded, and carry a
-SACK bitmap.
+`type` ∈ {DATA, ACK, RAW (UDP, ARQ-bypass), CTRL}. Payload integrity is
+checked via CRC-16-CCITT (poly 0x1021). ACK frames are zero-length, BPSK,
+uncoded, and carry a SACK bitmap covering the window past the cumulative
+ACK.
 
 ## Layout
 
@@ -85,6 +76,7 @@ modules/    DSP blocks (Python + pybind11 C++)
 pluto/      Pluto runners (one_way_threaded.py, tun_link.py, ...)
 scripts/    sweeps, calibration, capture replay, video streaming
 tests/      pytest suite (test_stress is slow)
+report/     project report + diagram sources
 vendor/     bundled deps
 ```
 
@@ -115,6 +107,12 @@ uv run python pluto/one_way_threaded.py --mode rx --save-rx-buf rx_dump --save-n
 uv run python scripts/sweep_costas_params.py rx_dump --plot
 uv run python scripts/sweep_nda_ted_params.py rx_dump --plot
 uv run python scripts/sweep_costas_params.py rx_dump --with-nda-ted --plot
+```
+
+To rebuild the README diagrams from their LaTeX sources:
+
+```
+report/build.sh        # writes report/{pipeline,frame_format}.png
 ```
 
 ## Limitations

@@ -1,0 +1,95 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{chains, calc}
+\begin{document}
+% Top-frame bits: real/visual. Visual = real except for the
+% payload, which is compressed and gets a dashed break.
+\def\PreBits{89}\def\HdrBits{32}
+\def\PldBits{12000}\def\PldVisualBits{100}\def\PCRCBits{16}
+\def\BreakFrac{0.40}    % fraction of payload visible-width that's the gap
+% Header detail (bits each)
+\def\PlBits{11}\def\SBits{2}\def\DBits{2}
+\def\TBits{2}\def\MBits{3}\def\QBits{7}\def\GBits{3}\def\CBits{8}
+% Drawing dimensions (cm)
+\def\FrameWidth{17}\def\BoxHeight{0.7}\def\ZoomGap{0.8}
+
+\def\bitblock#1#2#3{%
+  \pgfmathsetmacro{\W}{#1*\bitscale}%
+  \pgfmathtruncatemacro{\firstbit}{\bitsofar}%
+  \pgfmathtruncatemacro{\lastbit}{\bitsofar+#1-1}%
+  \node[box, on chain, minimum width=\W cm] (#3) {#2};%
+  \node[bit, anchor=south west] at (#3.north west) {\firstbit};%
+  \ifnum#1>1\node[bit, anchor=south east] at (#3.north east) {\lastbit};\fi
+  \xdef\bitsofar{\the\numexpr\bitsofar+#1\relax}%
+}
+\def\bitblockbreak#1#2#3#4#5{%
+  \pgfmathsetmacro{\W}{#2*\bitscale}%
+  \pgfmathtruncatemacro{\firstbit}{\bitsofar}%
+  \pgfmathtruncatemacro{\lastbit}{\bitsofar+#1-1}%
+  \pgfmathsetmacro{\gapstart}{(1-#5)/2}%
+  \pgfmathsetmacro{\gapend}{1-\gapstart}%
+  \node[box, on chain, draw=none, minimum width=\W cm] (#4) {#3};%
+  \path
+    ($(#4.south west)!\gapstart!(#4.south east)$) coordinate (#4-gap-bl)
+    ($(#4.south west)!\gapend!(#4.south east)$) coordinate (#4-gap-br)
+    ($(#4.north west)!\gapstart!(#4.north east)$) coordinate (#4-gap-tl)
+    ($(#4.north west)!\gapend!(#4.north east)$) coordinate (#4-gap-tr);
+  \draw[solid]
+    (#4-gap-bl) -- (#4.south west) -- (#4.north west) -- (#4-gap-tl)
+    (#4-gap-br) -- (#4.south east) -- (#4.north east) -- (#4-gap-tr);
+  \draw[densely dashed] (#4-gap-tl) -- (#4-gap-tr)  (#4-gap-bl) -- (#4-gap-br);
+  \node[bit, anchor=south west] at (#4.north west) {\firstbit};%
+  \node[bit, anchor=south east] at (#4.north east) {\lastbit};%
+  \xdef\bitsofar{\the\numexpr\bitsofar+#1\relax}%
+}
+
+\begin{tikzpicture}[
+  box/.style  = {draw, inner sep=0pt, outer sep=0pt,
+                 minimum height=\BoxHeight cm,
+                 font=\footnotesize, align=center,
+                 execute at begin node=\strut},
+  bit/.style  = {font=\scriptsize},
+  zoom/.style = {densely dashed, gray},
+]
+  \pgfmathsetmacro{\TopK}{\FrameWidth/(\PreBits+\HdrBits+\PldVisualBits+\PCRCBits)}
+  \pgfmathsetmacro{\BotK}{\FrameWidth/(\PlBits+\SBits+\DBits+\TBits+\MBits+\QBits+\GBits+\CBits)}
+  \pgfmathsetmacro{\BotY}{-\ZoomGap-\BoxHeight}
+
+  % --- Top frame: Preamble, Header, Payload (with break) ----------
+  \begin{scope}[start chain=top, node distance=0pt]
+    \let\bitscale\TopK \xdef\bitsofar{0}
+    \node[on chain, inner sep=0pt, outer sep=0pt, minimum size=0pt,
+          anchor=west] at (0,0) {};
+    \bitblock{\PreBits}{Preamble}{pre}
+    \bitblock{\HdrBits}{Header}{hdr}
+    \bitblockbreak{\PldBits}{\PldVisualBits}{Payload}{pld}{\BreakFrac}
+    \pgfmathsetmacro{\PCRCW}{\PCRCBits*\bitscale}
+    \node[box, on chain, minimum width=\PCRCW cm] (pcrc) {CRC};
+    \node[bit, anchor=south] at (pcrc.north) {+\PCRCBits};
+  \end{scope}
+
+  % --- Bottom frame: header detail --------------------------------
+  \begin{scope}[start chain=bot, node distance=0pt,
+                yshift=\BotY cm]
+    \let\bitscale\BotK \xdef\bitsofar{0}
+    \node[on chain, inner sep=0pt, outer sep=0pt, minimum size=0pt,
+          anchor=west] at (0,0) {};
+    \foreach \bits/\lbl/\id in {%
+      \PlBits/Payload length/pl,
+      \SBits/Src/s,
+      \DBits/Dest/d,
+      \TBits/Type/t,
+      \MBits/Mod./m,
+      \QBits/Sequence Number/q,
+      \GBits/Coding/g,
+      \CBits/CRC/c%
+    }{%
+      \bitblock{\bits}{\lbl}{\id}%
+    }
+  \end{scope}
+
+  % --- Zoom-out lines: Header (top) -> bottom frame ---------------
+  \draw[zoom] (hdr.south west) -- (pl.north west);
+  \draw[zoom] (hdr.south east) -- (c.north east);
+\end{tikzpicture}
+\end{document}

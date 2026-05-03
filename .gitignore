@@ -35,6 +35,8 @@ references/
 # images
 *.png
 *.jpg
+# but keep the rendered report diagrams
+!report/*.png
 
 # Per-host CFO calibration (Pluto LO drift — hardware-specific)
 pluto/cfo_calibration.json
