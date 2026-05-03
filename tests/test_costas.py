@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from modules.costas_loop.costas import CostasConfig, apply_costas_loop, _ext
-from modules.modulators import BPSK, QPSK, PSK8, PSK16, Modulator
+from modules.modulators.modulators import BPSK, QPSK, PSK8, PSK16, Modulator
 from modules.frame_constructor.frame_constructor import ModulationSchemes
 from modules.pipeline import PipelineConfig
 

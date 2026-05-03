@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import time
 
 from utils.plotting import plot_iq, plot_constellation, plot_modulation_schemes_ideal_constallations
-from modules.modulators import BPSK, PSK8, QPSK
+from modules.modulators.modulators import BPSK, PSK8, QPSK
 from modules.pulse_shaping.pulse_shaping import rrc_filter, upsample, downsample
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from math import ceil
 import numpy as np
 
 from modules.pulse_shaping.pulse_shaping import *
-from modules.modulators import *
+from modules.modulators.modulators import *
 from modules.frame_constructor.frame_constructor import *
 from modules.golay import *
 from modules.frame_sync.frame_sync import *

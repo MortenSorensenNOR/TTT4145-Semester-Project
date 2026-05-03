@@ -4,7 +4,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 try:
-    from modules import modulators_ext as _mod_ext
+    from modules.modulators import modulators_ext as _mod_ext
 except ImportError:  # pragma: no cover - extension may not be built yet
     _mod_ext = None
 

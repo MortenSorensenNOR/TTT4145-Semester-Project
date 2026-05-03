@@ -24,7 +24,7 @@ from modules.frame_sync.frame_sync import (
     fine_timing,
     generate_preamble,
 )
-from modules.modulators import QPSK
+from modules.modulators.modulators import QPSK
 from modules.pulse_shaping.pulse_shaping import rrc_filter, upsample
 from pluto.config import RRC_ALPHA, SAMPLE_RATE, SPAN, SPS
 

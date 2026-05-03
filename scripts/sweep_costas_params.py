@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from modules.costas_loop.costas import CostasConfig
 from modules.frame_constructor.frame_constructor import ModulationSchemes
-from modules.modulators import BPSK, PSK8, PSK16, QPSK
+from modules.modulators.modulators import BPSK, PSK8, PSK16, QPSK
 from modules.pipeline import PipelineConfig, RXPipeline
 
 

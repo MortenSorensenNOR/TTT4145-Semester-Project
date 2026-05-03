@@ -26,7 +26,7 @@ import numpy as np
 
 from modules.ldpc.channel_coding import CodeRates
 from modules.ldpc.ldpc import LDPCConfig, ldpc_encode_batch, ldpc_decode_batch
-from modules.modulators import BPSK, QPSK, PSK8, PSK16
+from modules.modulators.modulators import BPSK, QPSK, PSK8, PSK16
 
 _MOD_CLASSES = {"bpsk": BPSK, "qpsk": QPSK, "psk8": PSK8, "psk16": PSK16}
 

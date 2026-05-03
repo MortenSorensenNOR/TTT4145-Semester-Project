@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from modules.modulators import BPSK, PSK8, QPSK, Modulator
+from modules.modulators.modulators import BPSK, PSK8, QPSK, Modulator
 from modules.frame_constructor.frame_constructor import ModulationSchemes
 
 logger = logging.getLogger(__name__)

@@ -30,7 +30,7 @@ from modules.frame_sync.frame_sync import (
     full_buffer_xcorr_sync,
     generate_preamble,
 )
-from modules.modulators import BPSK, QPSK
+from modules.modulators.modulators import BPSK, QPSK
 from modules.pipeline import PipelineConfig
 from modules.pulse_shaping.pulse_shaping import match_filter, rrc_filter, upsample
 
