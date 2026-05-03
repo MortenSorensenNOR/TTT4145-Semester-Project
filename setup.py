@@ -53,7 +53,7 @@ def _compile_flags() -> list[str]:
 
 _EXTENSIONS = [
     ("modules.costas_loop.costas_ext", "modules/costas_loop/costas_pybind11.cpp"),
-    ("modules.gardner_ted.gardner_ext", "modules/gardner_ted/gardner_ext.cpp"),
+    ("modules.nda_ted.nda_ted_ext", "modules/nda_ted/nda_ted_ext.cpp"),
     ("modules.frame_sync.frame_sync_ext", "modules/frame_sync/frame_sync_ext.cpp"),
     ("modules.frame_constructor.frame_constructor_ext", "modules/frame_constructor/frame_constructor_pybind11.cpp"),
     ("modules.pulse_shaping.pulse_shaping_ext", "modules/pulse_shaping/pulse_shaping_ext.cpp"),

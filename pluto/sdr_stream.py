@@ -197,7 +197,7 @@ class TxStream:
                          samples. Same units as the DAC-scaled packet samples
                          (so DAC_SCALE/32 sits ~30 dB below packet peak).
                          0.0 (default) preserves the legacy zero-fill. Non-zero
-                         values keep RX AGC / Costas / Gardner / DC-blocker
+                         values keep RX AGC / Costas / NDA-TED / DC-blocker
                          loops engaged during sparse traffic so the receiver
                          doesn't have to re-converge on every preamble.
         """

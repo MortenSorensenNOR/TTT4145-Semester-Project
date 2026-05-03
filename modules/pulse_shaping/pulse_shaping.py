@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 
-from modules.gardner_ted.gardner import apply_gardner_ted
+from modules.nda_ted.nda_ted import apply_nda_ted
 
 logger = logging.getLogger(__name__)
 

@@ -11,7 +11,7 @@ from modules.frame_sync.frame_sync import *
 from modules.costas_loop.costas import *
 from modules.ldpc.ldpc import LDPCConfig, ldpc_encode, ldpc_decode, ldpc_encode_batch, ldpc_decode_batch
 from modules.ldpc.channel_coding import *
-from modules.gardner_ted.gardner import *
+from modules.nda_ted.nda_ted import *
 
 from utils.plotting import *
 
@@ -39,7 +39,7 @@ def _on_air_payload_n_bits(pre_ldpc_n_bits: int, code_rate: CodeRates) -> tuple[
 
 # Pre-generated random LDPC pad. Padding the LDPC k-message with all zeros
 # produces long runs of identical symbols at the modulator (in PSK8 every
-# 000 triplet maps to the same constellation point), which the Costas/Gardner
+# 000 triplet maps to the same constellation point), which the Costas/NDA-TED
 # loops can't track through. Random pad keeps the RX loops happy; the receiver
 # strips the pad bits based on pre_ldpc_n_bits so the content is irrelevant.
 _LDPC_PAD_RNG = np.random.default_rng(seed=0xA5A5A5A5)
@@ -48,7 +48,7 @@ _LDPC_PAD_BITS = _LDPC_PAD_RNG.integers(0, 2, max(_LDPC_BLOCK_PARAMS.values(), k
 # Bit-level whitener PRBS, XOR'd over the LDPC k-message on TX and undone on
 # RX after ldpc_decode_batch. _LDPC_PAD_BITS only randomises the trailing
 # pad — structured user data (iperf UDP, IP headers, zero-filled tails) hits
-# the same Costas/Gardner failure mode on the systematic bits. Scrambling
+# the same Costas/NDA-TED failure mode on the systematic bits. Scrambling
 # extends the fix to the data bits too: after XOR the systematic stream is
 # uniform random, so LDPC parity is also random-looking, and the modulator
 # never sees the long runs of identical symbols. Sized for the largest
@@ -80,19 +80,19 @@ class PipelineConfig:
     )
     # Bn=0.008 empirically optimal for PSK8 over coax
 
-    # NDA Gardner (Rice 2009) — see modules/gardner_ted/gardner.py.
+    # NDA TED (Rice 2009) — see modules/nda_ted/nda_ted.py.
     # BnTs must stay narrow: with LDPC the systematic-bits region holds 1500+
     # consecutive constant-symbol BPSK pad, which gives the NDA TED nothing to
     # lock onto.  At BnTs >= 0.001 the loop wanders during this stretch and
     # corrupts the parity symbols that follow.
-    GARDNER_BN_TS: float = 0.0025
-    GARDNER_ZETA: float = 2.000
-    GARDNER_L: int = 4              # TED smoothing half-length (window = 2L+1 symbols)
+    NDA_BN_TS: float = 0.0025
+    NDA_ZETA: float = 2.000
+    NDA_L: int = 4              # TED smoothing half-length (window = 2L+1 symbols)
 
     pulse_shaping: bool = True
     pilots: bool = False
     costas_loop: bool = True
-    gardner_ted: bool = True
+    nda_ted: bool = True
     interleaving: bool = False
     cfo_correction: bool = True
     use_golay: bool = False
@@ -427,8 +427,8 @@ class RXPipeline:
             msg = "header end is outside of buffer"
             raise IndexError(msg)
 
-        if self.config.gardner_ted:
-            # New NDA gardner has two quirks vs the old one:
+        if self.config.nda_ted:
+            # NDA TED has two quirks vs naïve decimation:
             #   1) intrinsic 1-sample bias — passing prepend_first=True makes
             #      the kernel duplicate the first sample internally so the
             #      bias cancels and outputs land on the symbol peaks.
@@ -436,16 +436,16 @@ class RXPipeline:
             #      extend the trailing guard by sps*sps so downstream
             #      slicing has enough symbols.
             guard = self.config.SPS * self.config.SPS
-            gardner_in = buffer[:header_end*self.config.SPS+guard]
-            header_syms = apply_gardner_ted(
-                gardner_in,
+            nda_in = buffer[:header_end*self.config.SPS+guard]
+            header_syms = apply_nda_ted(
+                nda_in,
                 self.config.SPS,
-                BnTs=self.config.GARDNER_BN_TS,
-                zeta=self.config.GARDNER_ZETA,
-                L=self.config.GARDNER_L,
+                BnTs=self.config.NDA_BN_TS,
+                zeta=self.config.NDA_ZETA,
+                L=self.config.NDA_L,
                 prepend_first=True,
             )
-            timing_est = [0.0]  # new NDA gardner does not expose state for handoff
+            timing_est = [0.0]  # NDA TED does not expose state for handoff
         else:
             header_syms, timing_est = decimate(buffer[:header_end*self.config.SPS], self.config.SPS), [0.0]
 
@@ -494,19 +494,19 @@ class RXPipeline:
             msg = "payload end is outside of buffer"
             raise IndexError(msg)
 
-        if self.config.gardner_ted:
+        if self.config.nda_ted:
             # See header_decode for prepend_first / sps*sps trailing-guard rationale.
             guard = self.config.SPS * self.config.SPS
-            gardner_in = buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard]
-            rx_syms = apply_gardner_ted(
-                gardner_in,
+            nda_in = buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard]
+            rx_syms = apply_nda_ted(
+                nda_in,
                 self.config.SPS,
-                BnTs=self.config.GARDNER_BN_TS,
-                zeta=self.config.GARDNER_ZETA,
-                L=self.config.GARDNER_L,
+                BnTs=self.config.NDA_BN_TS,
+                zeta=self.config.NDA_ZETA,
+                L=self.config.NDA_L,
                 prepend_first=True,
             )
-            timing_est = [0.0]  # new NDA gardner does not expose state for handoff
+            timing_est = [0.0]  # NDA TED does not expose state for handoff
         else:
             rx_syms, timing_est = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS), [0.0]
 

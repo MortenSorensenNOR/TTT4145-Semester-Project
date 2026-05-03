@@ -1,4 +1,4 @@
-// File: modules/gardner_ted/gardner_ext.cpp
+// File: modules/nda_ted/nda_ted_ext.cpp
 //
 // NDA (Non-Data-Aided) symbol timing synchroniser — pybind11 C++ extension.
 //
@@ -260,7 +260,7 @@ py::array_t<c64> nda_symb_sync(
 // Module
 // ---------------------------------------------------------------------------
 
-PYBIND11_MODULE(gardner_ext, m, py::mod_gil_not_used()) {
+PYBIND11_MODULE(nda_ted_ext, m, py::mod_gil_not_used()) {
     m.doc() = R"pbdoc(
         NDA symbol timing synchroniser — optimised pybind11 C++ extension.
 
@@ -273,11 +273,11 @@ PYBIND11_MODULE(gardner_ext, m, py::mod_gil_not_used()) {
           - -O3 -ffast-math via setup.py
 
         Signature:
-            gardner_ted(symbols, sps, BnTs=0.01, zeta=0.707, L=2)
+            nda_ted(symbols, sps, BnTs=0.01, zeta=0.707, L=2)
                 -> np.ndarray[complex64]
     )pbdoc";
 
-    m.def("gardner_ted",
+    m.def("nda_ted",
         [](py::array_t<c64, py::array::c_style | py::array::forcecast> symbols,
            int sps, f32 BnTs, f32 zeta, int L, bool prepend_first) {
             return nda_symb_sync(symbols, sps, L, BnTs, zeta, prepend_first);

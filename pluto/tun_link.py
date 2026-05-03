@@ -121,7 +121,7 @@ if __name__ == "__main__":
                              "filler emitted between packets (DAC-scale units). "
                              "0.0 = silent zero-fill (default, original behaviour). "
                              "Recommended ~512 (DAC_SCALE/32, ~30 dB below packet "
-                             "peak): keeps RX AGC/Costas/Gardner loops engaged "
+                             "peak): keeps RX AGC/Costas/NDA-TED loops engaged "
                              "during sparse traffic so the receiver doesn't have "
                              "to re-converge on every preamble.")
     parser.add_argument("--hardware-rrc", action="store_true",    help="Use the FPGA hardware RRC/4x interpolation path on TX (toggles the pluto_custom firmware GPIO).")

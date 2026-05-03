@@ -19,8 +19,8 @@ Then sweep Costas only:
     uv run python scripts/sweep_costas_params.py rx_dump \
         --bns 0.001,0.005,0.008,0.02 --zetas 0.5,0.707,1.0
 
-Or sweep Costas + Gardner jointly (slower, larger grid):
-    uv run python scripts/sweep_costas_params.py rx_dump --with-gardner --plot
+Or sweep Costas + NDA-TED jointly (slower, larger grid):
+    uv run python scripts/sweep_costas_params.py rx_dump --with-nda-ted --plot
 
 The same input buffers are used across all parameter combinations, so the
 only thing changing between runs is the loop config — making the ranking
@@ -231,18 +231,18 @@ def _run_one_combo(rx: RXPipeline, buffers: list[dict],
 
 def sweep(rx: RXPipeline, buffers: list[dict],
           bn_list: list[float], zeta_list: list[float],
-          gardner_grid: list[tuple[float, float, int]] | None,
+          nda_grid: list[tuple[float, float, int]] | None,
           verbose: bool = False, progress_every: int | None = None,
           collect_per_buffer: bool = False) -> list[dict]:
-    """Sweep Costas (Bn, ζ).  If ``gardner_grid`` is given, also sweep over
-    Gardner (BnTs, ζ_g, L) — full Cartesian product.  ``gardner_grid`` is
-    a list of (bnts, zeta_g, L) triples; pass ``None`` to skip Gardner.
+    """Sweep Costas (Bn, ζ).  If ``nda_grid`` is given, also sweep over
+    NDA-TED (BnTs, ζ_g, L) — full Cartesian product.  ``nda_grid`` is
+    a list of (bnts, zeta_g, L) triples; pass ``None`` to skip NDA-TED.
 
     When ground-truth seq_nums are present in the buffers, results are sorted
     by (n_match desc, EVM asc) — configs that recover more captured packets
     win, ties broken by tighter constellation."""
     results: list[dict] = []
-    g_combos = gardner_grid if gardner_grid is not None else [None]
+    g_combos = nda_grid if nda_grid is not None else [None]
     total = len(bn_list) * len(zeta_list) * len(g_combos)
     if progress_every is None:
         progress_every = max(1, total // 100)
@@ -258,9 +258,9 @@ def sweep(rx: RXPipeline, buffers: list[dict],
         )
         if g is not None:
             bnts, zeta_g, L = g
-            rx.config.GARDNER_BN_TS = bnts
-            rx.config.GARDNER_ZETA  = zeta_g
-            rx.config.GARDNER_L     = L
+            rx.config.NDA_BN_TS = bnts
+            rx.config.NDA_ZETA  = zeta_g
+            rx.config.NDA_L     = L
 
         prefix = (f"  [{i:5d}/{total}] Bn={bn:.5f} ζ={zeta_c:.3f}"
                   + (f" BnTs={g[0]:.5f} ζg={g[1]:.3f} L={g[2]}" if g is not None else "")
@@ -348,7 +348,7 @@ def _heatmap_panel(ax, x_vals, y_vals, grid, *, x_label, y_label, sub, vmin, vma
 
 
 def maybe_plot_heatmap(results: list[dict], out_path: Path, *,
-                       title: str, with_gardner: bool) -> None:
+                       title: str, with_nda_ted: bool) -> None:
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -371,7 +371,7 @@ def maybe_plot_heatmap(results: list[dict], out_path: Path, *,
         print("  [plot] Costas grid too sparse for heatmap — skipping")
         return
 
-    if not with_gardner:
+    if not with_nda_ted:
         fig, ax = plt.subplots(1, 1, figsize=(10, 6))
         im = _heatmap_panel(
             ax, x_vals, y_vals, grid_costas,
@@ -386,14 +386,14 @@ def maybe_plot_heatmap(results: list[dict], out_path: Path, *,
         fig.suptitle(title)
         fig.colorbar(im, ax=ax, label="EVM (%)")
     else:
-        gx, gy, grid_gardner = _project_min(results, "bnts", "zeta_g")
+        gx, gy, grid_nda = _project_min(results, "bnts", "zeta_g")
         if len(gx) < 2 or len(gy) < 2:
-            # Gardner grid was a single point — fall back to Costas-only plot.
+            # NDA-TED grid was a single point — fall back to Costas-only plot.
             fig, ax = plt.subplots(1, 1, figsize=(10, 6))
             im = _heatmap_panel(
                 ax, x_vals, y_vals, grid_costas,
                 x_label="Bn", y_label="ζ_costas",
-                sub="EVM(Bn, ζ_costas)  — Gardner grid is 1D",
+                sub="EVM(Bn, ζ_costas)  — NDA-TED grid is 1D",
                 vmin=vmin, vmax=vmax,
                 best_x=best["bn"], best_y=best["zeta"],
                 best_label=f"best: EVM={best['evm_pct']:.2f}%",
@@ -405,16 +405,16 @@ def maybe_plot_heatmap(results: list[dict], out_path: Path, *,
             im_top = _heatmap_panel(
                 ax_top, x_vals, y_vals, grid_costas,
                 x_label="Bn", y_label="ζ_costas",
-                sub="min EVM over Gardner params, per (Bn, ζ_costas)",
+                sub="min EVM over NDA-TED params, per (Bn, ζ_costas)",
                 vmin=vmin, vmax=vmax,
                 best_x=best["bn"], best_y=best["zeta"],
                 best_label=(f"best: Bn={best['bn']:g}, ζ_c={best['zeta']:g}, "
                             f"EVM={best['evm_pct']:.2f}%"),
             )
             _heatmap_panel(
-                ax_bot, gx, gy, grid_gardner,
-                x_label="BnTs", y_label="ζ_gardner",
-                sub="min EVM over Costas params, per (BnTs, ζ_gardner)",
+                ax_bot, gx, gy, grid_nda,
+                x_label="BnTs", y_label="ζ_nda",
+                sub="min EVM over Costas params, per (BnTs, ζ_nda)",
                 vmin=vmin, vmax=vmax,
                 best_x=best["bnts"], best_y=best["zeta_g"],
                 best_label=(f"best: BnTs={best['bnts']:g}, ζ_g={best['zeta_g']:g}, "
@@ -461,30 +461,30 @@ def main() -> int:
     p.add_argument("--zetas",     type=str, default=None,
                    help="explicit comma-separated ζ list (overrides --zeta-min/max/step)")
 
-    # Combined-mode (Gardner) grid — defaults are deliberately coarse.
-    p.add_argument("--with-gardner", action="store_true",
-                   help="also sweep Gardner-TED (BnTs, ζ_g, L) jointly with Costas")
-    p.add_argument("--gardner-bnts-min",  type=float, default=0.001)
-    p.add_argument("--gardner-bnts-max",  type=float, default=0.005)
-    p.add_argument("--gardner-bnts-step", type=float, default=0.001)
-    p.add_argument("--gardner-zeta-min",  type=float, default=0.707)
-    p.add_argument("--gardner-zeta-max",  type=float, default=2.0)
-    p.add_argument("--gardner-zeta-step", type=float, default=0.25)
-    p.add_argument("--gardner-l-min",     type=int,   default=2)
-    p.add_argument("--gardner-l-max",     type=int,   default=3)
-    p.add_argument("--gardner-bnts",  type=str, default=None,
-                   help="explicit comma-separated Gardner BnTs list")
-    p.add_argument("--gardner-zetas", type=str, default=None,
-                   help="explicit comma-separated Gardner ζ list")
-    p.add_argument("--gardner-ls",    type=str, default=None,
-                   help="explicit comma-separated Gardner L list")
+    # Combined-mode (NDA-TED) grid — defaults are deliberately coarse.
+    p.add_argument("--with-nda-ted", action="store_true",
+                   help="also sweep NDA-TED (BnTs, ζ_g, L) jointly with Costas")
+    p.add_argument("--nda-bnts-min",  type=float, default=0.001)
+    p.add_argument("--nda-bnts-max",  type=float, default=0.005)
+    p.add_argument("--nda-bnts-step", type=float, default=0.001)
+    p.add_argument("--nda-zeta-min",  type=float, default=0.707)
+    p.add_argument("--nda-zeta-max",  type=float, default=2.0)
+    p.add_argument("--nda-zeta-step", type=float, default=0.25)
+    p.add_argument("--nda-l-min",     type=int,   default=2)
+    p.add_argument("--nda-l-max",     type=int,   default=3)
+    p.add_argument("--nda-bnts",  type=str, default=None,
+                   help="explicit comma-separated NDA-TED BnTs list")
+    p.add_argument("--nda-zetas", type=str, default=None,
+                   help="explicit comma-separated NDA-TED ζ list")
+    p.add_argument("--nda-ls",    type=str, default=None,
+                   help="explicit comma-separated NDA-TED L list")
 
     p.add_argument("--top",     type=int, default=15,
                    help="how many of the best combos to print at the end (default: 15)")
     p.add_argument("--verbose", "-v", action="store_true",
                    help="print one line per combination (default: progress lines only)")
     p.add_argument("--plot",    action="store_true",
-                   help="save EVM heatmap to tests/plots/sweep_costas[_gardner].png")
+                   help="save EVM heatmap to tests/plots/sweep_costas[_nda_ted].png")
     args = p.parse_args()
 
     bn_list = _parse_floats(args.bns) if args.bns else \
@@ -492,22 +492,22 @@ def main() -> int:
     zeta_list = _parse_floats(args.zetas) if args.zetas else \
                 _arange_inclusive(args.zeta_min, args.zeta_max, args.zeta_step)
 
-    gardner_grid: list[tuple[float, float, int]] | None = None
-    if args.with_gardner:
-        bnts_list = _parse_floats(args.gardner_bnts) if args.gardner_bnts else \
-                    _arange_inclusive(args.gardner_bnts_min, args.gardner_bnts_max,
-                                      args.gardner_bnts_step)
-        gz_list = _parse_floats(args.gardner_zetas) if args.gardner_zetas else \
-                  _arange_inclusive(args.gardner_zeta_min, args.gardner_zeta_max,
-                                    args.gardner_zeta_step)
-        gl_list = _parse_ints(args.gardner_ls) if args.gardner_ls else \
-                  list(range(args.gardner_l_min, args.gardner_l_max + 1))
-        gardner_grid = list(product(bnts_list, gz_list, gl_list))
+    nda_grid: list[tuple[float, float, int]] | None = None
+    if args.with_nda_ted:
+        bnts_list = _parse_floats(args.nda_bnts) if args.nda_bnts else \
+                    _arange_inclusive(args.nda_bnts_min, args.nda_bnts_max,
+                                      args.nda_bnts_step)
+        gz_list = _parse_floats(args.nda_zetas) if args.nda_zetas else \
+                  _arange_inclusive(args.nda_zeta_min, args.nda_zeta_max,
+                                    args.nda_zeta_step)
+        gl_list = _parse_ints(args.nda_ls) if args.nda_ls else \
+                  list(range(args.nda_l_min, args.nda_l_max + 1))
+        nda_grid = list(product(bnts_list, gz_list, gl_list))
 
     paths = _resolve_buffer_paths(args.rx_buffers)
     bufs  = load_rx_buffers(paths)
 
-    label = "Costas + Gardner" if args.with_gardner else "Costas-loop"
+    label = "Costas + NDA-TED" if args.with_nda_ted else "Costas-loop"
     print(f"=== {label} sweep (real captures) ===")
     print(f"Buffers    : {len(bufs)} files from '{args.rx_buffers}'")
     n_samples_total = sum(len(b["samples"]) for b in bufs)
@@ -522,14 +522,14 @@ def main() -> int:
     print(f"At capture : {n_valid_capt}/{n_total_capt} valid packets")
     print(f"Costas grid: Bn ∈ {_fmt_list(bn_list)}")
     print(f"             ζ  ∈ {_fmt_list(zeta_list)}")
-    if gardner_grid is not None:
-        bnts_unique = sorted({g[0] for g in gardner_grid})
-        gz_unique   = sorted({g[1] for g in gardner_grid})
-        gl_unique   = sorted({g[2] for g in gardner_grid})
-        print(f"Gardner    : BnTs ∈ {_fmt_list(bnts_unique)}")
+    if nda_grid is not None:
+        bnts_unique = sorted({g[0] for g in nda_grid})
+        gz_unique   = sorted({g[1] for g in nda_grid})
+        gl_unique   = sorted({g[2] for g in nda_grid})
+        print(f"NDA-TED    : BnTs ∈ {_fmt_list(bnts_unique)}")
         print(f"             ζ    ∈ {_fmt_list(gz_unique)}")
         print(f"             L    ∈ {_fmt_list(gl_unique)}")
-    total_combos = len(bn_list) * len(zeta_list) * (len(gardner_grid) if gardner_grid else 1)
+    total_combos = len(bn_list) * len(zeta_list) * (len(nda_grid) if nda_grid else 1)
     print(f"             (total {total_combos} combinations)")
     print()
 
@@ -556,7 +556,7 @@ def main() -> int:
         print("Single-config run (1×1 grid) — collecting per-buffer detail.")
     else:
         print("Sweeping …")
-    results = sweep(rx, bufs, bn_list, zeta_list, gardner_grid,
+    results = sweep(rx, bufs, bn_list, zeta_list, nda_grid,
                     verbose=args.verbose, collect_per_buffer=is_single)
 
     # ----- single-config detailed report -----
@@ -605,7 +605,7 @@ def main() -> int:
                       else "lowest EVM")
         print(f"Best {min(args.top, len(results))} combinations ({rank_label}):")
         match_col = f"  {'match':>9s}" if have_truth else ""
-        if gardner_grid is None:
+        if nda_grid is None:
             print(f"  {'Bn':>9s}  {'ζ':>6s}  {'decoded':>9s}{match_col}  {'EVM (%)':>9s}  {'#syms':>7s}")
             for r in results[:args.top]:
                 evm_str = f"{r['evm_pct']:.2f}" if not np.isnan(r["evm_pct"]) else "  nan"
@@ -625,11 +625,11 @@ def main() -> int:
                       f"{r['n_decoded']:>3d}/{r['n_total']:<3d}    {m_str}{evm_str:>9s}  {r['n_syms']:>7d}")
 
     if args.plot and not is_single:
-        out_name = "sweep_costas_gardner.png" if args.with_gardner else "sweep_costas.png"
+        out_name = "sweep_costas_nda_ted.png" if args.with_nda_ted else "sweep_costas.png"
         out = Path(__file__).resolve().parents[1] / "tests" / "plots" / out_name
         title = (f"{label} sweep — {','.join(mod_set)}/{','.join(code_set)}  "
                  f"({len(bufs)} buffers, {n_valid_capt} pkts at capture)")
-        maybe_plot_heatmap(results, out, title=title, with_gardner=args.with_gardner)
+        maybe_plot_heatmap(results, out, title=title, with_nda_ted=args.with_nda_ted)
 
     return 0
 

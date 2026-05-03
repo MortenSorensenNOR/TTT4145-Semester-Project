@@ -38,7 +38,7 @@
 # continuous / dense traffic where AGC stays converged.
 #
 # --tx-filler-amp emits low-amplitude complex Gaussian noise between packets
-# to keep the receiver's Costas (carrier phase) and Gardner (symbol timing)
+# to keep the receiver's Costas (carrier phase) and NDA-TED (symbol timing)
 # loops, plus AD9361 hardware DC tracking, engaged during the silence.
 # Manual RX gain alone fixes AGC drift; filler is the next layer for
 # bursty / low-bitrate workloads (e.g. ffmpeg at <1 Mbps) where you'd
@@ -70,7 +70,7 @@ TX_GAIN=-20
 RX_GAIN_MODE="manual"   # sparse-traffic default — slow_attack drifts during inter-packet silence
 RX_GAIN=50              # dB, used when RX_GAIN_MODE=manual
 TX_FILLER_AMP=0         # 0 = silent zeros between packets (legacy). Bump to ~2048-4096
-                        # to keep RX Costas/Gardner/DC-tracking loops engaged when traffic
+                        # to keep RX Costas/NDA-TED/DC-tracking loops engaged when traffic
                         # is bursty (e.g. low-bitrate ffmpeg). DAC_SCALE/4 ≈ 4096.
 MTU=1500
 STARTUP_WAIT=6

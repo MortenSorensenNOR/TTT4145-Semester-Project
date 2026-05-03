@@ -1,4 +1,4 @@
-"""Sweep Gardner-TED parameters and rank by post-Costas constellation tightness.
+"""Sweep NDA-TED parameters and rank by post-Costas constellation tightness.
 
 Operates on RX buffers captured from a real Pluto run by
 ``pluto/one_way_threaded.py --save-rx-buf <dir>``.  For every (BnTs, ζ, L)
@@ -14,13 +14,13 @@ Capture buffers first:
     uv run python pluto/one_way_threaded.py --mode rx --save-rx-buf rx_dump --save-n 4
 
 Then sweep:
-    uv run python scripts/sweep_gardner_params.py rx_dump
-    uv run python scripts/sweep_gardner_params.py rx_dump --plot
-    uv run python scripts/sweep_gardner_params.py rx_dump \
+    uv run python scripts/sweep_nda_ted_params.py rx_dump
+    uv run python scripts/sweep_nda_ted_params.py rx_dump --plot
+    uv run python scripts/sweep_nda_ted_params.py rx_dump \
         --bnts 0.0001,0.0005,0.001,0.002 --zetas 0.5,0.707,1.0 --ls 1,2,3,4
 
 The same input buffers are used across all parameter combinations, so the
-only thing changing between runs is the Gardner config — making the ranking
+only thing changing between runs is the NDA-TED config — making the ranking
 directly meaningful.
 """
 
@@ -113,7 +113,7 @@ def sweep(rx: RXPipeline, buffers: list[dict],
           bnts_list: list[float], zeta_list: list[float], l_list: list[int],
           verbose: bool = False, progress_every: int | None = None) -> list[dict]:
     """For each (BnTs, ζ, L) combo, decode every loaded buffer with that
-    Gardner config and aggregate EVM across all valid packets.
+    NDA-TED config and aggregate EVM across all valid packets.
 
     verbose=True prints a line per combo. Otherwise prints a progress line
     every ``progress_every`` combos (auto-chosen ~100 lines if None)."""
@@ -125,9 +125,9 @@ def sweep(rx: RXPipeline, buffers: list[dict],
     best_so_far = float("inf")
 
     for i, (bnts, zeta, L) in enumerate(product(bnts_list, zeta_list, l_list), start=1):
-        rx.config.GARDNER_BN_TS = bnts
-        rx.config.GARDNER_ZETA  = zeta
-        rx.config.GARDNER_L     = L
+        rx.config.NDA_BN_TS = bnts
+        rx.config.NDA_ZETA  = zeta
+        rx.config.NDA_L     = L
 
         sq_err_chunks: list[np.ndarray] = []
         n_decoded = 0
@@ -330,7 +330,7 @@ def main() -> int:
     p.add_argument("--verbose", "-v", action="store_true",
                    help="print one line per combination (default: progress lines only)")
     p.add_argument("--plot",    action="store_true",
-                   help="save EVM heatmap to tests/plots/sweep_gardner.png")
+                   help="save EVM heatmap to tests/plots/sweep_nda_ted.png")
     args = p.parse_args()
 
     bnts_list = _parse_floats(args.bnts) if args.bnts else \
@@ -343,7 +343,7 @@ def main() -> int:
     paths = _resolve_buffer_paths(args.rx_buffers)
     bufs  = load_rx_buffers(paths)
 
-    print("=== Gardner-TED sweep (real captures) ===")
+    print("=== NDA-TED sweep (real captures) ===")
     print(f"Buffers    : {len(bufs)} files from '{args.rx_buffers}'")
     n_samples_total = sum(len(b["samples"]) for b in bufs)
     print(f"             {n_samples_total} samples total "
@@ -387,8 +387,8 @@ def main() -> int:
               f"{r['n_decoded']:>3d}/{r['n_total']:<3d}    {evm_str:>9s}  {r['n_syms']:>7d}")
 
     if args.plot:
-        out = Path(__file__).resolve().parents[1] / "tests" / "plots" / "sweep_gardner.png"
-        title = (f"Gardner sweep — {','.join(mod_set)}/{','.join(code_set)}  "
+        out = Path(__file__).resolve().parents[1] / "tests" / "plots" / "sweep_nda_ted.png"
+        title = (f"NDA-TED sweep — {','.join(mod_set)}/{','.join(code_set)}  "
                  f"({len(bufs)} buffers, {n_valid_capt} pkts at capture)")
         maybe_plot_heatmap(results, out, title=title)
 
