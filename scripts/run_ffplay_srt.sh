@@ -14,6 +14,6 @@ LATENCY_MS="${2:-120}"
 LATENCY_US=$(( LATENCY_MS * 1000 ))
 
 exec ffplay \
-    -fflags nobuffer \
+    -fflags nobuffer -flags low_delay -framedrop \
     -vcodec hevc_cuvid \
     "srt://0.0.0.0:${PORT}?mode=listener&latency=${LATENCY_US}"
