@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Stream a video file over the radio TUN with libx264 (CPU H.264) over one-way
-# UDP. NVDEC handles input decoding on the GPU, but the encode runs on CPU
-# at -preset slower for substantially better quality-per-bit than NVENC at
-# this bitrate range. Trades CPU cycles for picture quality.
+# UDP. Input decode and encode both run on CPU; libx264 at -preset slower
+# gives substantially better quality-per-bit than NVENC at this bitrate.
+# (NVDEC was tried as input decoder but its 1088-row internal buffer for
+# 1080p didn't always crop cleanly on download to CPU, leaving an 8-row
+# "dragged-line" band at the bottom of the picture. CPU decode avoids it.)
 #
 # Targets 2.5 Mbps video, capped at 2.9 Mbps.
 #
@@ -30,7 +32,6 @@ VF="scale=-2:${HEIGHT}:flags=lanczos,format=yuv420p"
 [[ -n "$FPS" ]] && VF="${VF},fps=${FPS}"
 
 exec ffmpeg -re \
-    -hwaccel cuda \
     -i "$INPUT" \
     -vf "$VF" \
     -c:v libx264 \
