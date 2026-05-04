@@ -20,12 +20,21 @@ Usage::
     uv run python scripts/cfo_calibrate.py --node B   # only B_TX → A_RX
     uv run python scripts/cfo_calibrate.py --captures 20
 
+    # Split-host: TX and RX Plutos hang off different machines.
+    # On the TX host (start this first, leave it running):
+    uv run python scripts/cfo_calibrate.py --node A --role tx
+    # On the RX host (this measures and updates the local setup.json):
+    uv run python scripts/cfo_calibrate.py --node A --role rx
+
 Assumes the Plutos involved in the requested direction(s) are reachable
 from this host at the IPs in the ``nodes`` block of ``pluto/setup.json``.
 The default (no ``--node``) requires all four; ``--node A`` only opens
 A's TX and B's RX; ``--node B`` only opens B's TX and A's RX. When only
 one direction is measured, the other direction's existing value in the
-calibration file is preserved.
+calibration file is preserved. With ``--role tx`` only the source Pluto
+is opened (transmits cyclically until Ctrl-C); with ``--role rx`` only
+the destination Pluto is opened, and the result is written to the local
+calibration file.
 """
 
 from __future__ import annotations
@@ -140,12 +149,114 @@ def measure_path(
             pass
 
 
+def transmit_only(tx_sdr: adi.Pluto, freq_hz: int, label: str) -> None:
+    """Configure TX, kick off the cyclic tone, block until Ctrl-C."""
+    print(f"\n── {label}  @ {freq_hz / 1e6:.3f} MHz  (TX, Ctrl-C to stop) ──")
+    _configure_tx(tx_sdr, freq_hz, TX_GAIN_DB)
+    tone = _make_tone(BUF_SIZE, TONE_OFFSET_HZ)
+    tx_sdr.tx(tone)
+    print(f"  transmitting CW tone at baseband +{TONE_OFFSET_HZ / 1e3:.1f} kHz")
+    print("  press Ctrl-C once the RX side has reported its result")
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("\n  stopping TX")
+
+
+def receive_only(rx_sdr: adi.Pluto, freq_hz: int, *, captures: int, label: str) -> int:
+    """Configure RX, capture, return the median CFO in Hz."""
+    print(f"\n── {label}  @ {freq_hz / 1e6:.3f} MHz  (RX) ──")
+    _configure_rx(rx_sdr, freq_hz)
+
+    time.sleep(SETTLE_SECONDS)
+    for _ in range(FLUSH_BUFFERS):
+        rx_sdr.rx()
+
+    offsets: list[float] = []
+    for i in range(captures):
+        samples = np.array(rx_sdr.rx(), dtype=np.complex64)
+        peak = _peak_offset_hz(samples)
+        cfo  = peak - TONE_OFFSET_HZ
+        offsets.append(cfo)
+        print(f"  capture {i+1:3d}/{captures}: peak={peak:+10.1f} Hz  cfo={cfo:+10.1f} Hz")
+
+    med = float(np.median(offsets))
+    std = float(np.std(offsets))
+    print(f"  → median CFO = {med:+.1f} Hz  (σ = {std:.1f} Hz)")
+    return int(round(med))
+
+
+def _run_split_host(args: argparse.Namespace, setup) -> int:
+    """Handle --role tx|rx: open only one Pluto on this host."""
+    label    = "A_TX → B_RX" if args.node == "A" else "B_TX → A_RX"
+    freq_hz  = get_node_freqs(args.node, video=args.video)["tx"]
+    print(f"Frequency plan: {'video' if args.video else 'network'} "
+          f"({label} {freq_hz / 1e6:.3f} MHz)")
+
+    if args.role == "tx":
+        ip = setup.tx_ip(args.node)
+        print(f"Opening TX radio: {ip}")
+        sdr = adi.Pluto(f"ip:{ip}")
+        try:
+            transmit_only(sdr, freq_hz, label)
+        finally:
+            try:
+                sdr.tx_destroy_buffer()
+            except Exception:
+                pass
+        return 0
+
+    # role == "rx": open the *destination* node's RX Pluto.
+    rx_node = "B" if args.node == "A" else "A"
+    ip = setup.rx_ip(rx_node)
+    print(f"Opening RX radio: {ip}")
+    sdr = adi.Pluto(f"ip:{ip}")
+    cfo_hz = receive_only(sdr, freq_hz, captures=args.captures, label=label)
+
+    prev = setup.cfo
+    if args.node == "A":
+        a_to_b = cfo_hz
+        if prev is not None:
+            b_to_a = prev.b_to_a_cfo_hz
+        else:
+            b_to_a = 0
+            print("[warn] no existing B_TX→A_RX calibration; saving 0 for that direction")
+    else:
+        b_to_a = cfo_hz
+        if prev is not None:
+            a_to_b = prev.a_to_b_cfo_hz
+        else:
+            a_to_b = 0
+            print("[warn] no existing A_TX→B_RX calibration; saving 0 for that direction")
+
+    cal = CFOCalibration(a_to_b_cfo_hz=a_to_b, b_to_a_cfo_hz=b_to_a)
+    print("\n── Result ──")
+    a_marker = "  " if args.node == "A" else "* "
+    b_marker = "  " if args.node == "B" else "* "
+    print(f"{a_marker}A_TX → B_RX :  {cal.a_to_b_cfo_hz:+d} Hz   (B's RX LO will be tuned up by this)")
+    print(f"{b_marker}B_TX → A_RX :  {cal.b_to_a_cfo_hz:+d} Hz   (A's RX LO will be tuned up by this)")
+    print("  (* = preserved from prior calibration, not re-measured)")
+
+    if args.dry_run:
+        print("\n[dry-run] not writing calibration file")
+    else:
+        save_cfo(cal, args.output)
+        print(f"\nUpdated cfo block in {args.output}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--node",     choices=["A", "B"], default=None,
                         help="Only calibrate one direction: 'A' measures A_TX→B_RX, "
                              "'B' measures B_TX→A_RX. Default: both directions.")
+    parser.add_argument("--role",     choices=["tx", "rx"], default=None,
+                        help="Split-host mode: 'tx' opens only the source Pluto and "
+                             "transmits the calibration tone cyclically until Ctrl-C; "
+                             "'rx' opens only the destination Pluto, measures, and "
+                             "writes the result for that one direction. Requires --node.")
     parser.add_argument("--captures", type=int, default=10,
                         help="Buffers to median over, per direction (default: 10)")
     parser.add_argument("--output",   type=Path, default=SETUP_PATH,
@@ -157,7 +268,14 @@ def main() -> int:
                              "instead of the default network pair (2470/2475 MHz).")
     args = parser.parse_args()
 
-    setup  = load_setup(args.output)
+    if args.role is not None and args.node is None:
+        parser.error("--role requires --node (which direction this host is handling)")
+
+    setup = load_setup(args.output)
+
+    if args.role is not None:
+        return _run_split_host(args, setup)
+
     do_a   = args.node in (None, "A")
     do_b   = args.node in (None, "B")
 
