@@ -35,7 +35,7 @@ DISPLAY_DEV="${DISPLAY_DEV:-${DISPLAY:-:0}}"
 if [[ -z "${CAPTURE_W:-}" || -z "${CAPTURE_H:-}" ]]; then
     if command -v xrandr >/dev/null 2>&1; then
         read -r probe_w probe_h < <(DISPLAY="$DISPLAY_DEV" xrandr 2>/dev/null \
-            | awk '/^Screen 0/ {for(i=1;i<=NF;i++) if($i=="current"){print $(i+1), $(i+3); exit}}')
+            | awk '/^Screen 0/ {gsub(",",""); for(i=1;i<=NF;i++) if($i=="current"){print $(i+1), $(i+3); exit}}')
     fi
     CAPTURE_W="${CAPTURE_W:-${probe_w:-1920}}"
     CAPTURE_H="${CAPTURE_H:-${probe_h:-1080}}"
