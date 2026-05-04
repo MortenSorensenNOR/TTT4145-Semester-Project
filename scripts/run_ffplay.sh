@@ -1,5 +1,5 @@
 #!/bin/bash
-# Receive HEVC over MPEG-TS/UDP with NVDEC (hevc_cuvid) + low-latency ffplay.
+# Receive H.264 over MPEG-TS/UDP with NVDEC (h264_cuvid) + low-latency ffplay.
 #
 # Usage:
 #   scripts/run_ffplay.sh          # listen on 5000
@@ -10,5 +10,5 @@ PORT="${1:-5000}"
 
 exec ffplay \
     -fflags nobuffer -flags low_delay -framedrop \
-    -vcodec hevc_cuvid \
+    -vcodec h264_cuvid \
     "udp://0.0.0.0:${PORT}?listen"
