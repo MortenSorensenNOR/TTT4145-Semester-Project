@@ -67,7 +67,7 @@ class PipelineConfig:
     SPS: int = 4
     SPAN: int = 8
     RRC_ALPHA: np.float32 = np.float32(0.25)
-    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
+    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK16
     CODING_RATE: CodeRates = CodeRates.THREE_QUARTER_RATE
     LDPC_MAX_ITER: int = 20
     PRE_HEADER_GUARD_BITS: int = 0

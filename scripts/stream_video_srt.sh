@@ -39,7 +39,7 @@ exec ffmpeg -re \
     -i "$INPUT" \
     -vf "$VF" \
     -c:v hevc_vaapi -rc_mode CBR \
-    -b:v 2500k \
+    -b:v 3000k \
     -g 240 \
     -c:a libopus -b:a 96k -ac 2 -application audio \
     -f mpegts \
