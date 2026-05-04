@@ -20,27 +20,31 @@ DEST="${2:-10.0.0.1}"
 PORT="${3:-5000}"
 
 # Defaults are for the system observed: AMD Radeon 780M at renderD129,
-# routed through Mesa's radeonsi VAAPI driver (not the libva-nvidia shim
-# which would otherwise hijack it).
+# routed through Mesa's radeonsi VAAPI driver. Force radeonsi unconditionally
+# — the libva-nvidia-driver package can leak LIBVA_DRIVER_NAME into the
+# environment (empty or otherwise) and hijack the negotiation. A `:-default`
+# fallback won't override a pre-set value, so we set it directly.
 VAAPI_DEVICE="${VAAPI_DEVICE:-/dev/dri/renderD129}"
-export LIBVA_DRIVER_NAME="${LIBVA_DRIVER_NAME:-radeonsi}"
+export LIBVA_DRIVER_NAME=radeonsi
 
 HEIGHT="${HEIGHT:-1080}"
 FPS="${FPS:-}"
 
-# CPU decode → upload to VAAPI surface → scale on iGPU → encode on iGPU.
-VF="format=nv12|vaapi,hwupload,scale_vaapi=w=-2:h=${HEIGHT}"
+# CPU decode → CPU scale (lanczos) → pad to mod-16 → upload NV12 to VAAPI.
+# radeonsi's H.264 encoder refuses to negotiate VAProfileH264High when output
+# dimensions aren't divisible by 16 (the macroblock size). We scale preserving
+# aspect, force width to mod-16, then pad height up to the next mod-16 with
+# black bars (invisible at the encoded edge).
+VF="scale=-16:${HEIGHT}:flags=lanczos,pad=iw:ceil(ih/16)*16:0:0:black,format=nv12,hwupload"
 [[ -n "$FPS" ]] && VF="fps=${FPS},${VF}"
 
 exec ffmpeg -re \
     -vaapi_device "$VAAPI_DEVICE" \
     -i "$INPUT" \
     -vf "$VF" \
-    -c:v h264_vaapi \
-    -profile:v high -level 4.2 \
-    -rc_mode VBR -b:v 2500k -maxrate 2.9M -bufsize 5M \
-    -quality 0 \
-    -bf 2 -refs 4 -g 60 -forced-idr 1 \
+    -c:v h264_vaapi -rc_mode CBR \
+    -b:v 2500k \
+    -g 60 \
     -c:a libopus -b:a 96k -ac 2 -application audio \
     -f mpegts -mpegts_flags +resend_headers -pat_period 0.1 -sdt_period 0.1 \
     "udp://${DEST}:${PORT}?pkt_size=1316"

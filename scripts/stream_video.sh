@@ -36,7 +36,7 @@ exec ffmpeg -re \
     -vf "$VF" \
     -c:v libx264 \
     -preset "$PRESET" -profile:v high -level 4.2 \
-    -b:v 2500k -maxrate 2.9M -bufsize 5M \
+    -b:v 2500k -maxrate 3.2M -bufsize 5M \
     -x264-params "keyint=60:min-keyint=60:scenecut=40:bframes=3:b-adapt=2:ref=4:slices=4:rc-lookahead=60:aq-mode=3:psy-rd=1.0,0.15" \
     -c:a libopus -b:a 96k -ac 2 -application audio \
     -f mpegts -mpegts_flags +resend_headers -pat_period 0.1 -sdt_period 0.1 \
