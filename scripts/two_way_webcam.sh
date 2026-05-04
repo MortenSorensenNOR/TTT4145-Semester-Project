@@ -18,13 +18,31 @@
 #   scripts/two_way_webcam.sh 10.0.0.2 5000          # explicit shared port
 #   scripts/two_way_webcam.sh 10.0.0.2 5000 5001     # split TX/RX ports
 #
-# Inherits all stream_webcam.sh env vars (VIDEO_DEV, WIDTH, HEIGHT, FRAMERATE,
-# INPUT_FORMAT, AUDIO, PULSE_SOURCE, VAAPI_DEVICE).
+# Encoder + source selection (set on the machine that needs it):
+#   ENCODER=vaapi   # default — AMD iGPU
+#   ENCODER=nvenc   # NVIDIA
+#   SOURCE=webcam   # default — V4L2 camera
+#   SOURCE=screen   # x11grab desktop capture (use this when no webcam attached)
+#
+# Inherits all stream_*.sh env vars
+# (webcam: VIDEO_DEV, WIDTH, HEIGHT, FRAMERATE, INPUT_FORMAT;
+#  screen: DISPLAY_DEV, CAPTURE_W/H, OFFSET_X/Y, OUT_W/H, FRAMERATE, DRAW_MOUSE;
+#  shared: AUDIO, PULSE_SOURCE, BITRATE [nvenc only], VAAPI_DEVICE [vaapi only]).
 set -euo pipefail
 
 DEST="${1:?usage: $0 <peer-ip> [tx-port] [rx-port]}"
 TX_PORT="${2:-5000}"
 RX_PORT="${3:-$TX_PORT}"
+
+ENCODER="${ENCODER:-vaapi}"
+SOURCE="${SOURCE:-webcam}"
+case "$ENCODER:$SOURCE" in
+    vaapi:webcam) TX_SCRIPT="stream_webcam.sh" ;;
+    vaapi:screen) TX_SCRIPT="stream_screen.sh" ;;
+    nvenc:webcam) TX_SCRIPT="stream_webcam_nvenc.sh" ;;
+    nvenc:screen) TX_SCRIPT="stream_screen_nvenc.sh" ;;
+    *) echo "ERROR: ENCODER must be vaapi|nvenc, SOURCE must be webcam|screen (got $ENCODER:$SOURCE)" >&2; exit 2 ;;
+esac
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -48,7 +66,7 @@ pids+=("$!")
 # Small head-start for ffplay before we kick off the encoder.
 sleep 0.5
 
-"$SCRIPT_DIR/stream_webcam.sh" "$DEST" "$TX_PORT" &
+"$SCRIPT_DIR/$TX_SCRIPT" "$DEST" "$TX_PORT" &
 pids+=("$!")
 
 # Exit as soon as either side dies — typical case is the user hitting q in
