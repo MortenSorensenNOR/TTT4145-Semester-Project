@@ -45,10 +45,9 @@ from modules.pulse_shaping.pulse_shaping import match_filter
 from modules.tun import TunDevice
 from pluto.config import (
     DAC_SCALE,
-    FREQ_A_TO_B,
-    FREQ_B_TO_A,
     configure_rx,
     configure_tx,
+    get_node_freqs,
 )
 from pluto.setup_config import SETUP_PATH, load_or_die as load_setup
 from pluto.sdr_stream import RxStream, TxStream
@@ -67,12 +66,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# FDD frequency plan: same as pluto.one_way_threaded — A transmits on
-# FREQ_A_TO_B and listens on FREQ_B_TO_A; B does the opposite.
-NODE_FREQS = {
-    "A": {"tx": FREQ_A_TO_B, "rx": FREQ_B_TO_A},
-    "B": {"tx": FREQ_B_TO_A, "rx": FREQ_A_TO_B},
-}
+# FDD frequency plan: A transmits on the A→B channel and listens on the B→A
+# channel; B does the opposite. The actual frequencies depend on whether
+# --video is set (see pluto.config.get_node_freqs).
 
 # 1-bit logical MAC per node — copied into Packet.src_mac / .dst_mac so the
 # RX side can drop frames whose dst doesn't match (self-reception / leakage).
@@ -97,8 +93,9 @@ if __name__ == "__main__":
     parser.add_argument("--gain",     type=float, default=-10,    help="TX gain in dB (default: -10)")
     parser.add_argument("--tx-ip",    type=str,   default=None,   help="Override TX Pluto IP (default: derived from --node via pluto/setup.json)")
     parser.add_argument("--rx-ip",    type=str,   default=None,   help="Override RX Pluto IP (default: derived from --node via pluto/setup.json)")
-    parser.add_argument("--tx-freq",  type=float, default=None,   help="TX center frequency in Hz (default: NODE_FREQS[node]['tx'])")
-    parser.add_argument("--rx-freq",  type=float, default=None,   help="RX center frequency in Hz (default: NODE_FREQS[node]['rx'])")
+    parser.add_argument("--tx-freq",  type=float, default=None,   help="TX center frequency in Hz (default: derived from --node and --video)")
+    parser.add_argument("--rx-freq",  type=float, default=None,   help="RX center frequency in Hz (default: derived from --node and --video)")
+    parser.add_argument("--video",    action="store_true",        help="Use the video-mode FDD pair (2327/2390 MHz) instead of the default network pair (2470/2475 MHz).")
     parser.add_argument("--cfo-offset", type=int, default=None,
                         help="Manual override for the RX-LO CFO correction in Hz. "
                              "Default: value from the cfo block of pluto/setup.json "
@@ -237,10 +234,11 @@ if __name__ == "__main__":
     rx_buf_size    = 16 * int(2 ** np.ceil(np.log2(frame_len)))
     tx_buf_size    = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
 
-    tx_freq = int(args.tx_freq) if args.tx_freq is not None else NODE_FREQS[args.node]["tx"]
-    rx_freq = int(args.rx_freq) if args.rx_freq is not None else NODE_FREQS[args.node]["rx"]
+    node_freqs = get_node_freqs(args.node, video=args.video)
+    tx_freq = int(args.tx_freq) if args.tx_freq is not None else node_freqs["tx"]
+    rx_freq = int(args.rx_freq) if args.rx_freq is not None else node_freqs["rx"]
 
-    print(f"Node      : {args.node}  (peer {peer})  mode={args.mode}")
+    print(f"Node      : {args.node}  (peer {peer})  mode={args.mode}  freq={'video' if args.video else 'network'}")
     print(f"TUN       : {args.tun_name} = {tun_ip}/24  (peer {peer_tun_ip})  MTU {args.mtu}")
     if do_tx:
         print(f"TX radio  : {tx_ip}   @ {tx_freq / 1e6:.3f} MHz")

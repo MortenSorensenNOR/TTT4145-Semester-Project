@@ -27,10 +27,25 @@ NODE_SRC = 0
 NODE_DST = 0
 MAX_PACKET_SIZE_BYTES = 1500
 
-# FDD frequency pair for bidirectional bridge mode
-FREQ_A_TO_B = 2_478_000_000
-# FREQ_B_TO_A = 2_475_000_000
-FREQ_B_TO_A = 2_370_000_000
+# FDD frequency pairs for bidirectional bridge mode. Apps select between them
+# via --video (default: network).
+VIDEO_FREQ_A_TO_B   = 2_327_000_000
+VIDEO_FREQ_B_TO_A   = 2_390_000_000
+NETWORK_FREQ_A_TO_B = 2_470_000_000
+NETWORK_FREQ_B_TO_A = 2_475_000_000
+
+
+def get_node_freqs(node: str, *, video: bool = False) -> dict[str, int]:
+    """Return {'tx': ..., 'rx': ...} for `node` in the chosen mode."""
+    if video:
+        a_to_b, b_to_a = VIDEO_FREQ_A_TO_B, VIDEO_FREQ_B_TO_A
+    else:
+        a_to_b, b_to_a = NETWORK_FREQ_A_TO_B, NETWORK_FREQ_B_TO_A
+    if node == "A":
+        return {"tx": a_to_b, "rx": b_to_a}
+    if node == "B":
+        return {"tx": b_to_a, "rx": a_to_b}
+    raise ValueError(f"node must be 'A' or 'B', got {node!r}")
 
 # Split-radio layout: each node dedicates one Pluto to TX and another to RX
 # because a single USB-2 Pluto cannot sustain 4 Msps full-duplex. The actual

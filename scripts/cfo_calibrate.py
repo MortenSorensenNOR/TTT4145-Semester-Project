@@ -42,9 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pluto.config import (
     DAC_SCALE,
-    FREQ_A_TO_B,
-    FREQ_B_TO_A,
     PIPELINE,
+    get_node_freqs,
 )
 from pluto.setup_config import SETUP_PATH, CFOCalibration, load_or_die as load_setup, save_cfo
 
@@ -153,6 +152,9 @@ def main() -> int:
                         help=f"Setup JSON path to update (default: {SETUP_PATH})")
     parser.add_argument("--dry-run",  action="store_true",
                         help="Measure and print, but don't overwrite the calibration file.")
+    parser.add_argument("--video",    action="store_true",
+                        help="Calibrate against the video-mode FDD pair (2327/2390 MHz) "
+                             "instead of the default network pair (2470/2475 MHz).")
     args = parser.parse_args()
 
     setup  = load_setup(args.output)
@@ -177,14 +179,20 @@ def main() -> int:
     b_tx = adi.Pluto(f"ip:{b_tx_ip}") if do_b else None
     a_rx = adi.Pluto(f"ip:{a_rx_ip}") if do_b else None
 
+    # A's TX channel == B's RX channel == "tx" entry of node A's freq plan.
+    freq_a_to_b = get_node_freqs("A", video=args.video)["tx"]
+    freq_b_to_a = get_node_freqs("B", video=args.video)["tx"]
+    print(f"Frequency plan: {'video' if args.video else 'network'} "
+          f"(A→B {freq_a_to_b / 1e6:.3f} MHz, B→A {freq_b_to_a / 1e6:.3f} MHz)")
+
     a_to_b: int | None = None
     b_to_a: int | None = None
     try:
         if do_a:
-            a_to_b = measure_path(a_tx, b_rx, FREQ_A_TO_B,
+            a_to_b = measure_path(a_tx, b_rx, freq_a_to_b,
                                   captures=args.captures, label="A_TX → B_RX")
         if do_b:
-            b_to_a = measure_path(b_tx, a_rx, FREQ_B_TO_A,
+            b_to_a = measure_path(b_tx, a_rx, freq_b_to_a,
                                   captures=args.captures, label="B_TX → A_RX")
     finally:
         # Paranoid cleanup — either TX destroy may have already fired.

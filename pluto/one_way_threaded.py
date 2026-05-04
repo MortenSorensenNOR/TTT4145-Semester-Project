@@ -58,21 +58,17 @@ from modules.parallel_pipeline import RXWorkerPool, TXWorkerPool, apply_cpu_affi
 from modules.pulse_shaping.pulse_shaping import match_filter
 from pluto.config import (
     DAC_SCALE,
-    FREQ_A_TO_B,
-    FREQ_B_TO_A,
     PIPELINE,
     configure_rx,
     configure_tx,
+    get_node_freqs,
 )
 from pluto.setup_config import SETUP_PATH, load_or_die as load_setup
 
-# FDD frequency plan: A transmits on FREQ_A_TO_B and listens on FREQ_B_TO_A;
-# B does the opposite, so a node-A and node-B process can run simultaneously
-# without colliding on one channel.
-NODE_FREQS = {
-    "A": {"tx": FREQ_A_TO_B, "rx": FREQ_B_TO_A},
-    "B": {"tx": FREQ_B_TO_A, "rx": FREQ_A_TO_B},
-}
+# FDD frequency plan: A transmits on the A→B channel and listens on the B→A
+# channel; B does the opposite, so a node-A and node-B process can run
+# simultaneously without colliding on one channel. The actual frequencies
+# depend on whether --video is set (see pluto.config.get_node_freqs).
 from pluto.sdr_stream import RxStream, TxStream
 from pluto.rx_agc import RxAGC
 from pluto.live_status import (
@@ -123,8 +119,9 @@ if __name__ == "__main__":
                              "leaves --rx-gain fixed. No effect when "
                              "--rx-gain-mode is not 'manual' (the AD9361 is "
                              "already running its own AGC).")
-    parser.add_argument("--tx-freq", type=float, default=None, help="TX center frequency in Hz (default: derived from --node via NODE_FREQS)")
-    parser.add_argument("--rx-freq", type=float, default=None, help="RX center frequency in Hz (default: derived from --node via NODE_FREQS)")
+    parser.add_argument("--tx-freq", type=float, default=None, help="TX center frequency in Hz (default: derived from --node and --video)")
+    parser.add_argument("--rx-freq", type=float, default=None, help="RX center frequency in Hz (default: derived from --node and --video)")
+    parser.add_argument("--video",   action="store_true",       help="Use the video-mode FDD pair (2327/2390 MHz) instead of the default network pair (2470/2475 MHz).")
     parser.add_argument("--constellation", action="store_true", help="Collect post-Costas PSK8 symbols and refresh a constellation plot. Live X11 by default; falls back to PNG-on-disk if X11 is unreachable (sudo+netns strips DISPLAY auth). Use --constellation-save to force the PNG path.")
     parser.add_argument("--constellation-save", type=str, default=None,
                         help="Force-save the constellation to this PNG path "
@@ -258,10 +255,11 @@ if __name__ == "__main__":
     rx_buf_size    = 16 * int(2 ** np.ceil(np.log2(frame_len)))
     tx_buf_size    = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
 
-    tx_freq = int(args.tx_freq) if args.tx_freq is not None else NODE_FREQS[args.node]["tx"]
-    rx_freq = int(args.rx_freq) if args.rx_freq is not None else NODE_FREQS[args.node]["rx"]
+    node_freqs = get_node_freqs(args.node, video=args.video)
+    tx_freq = int(args.tx_freq) if args.tx_freq is not None else node_freqs["tx"]
+    rx_freq = int(args.rx_freq) if args.rx_freq is not None else node_freqs["rx"]
 
-    print(f"Mode      : {args.mode}")
+    print(f"Mode      : {args.mode}  freq={'video' if args.video else 'network'}")
     print(f"Node      : {args.node}")
     if args.mode in ("tx", "both"):
         print(f"TX radio  : {tx_ip}   @ {tx_freq / 1e6:.3f} MHz")
