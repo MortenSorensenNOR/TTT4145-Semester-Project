@@ -101,13 +101,12 @@ if __name__ == "__main__":
                              "Default: value from the cfo block of pluto/setup.json "
                              "for --node (run scripts/cfo_calibrate.py to generate "
                              "it), or 0 if no calibration is present.")
-    parser.add_argument("--rx-gain-mode", type=str, default="slow_attack",
+    parser.add_argument("--rx-gain-mode", type=str, default="manual",
                         choices=("slow_attack", "fast_attack", "hybrid", "manual"),
-                        help="AD9361 RX AGC mode (default: slow_attack). Set to "
-                             "'manual' for sparse traffic — slow_attack drifts "
-                             "during the silence between bursts, ramping gain "
-                             "up so the next packet clips the ADC and the "
-                             "constellation widens 3–5×.")
+                        help="AD9361 RX AGC mode (default: manual). The auto "
+                             "modes drift during the silence between bursts, "
+                             "ramping gain up so the next packet clips the ADC "
+                             "and the constellation widens 3–5×.")
     parser.add_argument("--rx-gain", type=float, default=50.0,
                         help="Fixed RX hardware gain in dB when "
                              "--rx-gain-mode=manual (default: 50, AD9361 range "

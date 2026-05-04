@@ -97,28 +97,27 @@ if __name__ == "__main__":
                              "Default: value from the cfo block of pluto/setup.json "
                              "for --node (run scripts/cfo_calibrate.py to generate "
                              "it), or 0 if no calibration is present. Only affects RX.")
-    parser.add_argument("--rx-gain-mode", type=str, default="slow_attack",
+    parser.add_argument("--rx-gain-mode", type=str, default="manual",
                         choices=("slow_attack", "fast_attack", "hybrid", "manual"),
-                        help="AD9361 RX AGC mode (default: slow_attack). Set to "
-                             "'manual' for sparse traffic — slow_attack drifts "
-                             "during the silence between bursts, ramping gain up "
-                             "so the next packet clips the ADC and the "
-                             "constellation widens 3–5×.")
+                        help="AD9361 RX AGC mode (default: manual). The auto "
+                             "modes drift during the silence between bursts, "
+                             "ramping gain up so the next packet clips the ADC "
+                             "and the constellation widens 3–5×.")
     parser.add_argument("--rx-gain", type=float, default=50.0,
                         help="Fixed RX hardware gain in dB when "
                              "--rx-gain-mode=manual (default: 50, AD9361 range "
                              "~0–71). Ignored for any auto AGC mode.")
-    parser.add_argument("--rx-agc", type=str, default="auto",
+    parser.add_argument("--rx-agc", type=str, default="off",
                         choices=("auto", "off"),
                         help="Software AGC for --rx-gain-mode=manual. "
-                             "'auto' (default) watches the peak amplitude of "
-                             "every RX buffer that produced a valid decode "
-                             "and nudges rx_hardwaregain toward a target "
-                             "below ADC clip; idle buffers are ignored so "
-                             "gain doesn't ramp up during silence. 'off' "
-                             "leaves --rx-gain fixed. No effect when "
-                             "--rx-gain-mode is not 'manual' (the AD9361 is "
-                             "already running its own AGC).")
+                             "'off' (default) leaves --rx-gain fixed. "
+                             "'auto' watches the peak amplitude of every RX "
+                             "buffer that produced a valid decode and nudges "
+                             "rx_hardwaregain toward a target below ADC clip; "
+                             "idle buffers are ignored so gain doesn't ramp up "
+                             "during silence. No effect when --rx-gain-mode is "
+                             "not 'manual' (the AD9361 is already running its "
+                             "own AGC).")
     parser.add_argument("--tx-freq", type=float, default=None, help="TX center frequency in Hz (default: derived from --node and --video)")
     parser.add_argument("--rx-freq", type=float, default=None, help="RX center frequency in Hz (default: derived from --node and --video)")
     parser.add_argument("--video",   action="store_true",       help="Use the video-mode FDD pair (2327/2390 MHz) instead of the default network pair (2470/2475 MHz).")
