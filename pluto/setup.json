@@ -11,8 +11,8 @@
     }
   },
   "cfo": {
-    "a_to_b_cfo_hz": 974,
-    "b_to_a_cfo_hz": -16936,
-    "measured_at": "2026-04-29T11:59:35+02:00"
+    "a_to_b_cfo_hz": -1547,
+    "b_to_a_cfo_hz": -23307,
+    "measured_at": "2026-05-04T18:30:21+02:00"
   }
 }
