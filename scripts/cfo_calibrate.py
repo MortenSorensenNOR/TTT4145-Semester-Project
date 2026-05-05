@@ -195,9 +195,9 @@ def _run_split_host(args: argparse.Namespace, setup) -> int:
           f"({label} {freq_hz / 1e6:.3f} MHz)")
 
     if args.role == "tx":
-        ip = setup.tx_ip(args.node)
-        print(f"Opening TX radio: {ip}")
-        sdr = adi.Pluto(f"ip:{ip}")
+        uri = setup.tx_uri(args.node, args.backend)
+        print(f"Opening TX radio: {uri}")
+        sdr = adi.Pluto(uri)
         try:
             transmit_only(sdr, freq_hz, label)
         finally:
@@ -209,9 +209,9 @@ def _run_split_host(args: argparse.Namespace, setup) -> int:
 
     # role == "rx": open the *destination* node's RX Pluto.
     rx_node = "B" if args.node == "A" else "A"
-    ip = setup.rx_ip(rx_node)
-    print(f"Opening RX radio: {ip}")
-    sdr = adi.Pluto(f"ip:{ip}")
+    uri = setup.rx_uri(rx_node, args.backend)
+    print(f"Opening RX radio: {uri}")
+    sdr = adi.Pluto(uri)
     cfo_hz = receive_only(sdr, freq_hz, captures=args.captures, label=label)
 
     prev = setup.cfo
@@ -266,6 +266,10 @@ def main() -> int:
     parser.add_argument("--video",    action="store_true",
                         help="Calibrate against the video-mode FDD pair (2327/2390 MHz) "
                              "instead of the default network pair (2470/2475 MHz).")
+    parser.add_argument("--backend",  type=str, default="ip", choices=("ip", "usb"),
+                        help="libiio backend used to open the Plutos. 'ip' (default) "
+                             "opens ip:<addr> from setup.json; 'usb' resolves the "
+                             "per-node tx_serial/rx_serial to a usb:<bus.dev.intf> URI.")
     args = parser.parse_args()
 
     if args.role is not None and args.node is None:
@@ -279,23 +283,23 @@ def main() -> int:
     do_a   = args.node in (None, "A")
     do_b   = args.node in (None, "B")
 
-    a_tx_ip = setup.tx_ip("A") if do_a else None
-    b_rx_ip = setup.rx_ip("B") if do_a else None
-    b_tx_ip = setup.tx_ip("B") if do_b else None
-    a_rx_ip = setup.rx_ip("A") if do_b else None
+    a_tx_uri = setup.tx_uri("A", args.backend) if do_a else None
+    b_rx_uri = setup.rx_uri("B", args.backend) if do_a else None
+    b_tx_uri = setup.tx_uri("B", args.backend) if do_b else None
+    a_rx_uri = setup.rx_uri("A", args.backend) if do_b else None
 
     print("Opening radios:")
     if do_a:
-        print(f"  A TX @ {a_tx_ip}")
-        print(f"  B RX @ {b_rx_ip}")
+        print(f"  A TX @ {a_tx_uri}")
+        print(f"  B RX @ {b_rx_uri}")
     if do_b:
-        print(f"  B TX @ {b_tx_ip}")
-        print(f"  A RX @ {a_rx_ip}")
+        print(f"  B TX @ {b_tx_uri}")
+        print(f"  A RX @ {a_rx_uri}")
 
-    a_tx = adi.Pluto(f"ip:{a_tx_ip}") if do_a else None
-    b_rx = adi.Pluto(f"ip:{b_rx_ip}") if do_a else None
-    b_tx = adi.Pluto(f"ip:{b_tx_ip}") if do_b else None
-    a_rx = adi.Pluto(f"ip:{a_rx_ip}") if do_b else None
+    a_tx = adi.Pluto(a_tx_uri) if do_a else None
+    b_rx = adi.Pluto(b_rx_uri) if do_a else None
+    b_tx = adi.Pluto(b_tx_uri) if do_b else None
+    a_rx = adi.Pluto(a_rx_uri) if do_b else None
 
     # A's TX channel == B's RX channel == "tx" entry of node A's freq plan.
     freq_a_to_b = get_node_freqs("A", video=args.video)["tx"]

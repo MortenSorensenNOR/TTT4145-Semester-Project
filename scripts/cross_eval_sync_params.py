@@ -21,10 +21,12 @@ CONFIGS = [
     ("baseline (current PipelineConfig)",
         # Read from PipelineConfig() so this stays in sync with the source.
         None, None, None, None, None),
-    ("PSK8  best, free ζ",   0.01507, 1.691, 0.004991, 2.833, 27),
-    ("PSK16 best, free ζ",   0.01133, 1.638, 0.005883, 2.877, 24),
+    ("PSK8  best, free ζ",   0.01507, 1.691,  0.004991, 2.833,  27),
+    ("PSK16 best, free ζ",   0.01133, 1.638,  0.005883, 2.877,  24),
     ("PSK8  best, ζ=1/√2",   0.01593, 0.7071, 0.006489, 0.7071, 19),
     ("PSK16 best, ζ=1/√2",   0.01776, 0.7071, 0.005575, 0.7071, 16),
+    ("BOTH  best, free ζ",   0.01830, 1.902,  0.004689, 4.355,  35),
+    ("BOTH  best, ζ=1/√2",   0.01360, 0.7071, 0.006295, 0.7071, 20),
 ]
 
 

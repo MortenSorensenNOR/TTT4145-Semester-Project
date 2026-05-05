@@ -91,8 +91,12 @@ if __name__ == "__main__":
                              "packets to TUN, never transmit. 'both' (default): "
                              "full-duplex, open both Plutos.")
     parser.add_argument("--gain",     type=float, default=-10,    help="TX gain in dB (default: -10)")
-    parser.add_argument("--tx-ip",    type=str,   default=None,   help="Override TX Pluto IP (default: derived from --node via pluto/setup.json)")
-    parser.add_argument("--rx-ip",    type=str,   default=None,   help="Override RX Pluto IP (default: derived from --node via pluto/setup.json)")
+    parser.add_argument("--tx-ip",    type=str,   default=None,   help="Override TX Pluto IP (default: derived from --node via pluto/setup.json). Implies --backend ip for the TX side.")
+    parser.add_argument("--rx-ip",    type=str,   default=None,   help="Override RX Pluto IP (default: derived from --node via pluto/setup.json). Implies --backend ip for the RX side.")
+    parser.add_argument("--backend",  type=str,   default="ip", choices=("ip", "usb"),
+                        help="libiio backend used to open the Plutos. 'ip' (default) opens "
+                             "ip:<addr> from setup.json; 'usb' resolves the per-node "
+                             "tx_serial/rx_serial to a usb:<bus.dev.intf> URI.")
     parser.add_argument("--tx-freq",  type=float, default=None,   help="TX center frequency in Hz (default: derived from --node and --video)")
     parser.add_argument("--rx-freq",  type=float, default=None,   help="RX center frequency in Hz (default: derived from --node and --video)")
     parser.add_argument("--video",    action="store_true",        help="Use the video-mode FDD pair (2327/2390 MHz) instead of the default network pair (2470/2475 MHz).")
@@ -111,7 +115,8 @@ if __name__ == "__main__":
                         help="Fixed RX hardware gain in dB when "
                              "--rx-gain-mode=manual (default: 50, AD9361 range "
                              "~0–71). Ignored for any auto AGC mode.")
-    parser.add_argument("--tx-buf-mult", type=float, default=1.2,     help="TX buffer size as multiple of next-power-of-2 frame length (default: 8)")
+    parser.add_argument("--tx-buf-mult", type=float, default=1.05, help="TX buffer size as multiple of next-power-of-2 frame length")
+    parser.add_argument("--rx-buf-mult", type=float, default=1.75, help="RX buffer size as multiple of next-power-of-2 frame length")
     parser.add_argument("--tx-filler-amp", type=float, default=0.0,
                         help="Per-component amplitude of complex Gaussian noise "
                              "filler emitted between packets (DAC-scale units). "
@@ -177,8 +182,15 @@ if __name__ == "__main__":
     do_tx = args.mode in ("tx", "both")
     do_rx = args.mode in ("rx", "both")
 
-    tx_ip = (args.tx_ip or setup.tx_ip(args.node)) if do_tx else None
-    rx_ip = (args.rx_ip or setup.rx_ip(args.node)) if do_rx else None
+    # IP overrides force ip: for that side; otherwise --backend picks the URI.
+    tx_uri = (
+        (f"ip:{args.tx_ip}" if args.tx_ip else setup.tx_uri(args.node, args.backend))
+        if do_tx else None
+    )
+    rx_uri = (
+        (f"ip:{args.rx_ip}" if args.rx_ip else setup.rx_uri(args.node, args.backend))
+        if do_rx else None
+    )
 
     # Resolve RX-LO CFO offset: manual CLI override wins; otherwise pull the
     # measured value for this node from the calibration; otherwise 0.
@@ -230,7 +242,7 @@ if __name__ == "__main__":
                             length=args.mtu, payload=_probe_bits)
     _probe_samples = tx_pipe.transmit(_probe_pkt)
     frame_len      = len(_probe_samples)
-    rx_buf_size    = int(2 ** np.ceil(np.log2(frame_len)))
+    rx_buf_size    = int(args.rx_buf_mult * int(2 ** np.ceil(np.log2(frame_len))))
     tx_buf_size    = int(args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len))))
 
     node_freqs = get_node_freqs(args.node, video=args.video)
@@ -240,7 +252,7 @@ if __name__ == "__main__":
     print(f"Node      : {args.node}  (peer {peer})  mode={args.mode}  freq={'video' if args.video else 'network'}")
     print(f"TUN       : {args.tun_name} = {tun_ip}/24  (peer {peer_tun_ip})  MTU {args.mtu}")
     if do_tx:
-        print(f"TX radio  : {tx_ip}   @ {tx_freq / 1e6:.3f} MHz")
+        print(f"TX radio  : {tx_uri}   @ {tx_freq / 1e6:.3f} MHz")
     else:
         print(f"TX radio  : disabled (--mode {args.mode})")
     if do_rx:
@@ -248,7 +260,7 @@ if __name__ == "__main__":
             rx_gain_desc = f"manual {args.rx_gain:.1f} dB"
         else:
             rx_gain_desc = f"AGC={args.rx_gain_mode}"
-        print(f"RX radio  : {rx_ip}   @ {(rx_freq + rx_cfo_hz) / 1e6:.3f} MHz  "
+        print(f"RX radio  : {rx_uri}   @ {(rx_freq + rx_cfo_hz) / 1e6:.3f} MHz  "
               f"(CFO {rx_cfo_hz:+d} Hz, {cfo_src}; {rx_gain_desc})")
     else:
         print(f"RX radio  : disabled (--mode {args.mode})")
@@ -307,10 +319,10 @@ if __name__ == "__main__":
     tx_sdr = None
     rx_sdr = None
     if do_tx:
-        tx_sdr = adi.Pluto("ip:" + tx_ip)
+        tx_sdr = adi.Pluto(tx_uri)
         configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
     if do_rx:
-        rx_sdr = adi.Pluto("ip:" + rx_ip)
+        rx_sdr = adi.Pluto(rx_uri)
         configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz,
                      gain_mode=args.rx_gain_mode, gain=args.rx_gain)
         rx_sdr.rx_buffer_size = rx_buf_size

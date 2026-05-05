@@ -11,8 +11,10 @@ File schema (version 2)::
     {
       "version": 2,
       "nodes": {
-        "A": {"tx_ip": "...", "rx_ip": "..."},
-        "B": {"tx_ip": "...", "rx_ip": "..."}
+        "A": {"tx_ip": "...", "rx_ip": "...",
+              "tx_serial": "...", "rx_serial": "..."},
+        "B": {"tx_ip": "...", "rx_ip": "...",
+              "tx_serial": "...", "rx_serial": "..."}
       },
       "cfo": {
         "a_to_b_cfo_hz": <int>,
@@ -20,6 +22,15 @@ File schema (version 2)::
         "measured_at": "<ISO-8601>"
       }
     }
+
+``tx_serial``/``rx_serial`` are optional. They hold the 8-char hex serial
+burned into each Pluto's firmware (also on the back-of-device sticker)
+and are used when opening the radios via the libiio ``usb:`` backend
+instead of ``ip:`` — USB bus IDs are reassigned on every replug, so the
+serial is the only stable identifier for a given physical board.
+
+Run ``python -m pluto.setup_config --list-usb`` with both Plutos plugged
+in to see the discovered serials, then paste them into setup.json.
 """
 
 from __future__ import annotations
@@ -62,11 +73,38 @@ class CFOCalibration:
         raise ValueError(f"unknown node {node!r} (expected 'A' or 'B')")
 
 
+def usb_uri_for_serial(serial: str) -> str:
+    """Resolve an 8-char hex Pluto serial to a libiio ``usb:bus.dev.intf`` URI.
+
+    USB bus/device numbers are kernel-assigned and change on every replug,
+    so the serial is the only stable handle for a particular physical
+    Pluto. This scans whatever libiio sees right now and matches by serial.
+    """
+    import iio  # lazy: only required when actually using the usb backend
+    contexts = iio.scan_contexts()
+    matches = [
+        uri for uri, desc in contexts.items()
+        if uri.startswith("usb:") and serial.lower() in desc.lower()
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise RuntimeError(
+            f"No USB Pluto found with serial {serial!r}. "
+            f"libiio scan returned: {dict(contexts)!r}. "
+            f"Check the device is plugged in and udev permissions are set."
+        )
+    raise RuntimeError(
+        f"Multiple USB Plutos matched serial {serial!r}: {matches}. "
+        f"Serials should be unique per board."
+    )
+
+
 @dataclass
 class Setup:
     """Full radio-setup config: TX/RX IPs per node + optional CFO cal."""
 
-    nodes: dict[str, dict[str, str]] = field(default_factory=dict)
+    nodes: dict[str, dict[str, str | None]] = field(default_factory=dict)
     cfo: CFOCalibration | None = None
     version: int = 2
 
@@ -75,6 +113,32 @@ class Setup:
 
     def rx_ip(self, node: str) -> str:
         return self.nodes[node]["rx"]
+
+    def tx_serial(self, node: str) -> str | None:
+        return self.nodes[node].get("tx_serial")
+
+    def rx_serial(self, node: str) -> str | None:
+        return self.nodes[node].get("rx_serial")
+
+    def tx_uri(self, node: str, backend: str = "ip") -> str:
+        return self._uri(node, role="tx", backend=backend)
+
+    def rx_uri(self, node: str, backend: str = "ip") -> str:
+        return self._uri(node, role="rx", backend=backend)
+
+    def _uri(self, node: str, *, role: str, backend: str) -> str:
+        if backend == "ip":
+            return f"ip:{self.nodes[node]['tx' if role == 'tx' else 'rx']}"
+        if backend == "usb":
+            serial = self.nodes[node].get(f"{role}_serial")
+            if not serial:
+                raise ValueError(
+                    f"node {node!r} has no {role}_serial in setup.json. "
+                    f"Run 'python -m pluto.setup_config --list-usb' to discover "
+                    f"serials, then add them to setup.json."
+                )
+            return usb_uri_for_serial(serial)
+        raise ValueError(f"unknown backend {backend!r} (expected 'ip' or 'usb')")
 
 
 def load(path: Path = SETUP_PATH) -> Setup:
@@ -86,7 +150,12 @@ def load(path: Path = SETUP_PATH) -> Setup:
         )
     data = json.loads(path.read_text())
     nodes = {
-        node: {"tx": entry["tx_ip"], "rx": entry["rx_ip"]}
+        node: {
+            "tx":        entry["tx_ip"],
+            "rx":        entry["rx_ip"],
+            "tx_serial": entry.get("tx_serial"),
+            "rx_serial": entry.get("rx_serial"),
+        }
         for node, entry in data["nodes"].items()
     }
     cfo_data = data.get("cfo")
@@ -120,12 +189,17 @@ def save(setup: Setup, path: Path = SETUP_PATH) -> None:
             "b_to_a_cfo_hz": setup.cfo.b_to_a_cfo_hz,
             "measured_at":   setup.cfo.measured_at,
         }
+    def _node_block(entry: dict) -> dict:
+        block = {"tx_ip": entry["tx"], "rx_ip": entry["rx"]}
+        if entry.get("tx_serial"):
+            block["tx_serial"] = entry["tx_serial"]
+        if entry.get("rx_serial"):
+            block["rx_serial"] = entry["rx_serial"]
+        return block
+
     data = {
         "version": setup.version,
-        "nodes": {
-            node: {"tx_ip": entry["tx"], "rx_ip": entry["rx"]}
-            for node, entry in setup.nodes.items()
-        },
+        "nodes": {node: _node_block(entry) for node, entry in setup.nodes.items()},
         "cfo": cfo_block,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,13 +223,42 @@ def _print_shell_export(setup: Setup) -> None:
         print(f"CFO_B_TO_A_HZ={setup.cfo.b_to_a_cfo_hz}")
 
 
+def _print_usb_scan() -> None:
+    """List every libiio context currently visible, highlighting USB Plutos.
+
+    Run this with both Plutos plugged in to discover the 8-char serials,
+    then paste them into ``setup.json`` under ``nodes.<X>.tx_serial`` /
+    ``rx_serial``.
+    """
+    import iio
+    contexts = iio.scan_contexts()
+    if not contexts:
+        print("No libiio contexts visible.")
+        print("  - is the Pluto plugged in?")
+        print("  - is the udev rule installed (53-adi-plutosdr-usb.rules)?")
+        return
+    print(f"Discovered {len(contexts)} libiio context(s):")
+    for uri, desc in contexts.items():
+        marker = "  USB " if uri.startswith("usb:") else "      "
+        print(f"{marker}{uri}")
+        print(f"        {desc}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Inspect / export pluto/setup.json")
     parser.add_argument("--shell-export", action="store_true",
                         help="Emit bash KEY=VALUE lines for `eval` in shell scripts")
+    parser.add_argument("--list-usb", action="store_true",
+                        help="Scan libiio for USB Plutos and print their URIs + "
+                             "serials. Run this with both Plutos plugged in to "
+                             "discover the 8-char serials to paste into setup.json.")
     parser.add_argument("--path", type=Path, default=SETUP_PATH,
                         help=f"Setup file (default: {SETUP_PATH})")
     args = parser.parse_args()
+
+    if args.list_usb:
+        _print_usb_scan()
+        return 0
 
     setup = load_or_die(args.path)
     if args.shell_export:

@@ -1,0 +1,239 @@
+{
+  "dataset": "both",
+  "n_trials": 1000,
+  "train_size": 205,
+  "val_size": 51,
+  "baseline_val": {
+    "valid": 102,
+    "detected": 102,
+    "matched": 92,
+    "expected": 92,
+    "evm_pct": 3.7419289743059907
+  },
+  "best": {
+    "params": {
+      "bn": 0.013602488101958176,
+      "bnts": 0.0062949846754579274,
+      "L": 20,
+      "zeta_costas": 0.7071,
+      "zeta_nda": 0.7071
+    },
+    "val_valid": 102,
+    "val_detected": 102,
+    "val_matched": 92,
+    "val_expected": 92,
+    "val_evm_pct": 3.106136492076562
+  },
+  "top": [
+    {
+      "params": {
+        "bn": 0.013602488101958176,
+        "bnts": 0.0062949846754579274,
+        "L": 20,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.106136492076562
+    },
+    {
+      "params": {
+        "bn": 0.022076009728994143,
+        "bnts": 0.006451805001146726,
+        "L": 16,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.1063176634658234
+    },
+    {
+      "params": {
+        "bn": 0.01776090318284759,
+        "bnts": 0.005021823709499599,
+        "L": 20,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.1090762494617454
+    },
+    {
+      "params": {
+        "bn": 0.012486574375261912,
+        "bnts": 0.00699416623780728,
+        "L": 19,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.109271439283941
+    },
+    {
+      "params": {
+        "bn": 0.025213290228739544,
+        "bnts": 0.0059459364718899505,
+        "L": 15,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.1105853603271836
+    },
+    {
+      "params": {
+        "bn": 0.009605884824845638,
+        "bnts": 0.005105252786941176,
+        "L": 19,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.1153335991614965
+    },
+    {
+      "params": {
+        "bn": 0.025440582194944085,
+        "bnts": 0.004965525012715483,
+        "L": 20,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.115748600619519
+    },
+    {
+      "params": {
+        "bn": 0.017446365111046584,
+        "bnts": 0.004447410383239284,
+        "L": 21,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.118657137772773
+    },
+    {
+      "params": {
+        "bn": 0.008655857379052091,
+        "bnts": 0.006943073881508839,
+        "L": 20,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.1193999433518043
+    },
+    {
+      "params": {
+        "bn": 0.015333994815866841,
+        "bnts": 0.007233163374747652,
+        "L": 13,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.125203021089356
+    },
+    {
+      "params": {
+        "bn": 0.016316099704263832,
+        "bnts": 0.008561428874955708,
+        "L": 16,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.126004334573626
+    },
+    {
+      "params": {
+        "bn": 0.02269436923201536,
+        "bnts": 0.004223062172605457,
+        "L": 23,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.128140916167662
+    },
+    {
+      "params": {
+        "bn": 0.03030742839075374,
+        "bnts": 0.004531352421511591,
+        "L": 18,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.1288053552787063
+    },
+    {
+      "params": {
+        "bn": 0.017453757076320662,
+        "bnts": 0.003926311584175034,
+        "L": 21,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.131033936596713
+    },
+    {
+      "params": {
+        "bn": 0.039903981036406466,
+        "bnts": 0.005669364571046525,
+        "L": 21,
+        "zeta_costas": 0.7071,
+        "zeta_nda": 0.7071
+      },
+      "val_valid": 102,
+      "val_detected": 102,
+      "val_matched": 92,
+      "val_expected": 92,
+      "val_evm_pct": 3.132214559986832
+    }
+  ]
+}

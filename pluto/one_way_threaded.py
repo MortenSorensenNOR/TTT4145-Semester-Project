@@ -89,8 +89,13 @@ if __name__ == "__main__":
     parser.add_argument("--packets",  type=int,   default=20,            help="Number of packets per TX burst (default: 20)")
     parser.add_argument("--interval", type=float, default=0,             help="Inter-burst gap in ms (default: 0)")
     parser.add_argument("--node",     type=str,   default="A",           help="Node identity A or B; picks default TX/RX IPs from pluto/setup.json")
-    parser.add_argument("--tx-ip",    type=str,   default=None,          help="Override TX Pluto IP (default: derived from --node)")
-    parser.add_argument("--rx-ip",    type=str,   default=None,          help="Override RX Pluto IP (default: derived from --node)")
+    parser.add_argument("--tx-ip",    type=str,   default=None,          help="Override TX Pluto IP (default: derived from --node). Implies --backend ip for the TX side.")
+    parser.add_argument("--rx-ip",    type=str,   default=None,          help="Override RX Pluto IP (default: derived from --node). Implies --backend ip for the RX side.")
+    parser.add_argument("--backend",  type=str,   default="ip", choices=("ip", "usb"),
+                        help="libiio backend used to open the Plutos. 'ip' (default) opens "
+                             "ip:<addr> from setup.json; 'usb' resolves the per-node "
+                             "tx_serial/rx_serial to a usb:<bus.dev.intf> URI. Use 'usb' "
+                             "when running both Plutos directly off the host's USB ports.")
     parser.add_argument("--mode",     type=str,   default="both",        help="Mode: 'tx', 'rx', or 'both' (default: both)")
     parser.add_argument("--cfo-offset", type=int, default=None,
                         help="Manual override for the RX-LO CFO correction in Hz. "
@@ -136,8 +141,8 @@ if __name__ == "__main__":
                              "offline plotting without matplotlib.")
     parser.add_argument("--variable", action="store_true", help="Randomize payload size per packet (between --min-payload and --payload)")
     parser.add_argument("--min-payload", type=int, default=4, help="Minimum payload bytes when --variable is set (default: 4, must hold seq number)")
-    parser.add_argument("--tx-buf-mult", type=float, default=1.5, help="TX buffer size as multiple of next-power-of-2 frame length")
-    parser.add_argument("--rx-buf-mult", type=float, default=1.5, help="RX buffer size as multiple of next-power-of-2 frame length")
+    parser.add_argument("--tx-buf-mult", type=float, default=1.05, help="TX buffer size as multiple of next-power-of-2 frame length")
+    parser.add_argument("--rx-buf-mult", type=float, default=1.75, help="RX buffer size as multiple of next-power-of-2 frame length")
     parser.add_argument("--tx-filler-amp", type=float, default=0.0,
                         help="Per-component amplitude of complex Gaussian noise filler emitted "
                              "between packets (DAC-scale units). 0.0 = silent zero-fill (default, "
@@ -204,8 +209,10 @@ if __name__ == "__main__":
         print(f"ERROR: --node must be one of {sorted(setup.nodes)}, got '{args.node}'")
         sys.exit(1)
 
-    tx_ip = args.tx_ip or setup.tx_ip(args.node)
-    rx_ip = args.rx_ip or setup.rx_ip(args.node)
+    # IP overrides force the ip: backend for that side; otherwise the global
+    # --backend setting picks ip:<addr> or usb:<bus.dev.intf> via serial.
+    tx_uri = f"ip:{args.tx_ip}" if args.tx_ip else setup.tx_uri(args.node, args.backend)
+    rx_uri = f"ip:{args.rx_ip}" if args.rx_ip else setup.rx_uri(args.node, args.backend)
 
     # Resolve RX-LO CFO offset: manual CLI override wins; otherwise pull the
     # measured value for this node from the calibration; otherwise 0. TX always
@@ -266,9 +273,9 @@ if __name__ == "__main__":
     print(f"Mode      : {args.mode}  freq={'video' if args.video else 'network'}")
     print(f"Node      : {args.node}")
     if args.mode in ("tx", "both"):
-        print(f"TX radio  : {tx_ip}   @ {tx_freq / 1e6:.3f} MHz")
+        print(f"TX radio  : {tx_uri}   @ {tx_freq / 1e6:.3f} MHz")
     if args.mode in ("rx", "both"):
-        print(f"RX radio  : {rx_ip}   @ {(rx_freq + rx_cfo_hz) / 1e6:.3f} MHz  "
+        print(f"RX radio  : {rx_uri}   @ {(rx_freq + rx_cfo_hz) / 1e6:.3f} MHz  "
               f"(CFO {rx_cfo_hz:+d} Hz, {cfo_src})")
     print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
     if args.variable:
@@ -331,11 +338,11 @@ if __name__ == "__main__":
     rx_sdr = None
 
     if args.mode in ("tx", "both"):
-        tx_sdr = adi.Pluto("ip:" + tx_ip)
+        tx_sdr = adi.Pluto(tx_uri)
         configure_tx(tx_sdr, freq=tx_freq, gain=args.gain, cyclic=False)
 
     if args.mode in ("rx", "both"):
-        rx_sdr = adi.Pluto("ip:" + rx_ip)
+        rx_sdr = adi.Pluto(rx_uri)
         configure_rx(rx_sdr, freq=rx_freq + rx_cfo_hz,
                      gain_mode=args.rx_gain_mode, gain=args.rx_gain)
         rx_sdr.rx_buffer_size = rx_buf_size
