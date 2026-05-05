@@ -1,16 +1,3 @@
-"""Linux TUN device interface.
-
-Opens /dev/net/tun and configures a TUN (Layer-3 IP tunnel) interface.
-The calling process must have CAP_NET_ADMIN or be root.
-
-Usage
------
-    with TunDevice("tun0") as tun:
-        arq_node = ARQNode(tun, pluto_tx, pluto_rx, config)
-        arq_node.start()
-        ...
-"""
-
 import fcntl
 import os
 import select
@@ -55,17 +42,12 @@ class TunDevice:
         fcntl.ioctl(self._fd, _TUNSETIFF, ifr)
 
     def read(self) -> bytes | None:
-        """Read one IP packet from the TUN interface.
-
-        Returns ``None`` if no packet arrives within ``poll_timeout`` seconds.
-        """
         ready, _, _ = select.select([self._fd], [], [], self._poll_timeout)
         if not ready:
             return None
         return os.read(self._fd, self.mtu)
 
     def write(self, data: bytes) -> None:
-        """Inject one IP packet into the OS network stack."""
         os.write(self._fd, data)
 
     def close(self) -> None:

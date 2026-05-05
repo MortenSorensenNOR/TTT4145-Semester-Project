@@ -100,8 +100,6 @@ class FrameHeaderConfig:
     crc_bits: int = 8
     header_total_size: int = field(init=False)
 
-    use_golay: bool = False
-
     def __post_init__(self) -> None:
         """Compute the total header size from all field widths."""
         self.header_total_size = (
@@ -126,7 +124,6 @@ class FrameHeaderConfig:
         cfg.sequence_number_bits  = self.sequence_number_bits
         cfg.coding_rate_bits      = self.coding_rate_bits
         cfg.crc_bits              = self.crc_bits
-        cfg.use_golay             = self.use_golay
         return cfg
 
 
@@ -267,16 +264,13 @@ class FrameConstructor:
             self._ext = _ext.FrameConstructor(self.header_config._to_ext())
         else:
             self._ext = None
-            from modules.golay import Golay
-            self.golay = Golay()
 
     @property
     def header_encoded_n_bits(self) -> int:
         """Number of bits in the encoded header."""
         if _USE_EXT:
             return self._ext.header_encoded_n_bits()
-        golay_ratio = self.golay.block_length // self.golay.message_length
-        return self.frame_header_constructor.header_length * golay_ratio
+        return self.frame_header_constructor.header_length
 
     def payload_coded_n_bits(self, header: FrameHeader) -> int:
         """Return the number of coded payload bits for a given header."""
@@ -318,10 +312,7 @@ class FrameConstructor:
 
         payload = payload.ravel()
         header_bits = self.frame_header_constructor.encode(header)
-        if self.header_config.use_golay:
-            header_encoded = self.golay.encode(header_bits)
-        else:
-            header_encoded = header_bits
+        header_encoded = header_bits
         crc = self._crc16(payload)
         crc_bits = np.array(int_to_bits(crc, self.PAYLOAD_CRC_BITS), dtype=int)
         payload_with_crc = np.concatenate([payload, crc_bits])
@@ -336,10 +327,7 @@ class FrameConstructor:
             return FrameHeader._from_ext(self._ext.decode_header(header_encoded.astype(np.int32)))
 
         header_hard = header_encoded.astype(int)
-        if self.header_config.use_golay:
-            header_bits = self.golay.decode(header_hard)
-        else:
-            header_bits = header_hard
+        header_bits = header_hard
         header = self.frame_header_constructor.decode(header_bits)
         if not header.crc_passed:
             msg = "Header did not yield valid crc"

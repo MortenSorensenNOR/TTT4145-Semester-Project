@@ -244,7 +244,7 @@ if __name__ == "__main__":
     # Pipelines
     # ---------------------------------------------------------------------------
 
-    pipe_cfg = PipelineConfig(hardware_rrc=args.hardware_rrc)
+    pipe_cfg = PipelineConfig()
     # Over coax, real-packet fine peak ratios sit at ~10–12 while spurious
     # detections on the ~7 kB of silence at the tail of each TX buffer fire with
     # ratio ~4–5. Bumping the gate to 7 cleanly rejects the latter — otherwise

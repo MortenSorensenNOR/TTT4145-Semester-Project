@@ -6,18 +6,18 @@ import numpy as np
 from modules.pulse_shaping.pulse_shaping import *
 from modules.modulators.modulators import *
 from modules.frame_constructor.frame_constructor import *
-from modules.golay import *
 from modules.frame_sync.frame_sync import *
 from modules.costas_loop.costas import *
-from modules.ldpc.ldpc import LDPCConfig, ldpc_encode, ldpc_decode, ldpc_encode_batch, ldpc_decode_batch
+from modules.ldpc.ldpc import LDPCConfig, ldpc_encode_batch, ldpc_decode_batch
 from modules.ldpc.channel_coding import *
 from modules.nda_ted.nda_ted import *
 
 from utils.plotting import *
 
+import logging
+logger = logging.getLogger(__name__)
 
-# LDPC block sizes per code rate. We fix n=1944 (best coding gain in the
-# 802.11 set, divides cleanly by 1/2/3 bits-per-symbol). k follows from rate.
+
 _LDPC_BLOCK_PARAMS: dict[CodeRates, tuple[int, int]] = {
     CodeRates.TWO_THIRDS_RATE:   (1296, 1944),
     CodeRates.THREE_QUARTER_RATE:(1458, 1944),
@@ -26,10 +26,7 @@ _LDPC_BLOCK_PARAMS: dict[CodeRates, tuple[int, int]] = {
 
 
 def _on_air_payload_n_bits(pre_ldpc_n_bits: int, code_rate: CodeRates) -> tuple[int, int, int]:
-    """For a given pre-LDPC payload length, return (n_codewords, k, n).
-
-    For NONE: returns (0, 0, pre_ldpc_n_bits) — caller treats this as passthrough.
-    """
+    """For a given pre-LDPC payload length, return (n_codewords, k, n)."""
     if code_rate == CodeRates.NONE:
         return (0, 0, pre_ldpc_n_bits)
     k, n = _LDPC_BLOCK_PARAMS[code_rate]
@@ -37,28 +34,14 @@ def _on_air_payload_n_bits(pre_ldpc_n_bits: int, code_rate: CodeRates) -> tuple[
     return (n_cw, k, n_cw * n)
 
 
-# Pre-generated random LDPC pad. Padding the LDPC k-message with all zeros
-# produces long runs of identical symbols at the modulator (in PSK8 every
-# 000 triplet maps to the same constellation point), which the Costas/NDA-TED
-# loops can't track through. Random pad keeps the RX loops happy; the receiver
-# strips the pad bits based on pre_ldpc_n_bits so the content is irrelevant.
-_LDPC_PAD_RNG = np.random.default_rng(seed=0xA5A5A5A5)
+# Pre-generated random LDPC padding
+_LDPC_PAD_RNG  = np.random.default_rng(seed=0xA5A5A5A5)
 _LDPC_PAD_BITS = _LDPC_PAD_RNG.integers(0, 2, max(_LDPC_BLOCK_PARAMS.values(), key=lambda kn: kn[0])[0], dtype=np.uint8)
 
-# Bit-level whitener PRBS, XOR'd over the LDPC k-message on TX and undone on
-# RX after ldpc_decode_batch. _LDPC_PAD_BITS only randomises the trailing
-# pad — structured user data (iperf UDP, IP headers, zero-filled tails) hits
-# the same Costas/NDA-TED failure mode on the systematic bits. Scrambling
-# extends the fix to the data bits too: after XOR the systematic stream is
-# uniform random, so LDPC parity is also random-looking, and the modulator
-# never sees the long runs of identical symbols. Sized for the largest
-# possible msg under any current code rate (max n_cw × k ≈ 13k bits at MTU
-# 1500); 65536 leaves headroom for jumbo MTUs without runtime checks.
-_SCRAMBLE_RNG = np.random.default_rng(seed=0xC3C3C3C3)
+# Bit-level whitener PRBS
+_SCRAMBLE_RNG  = np.random.default_rng(seed=0xC3C3C3C3)
 _SCRAMBLE_BITS = _SCRAMBLE_RNG.integers(0, 2, 1 << 16, dtype=np.uint8)
 
-import logging
-logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineConfig:
@@ -70,7 +53,6 @@ class PipelineConfig:
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
     CODING_RATE: CodeRates = CodeRates.FIVE_SIXTH_RATE
     LDPC_MAX_ITER: int = 20
-    PRE_HEADER_GUARD_BITS: int = 0
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
@@ -79,37 +61,22 @@ class PipelineConfig:
         damping_factor=0.7071
     )
 
-    # NDA TED (Rice 2009) — see modules/nda_ted/nda_ted.py.
     NDA_BN_TS: float = 0.006489
     NDA_ZETA: float = 0.7071
-    NDA_L: int = 19              # TED smoothing half-length (window = 2L+1 symbols)
+    NDA_L: int = 19
 
     pulse_shaping: bool = True
-    pilots: bool = False
     costas_loop: bool = True
     nda_ted: bool = True
     interleaving: bool = False
     cfo_correction: bool = True
-    use_golay: bool = False
-    # Two-stage sync: Schmidl-Cox coarse + long-ZC fine (default).
-    # Set False to skip coarse_sync and detect frames via a single full-buffer
-    # cross-correlation against the long ZC.  Cheaper preamble (no short reps),
-    # ~9× more compute on x86, no CFO estimate (Costas must capture residual).
-    # Only safe when CFO is small enough that the long-ZC peak stays sharp.
-    two_stage_sync: bool = False
-    # When True: TX skips software RRC convolution (just zero-inserts),
-    # RX skips software match-filter — both assume the Pluto FPGA's
-    # hardware RRC filter is active between the AD9363 and DMA.
-    hardware_rrc: bool = False
+
 
 class PacketType(IntEnum):
-    """Frame types carried in the 2-bit `frame_type` header field.
-
-    Values fit FrameHeaderConfig.frame_type_bits = 2 (range 0..3).
-    """
+    """Frame types carried in the 2-bit `frame_type` header field."""
     DATA = 0  # carries a TUN payload
     ACK  = 1  # cumulative ACK; seq_num = last in-order DATA seq received
-    NAK  = 2  # reserved
+    NAK  = 2  # raw packets; no arq
     CTRL = 3  # reserved (link control / probe)
 
 
@@ -118,27 +85,22 @@ class Packet:
     """Packet of data to/from TAP/TUN"""
     src_mac: int = -1
     dst_mac: int = -1
-    type: int = -1                                # one of PacketType
+    type:    int = -1
     seq_num: int = -1
-    length: int = -1
+    length:  int = -1
     payload: np.ndarray = field(default_factory=lambda: np.ndarray([]))
-
-    # Per-packet overrides for the TX path. ``None`` falls back to the pipeline
-    # config defaults. ARQ sets these to BPSK + NONE so its control frames are
-    # robust regardless of how the user pipeline is configured.
     mod_scheme: ModulationSchemes | None = None
     coding_rate: CodeRates | None = None
 
-    valid: bool = False
-    err_reason: str = ""
-    sample_start: int = -1   # payload_start within the buffer passed to receive()
-    rx_symbols: np.ndarray | None = field(default=None)  # post-Costas PSK8 symbols (for diagnostics)
+    valid:        bool = False
+    err_reason:   str = ""
+    sample_start: int = -1
+    rx_symbols: np.ndarray | None = field(default=None)  # for diagnostics
 
 class TXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
         self.frame_constructor = FrameConstructor()
-        self.frame_constructor.header_config.use_golay = config.use_golay
 
         # All four modulators always live on the TX pipeline so packets can
         # override the default per-frame (e.g. ARQ pins itself to BPSK).
@@ -156,16 +118,10 @@ class TXPipeline:
 
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
-
         self.guard_syms = np.zeros(config.GUARD_SYMS_LENGTH, dtype=np.complex64)
+
         # sync
         self.sync_syms = generate_preamble(self.config.SYNC_CONFIG)
-
-        # Adding extra known bits before header to figure out phase ambiguity of BPSK header
-        if config.PRE_HEADER_GUARD_BITS > 0:
-            self.pre_header_guard_syms = self.bpsk.bits2symbols(np.array([[0]*config.PRE_HEADER_GUARD_BITS]))
-        else:
-            self.pre_header_guard_syms = np.array([])
 
     def _maybe_ldpc_encode(self, payload_bits: np.ndarray, code_rate: CodeRates) -> np.ndarray:
         """Pad payload to a multiple of k and emit n_cw concatenated codewords."""
@@ -212,18 +168,8 @@ class TXPipeline:
         payload_syms = payload_modulator.bits2symbols(payload_for_mod.reshape(-1, mod_scheme.value+1))
 
         # construct signal
-        tx_syms = np.concatenate([self.guard_syms,self.sync_syms, self.pre_header_guard_syms, header_syms, payload_syms,self.guard_syms])
-
-        # upsample and filter
-        # hardware_rrc=True: FPGA does 4× polyphase interpolation + RRC shaping,
-        # so we send raw baseband symbols (1 sample/symbol) with no upsampling.
-        # The DMA will drain at 1 MHz (symbol rate) rather than 4 MHz; buffer
-        # timing must be calculated in symbols, not samples.
-        # hardware_rrc=False: do full software upsample + RRC convolution.
-        if self.config.hardware_rrc:
-            tx_signal = tx_syms
-        else:
-            tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
+        tx_syms = np.concatenate([self.guard_syms,self.sync_syms, header_syms, payload_syms,self.guard_syms])
+        tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
         return tx_signal
 
 @dataclass
@@ -239,7 +185,6 @@ class RXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
         self.frame_constructor = FrameConstructor()
-        self.frame_constructor.header_config.use_golay = config.use_golay
 
         self.num_taps = 2 * config.SPS * config.SPAN + 1
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
@@ -417,7 +362,7 @@ class RXPipeline:
         # Use header_encoded_n_bits (rounded to even) instead of raw header_total_size
         # so payload_start matches what TX actually emits — the encoder pads odd-length
         # headers up by one bit.
-        header_end = self.frame_constructor.header_encoded_n_bits + self.config.PRE_HEADER_GUARD_BITS
+        header_end = self.frame_constructor.header_encoded_n_bits
 
         if header_end*self.config.SPS > len(buffer):
             msg = "header end is outside of buffer"
@@ -445,16 +390,8 @@ class RXPipeline:
         else:
             header_syms, timing_est = decimate(buffer[:header_end*self.config.SPS], self.config.SPS), [0.0]
 
-        # If guard pilots are present, use them as known BPSK symbols (-1+0j) to compute
-        # a noise-averaged ML phase estimate.  This replaces the Costas seed from fine_timing
-        # and resolves BPSK π ambiguity before the header Costas even starts.
-        # ML: angle( Σ r_k · conj(s_k) ) = angle( Σ r_k · (-1) ) = angle( -mean(guard) )
-        n_guard = self.config.PRE_HEADER_GUARD_BITS
-        if n_guard > 0:
-            current_phase_estimate = np.float32(np.angle(np.mean(-header_syms[:n_guard])))
-
         # costas correction on header symbols only (guard already used for phase estimation)
-        header_only = header_syms[n_guard:header_end]
+        header_only = header_syms[:header_end]
         if self.config.costas_loop:
             header_syms_corr, phase_est = apply_costas_loop(header_only, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
         else:

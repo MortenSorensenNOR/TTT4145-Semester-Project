@@ -97,7 +97,6 @@ struct FrameHeaderConfig {
     int  sequence_number_bits = 4;
     int  coding_rate_bits     = 2;
     int  crc_bits             = 8;
-    bool use_golay            = false;
 
     int header_total_size() const {
         return payload_length_bits + src_bits + dst_bits + frame_type_bits
@@ -375,7 +374,6 @@ PYBIND11_MODULE(frame_constructor_ext, m, py::mod_gil_not_used()) {
         .def_readwrite("sequence_number_bits", &FrameHeaderConfig::sequence_number_bits)
         .def_readwrite("coding_rate_bits",     &FrameHeaderConfig::coding_rate_bits)
         .def_readwrite("crc_bits",             &FrameHeaderConfig::crc_bits)
-        .def_readwrite("use_golay",            &FrameHeaderConfig::use_golay)
         .def("header_total_size",              &FrameHeaderConfig::header_total_size);
 
     py::class_<FrameHeaderConstructor>(m, "FrameHeaderConstructor")

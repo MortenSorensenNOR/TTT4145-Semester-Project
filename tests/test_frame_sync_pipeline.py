@@ -401,7 +401,7 @@ def test_multi_frame_detection(cfo_hz: int, channel: SyncFixture) -> None:
 
 # ---------------------------------------------------------------------------
 # 7. OTA combined stress test  [1][3]
-#    Golay header + phase noise + AGC transient + SRO + ADC clipping
+#    header + phase noise + AGC transient + SRO + ADC clipping
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
