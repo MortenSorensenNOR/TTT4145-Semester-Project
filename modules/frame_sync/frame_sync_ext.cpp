@@ -37,7 +37,7 @@ using f64 = double;
 // single tight C++ pass.  Inputs:
 //   z          : complex64[n_z]  — already convolved (samples ⊛ conj(ref[::-1]))
 //   samples    : complex64[N]    — RX buffer (for sliding |s|² and CFO win)
-//   long_ref   : complex64[n_ref]
+//   preamble_ref   : complex64[n_ref]
 //   threshold, fs, n_ref          — scalars
 //   silent_frac                  — fraction of max sig_energy to call silent
 // Returns parallel arrays (sample_idxs, ncc_peaks, cfo_hats, phase_estimates).
@@ -53,18 +53,18 @@ struct XCorrResult {
 static XCorrResult xcorr_ncc_post(
     py::array_t<c64, py::array::c_style | py::array::forcecast> z_in,
     py::array_t<c64, py::array::c_style | py::array::forcecast> samples_in,
-    py::array_t<c64, py::array::c_style | py::array::forcecast> long_ref_in,
+    py::array_t<c64, py::array::c_style | py::array::forcecast> preamble_ref_in,
     f32 threshold,
     int fs,
     f32 silent_frac)
 {
     const c64* z   = z_in.data();
     const c64* sig = samples_in.data();
-    const c64* ref = long_ref_in.data();
+    const c64* ref = preamble_ref_in.data();
 
     const ssize_t n_z   = z_in.size();
     const ssize_t N     = samples_in.size();
-    const ssize_t n_ref = long_ref_in.size();
+    const ssize_t n_ref = preamble_ref_in.size();
     const ssize_t half  = n_ref / 2;
 
     auto empty = []() -> XCorrResult {
@@ -150,7 +150,7 @@ static XCorrResult xcorr_ncc_post(
         f32     cluster_max    = ncc[above[0]];
         auto emit = [&](ssize_t peak) {
             if (peak + n_ref > N) return;  // window runs off the end
-            // CFO via half-window split: window = samples · conj(long_ref),
+            // CFO via half-window split: window = samples · conj(preamble_ref),
             // p = vdot(window[:half], window[half:n_ref]) → CFO = angle(p)·fs/(π·n_ref)
             f64 p_re = 0.0, p_im = 0.0;
             for (ssize_t k = 0; k < half; ++k) {
@@ -246,7 +246,7 @@ PYBIND11_MODULE(frame_sync_ext, m, py::mod_gil_not_used()) {
         });
 
     m.def("xcorr_ncc_post", &xcorr_ncc_post,
-        py::arg("z"), py::arg("samples"), py::arg("long_ref"),
+        py::arg("z"), py::arg("samples"), py::arg("preamble_ref"),
         py::arg("threshold"), py::arg("fs"),
         py::arg("silent_frac") = 0.05f,
         "Post-FFT NCC + peak finding for full_buffer_xcorr_sync. "

@@ -1,11 +1,10 @@
 """Construct frames with header data, pilots, and error correction information."""
 
-import logging
+import numpy as np
 from dataclasses import dataclass, field
 from enum import Enum
 
-import numpy as np
-
+import logging
 logger = logging.getLogger(__name__)
 
 try:
@@ -22,38 +21,32 @@ except ImportError:
 
 def int_to_bits(n: int, length: int) -> list[int]:
     """Convert an integer to a fixed-width big-endian bit list."""
-    if _USE_EXT:
-        return _ext.int_to_bits(n, length)
     return [(n >> (length - 1 - i)) & 1 for i in range(length)]
 
 
 def _bits_to_int(bits: list[int]) -> int:
     """Convert a bit list to an integer."""
-    if _USE_EXT:
-        return _ext.bits_to_int(bits)
     return int("".join(str(b) for b in bits), 2)
 
 
 class ModulationSchemes(Enum):
     """Supported modulation schemes."""
-    BPSK = 0
-    QPSK = 1
-    PSK8 = 2
+    BPSK  = 0
+    QPSK  = 1
+    PSK8  = 2
     PSK16 = 3
 
-
-DEFAULT_CODING_RATE = 3  # CodeRates.FIVE_SIXTH_RATE.value — kept as int to avoid an import cycle
 
 @dataclass
 class FrameHeader:
     """Frame header with metadata."""
-    length: int  # payload length in bytes
+    length: int
     src: int
     dst: int
     frame_type: int
     mod_scheme: ModulationSchemes
     sequence_number: int
-    coding_rate: int = DEFAULT_CODING_RATE  # 2-bit field carrying CodeRates.value
+    coding_rate: int = 3
     crc: int = field(default=0, compare=False)
     crc_passed: bool = True
 
@@ -301,10 +294,6 @@ class FrameConstructor:
         """Encode data into a frame."""
         if _USE_EXT:
             h, p = self._ext.encode(header._to_ext(), payload.ravel().astype(np.int32))
-            # The C++ encoder allocates header_length bits (rounded up to even)
-            # but only writes header_total_size bits — any odd-length header
-            # leaves the trailing slot uninitialized.  Zero-fill so it doesn't
-            # blow up bits2symbols downstream.
             raw_bits = self.header_config.header_total_size
             if raw_bits < len(h):
                 h[raw_bits:] = 0
@@ -340,7 +329,6 @@ class FrameConstructor:
         payload_encoded: np.ndarray,
         *,
         soft: bool = False,
-        channel_coding: bool = True,
         interleaving: bool = True,
     ) -> np.ndarray:
         """Decode payload and verify CRC-16."""

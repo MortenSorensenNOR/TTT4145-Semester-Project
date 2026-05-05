@@ -25,8 +25,8 @@ from modules.frame_constructor.frame_constructor import (
 )
 from modules.frame_sync.frame_sync import (
     SynchronizerConfig,
-    build_long_ref,
-    build_long_ref_rev,
+    build_preamble_ref,
+    build_preamble_ref_rev,
     full_buffer_xcorr_sync,
     generate_preamble,
 )
@@ -47,14 +47,12 @@ SYNC_CFG: SynchronizerConfig = _cfg.SYNC_CONFIG
 
 NUM_TAPS: int = 2 * SPS * SPAN + 1
 
-# CFO acquisition range for the single-stage long-ZC NCC detector.
+# CFO acquisition range for the NCC detector.
 # Unambiguous CFO range from the half-window phase-difference estimator is
-# fs / (2 * N) where N = long_preamble_nsym * SPS.  The NCC peak also rolls
-# off as sinc²(cfo·N/fs), so this same bound is also where detection itself
+# fs / (2 * N) where N = preamble_nsym * SPS.  The NCC peak also rolls off
+# as sinc²(cfo·N/fs), so this same bound is also where detection itself
 # fails — they coincide.
-SINGLE_STAGE_CFO_RANGE_HZ: float = float(SAMPLE_RATE) / (
-    2 * SYNC_CFG.long_preamble_nsym * SPS
-)
+CFO_RANGE_HZ: float = float(SAMPLE_RATE) / (2 * SYNC_CFG.preamble_nsym * SPS)
 
 # ---------------------------------------------------------------------------
 # Test scenario constants
@@ -70,9 +68,9 @@ N_TRIALS: int = 30
 N_FP_TRIALS: int = 10
 
 # --- pass/fail thresholds ---
-# NCC gate: matches the single_stage_ncc_threshold used by the production
-# RXPipeline.  Below this the half-window CFO estimator is unreliable too.
-MIN_NCC: float = float(SYNC_CFG.single_stage_ncc_threshold)
+# NCC gate: matches the ncc_threshold used by the production RXPipeline.
+# Below this the half-window CFO estimator is unreliable too.
+MIN_NCC: float = float(SYNC_CFG.ncc_threshold)
 MIN_DETECTION_RATE: float = 0.90
 MAX_CFO_ERROR_HZ: float = 2_000.0
 MIN_ALIGNED_RATE: float = 0.95
@@ -136,8 +134,8 @@ class SyncFixture:
     """Pre-computed objects shared across tests at the same SNR."""
 
     rrc_taps:     np.ndarray
-    long_ref:     np.ndarray
-    long_ref_rev: np.ndarray
+    preamble_ref:     np.ndarray
+    preamble_ref_rev: np.ndarray
     group_delay:  int
     snr_db:       float
     sig_power:    float
@@ -148,14 +146,14 @@ class SyncFixture:
 def channel(request: pytest.FixtureRequest) -> SyncFixture:
     """Build the shared channel fixture for one SNR level."""
     snr_db: float = request.param
-    rrc_taps  = rrc_filter(SPS, RRC_ALPHA, NUM_TAPS)
-    long_ref  = build_long_ref(SYNC_CFG, SPS, rrc_taps)
-    preamble  = generate_preamble(SYNC_CFG)
-    sig_power = float(np.mean(np.abs(upsample(preamble, SPS, rrc_taps)) ** 2))
+    rrc_taps     = rrc_filter(SPS, RRC_ALPHA, NUM_TAPS)
+    preamble_ref = build_preamble_ref(SYNC_CFG, SPS, rrc_taps)
+    preamble     = generate_preamble(SYNC_CFG)
+    sig_power    = float(np.mean(np.abs(upsample(preamble, SPS, rrc_taps)) ** 2))
     return SyncFixture(
-        rrc_taps     = rrc_taps,
-        long_ref     = long_ref,
-        long_ref_rev = build_long_ref_rev(long_ref),
+        rrc_taps         = rrc_taps,
+        preamble_ref     = preamble_ref,
+        preamble_ref_rev = build_preamble_ref_rev(preamble_ref),
         group_delay  = (NUM_TAPS - 1) // 2,
         snr_db       = snr_db,
         sig_power    = sig_power,
@@ -203,7 +201,7 @@ def _run_sync(rx: np.ndarray, ch: SyncFixture):
     """
     rx_filtered  = match_filter(rx, ch.rrc_taps)
     fine, cfos   = full_buffer_xcorr_sync(
-        rx_filtered, ch.long_ref, ch.long_ref_rev,
+        rx_filtered, ch.preamble_ref, ch.preamble_ref_rev,
         MIN_NCC, SAMPLE_RATE,
     )
     if fine.sample_idxs.size == 0:
@@ -212,17 +210,12 @@ def _run_sync(rx: np.ndarray, ch: SyncFixture):
 
 
 def _expected_fine_sample() -> int:
-    """Sample index of the long-preamble start after match-filtering.
+    """Sample index of the preamble start after match-filtering.
 
     TX and RX RRC group delays cancel in the matched-filtered stream, so the
-    long preamble starts at SAMPLE_OFFSET + (short_total_syms * SPS).
+    preamble starts at SAMPLE_OFFSET.
     """
-    return (
-        SAMPLE_OFFSET
-        + SYNC_CFG.short_preamble_nsym
-        * SYNC_CFG.short_preamble_nreps
-        * SPS
-    )
+    return SAMPLE_OFFSET
 
 # ---------------------------------------------------------------------------
 # 1. Detection rate
@@ -231,7 +224,7 @@ def _expected_fine_sample() -> int:
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
 def test_detection_rate(cfo_hz: int, channel: SyncFixture) -> None:
     """>=90% of frames are detected over N_TRIALS Monte-Carlo trials."""
-    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
+    if cfo_hz > CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     detects = 0
@@ -253,7 +246,7 @@ def test_detection_rate(cfo_hz: int, channel: SyncFixture) -> None:
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
 def test_cfo_accuracy(cfo_hz: int, channel: SyncFixture) -> None:
     """Median CFO estimation error < 2 kHz over N_TRIALS trials."""
-    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
+    if cfo_hz > CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     errors: list[float] = []
@@ -279,7 +272,7 @@ def test_cfo_accuracy(cfo_hz: int, channel: SyncFixture) -> None:
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
 def test_timing_alignment(cfo_hz: int, channel: SyncFixture) -> None:
     """Fine timing lands on the correct sample grid in >=95% of detections."""
-    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
+    if cfo_hz > CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     expected_fine = _expected_fine_sample()
@@ -306,7 +299,7 @@ def test_timing_alignment(cfo_hz: int, channel: SyncFixture) -> None:
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
 def test_peak_ncc(cfo_hz: int, channel: SyncFixture) -> None:
     """Median normalized cross-correlation > MIN_PEAK_NCC at the detected peak."""
-    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
+    if cfo_hz > CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     nccs: list[float] = []
@@ -334,7 +327,7 @@ def test_false_positive_rejection(channel: SyncFixture) -> None:
     noise_len = (
         SAMPLE_OFFSET
         + N_PAYLOAD_SYMBOLS * SPS
-        + len(channel.long_ref)
+        + len(channel.preamble_ref)
     )
     for s in range(N_FP_TRIALS):
         rng = np.random.default_rng(10_000 + s)
@@ -343,7 +336,7 @@ def test_false_positive_rejection(channel: SyncFixture) -> None:
         ).astype(np.complex64)
         filtered = match_filter(noise, channel.rrc_taps)
         fine, _  = full_buffer_xcorr_sync(
-            filtered, channel.long_ref, channel.long_ref_rev,
+            filtered, channel.preamble_ref, channel.preamble_ref_rev,
             MIN_NCC, SAMPLE_RATE,
         )
         assert fine.sample_idxs.size == 0, (
@@ -362,7 +355,7 @@ def test_multi_frame_detection(cfo_hz: int, channel: SyncFixture) -> None:
     Uses Monte-Carlo rather than a single fixed seed so a single unlucky
     noise realisation cannot cause a spurious failure at low SNR.
     """
-    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
+    if cfo_hz > CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     both_detected = 0
@@ -381,7 +374,7 @@ def test_multi_frame_detection(cfo_hz: int, channel: SyncFixture) -> None:
         buf          = _channel_model(channel, cfo_hz, seed).apply(tx)
         buf_filtered = match_filter(buf, channel.rrc_taps)
         fine, cfos   = full_buffer_xcorr_sync(
-            buf_filtered, channel.long_ref, channel.long_ref_rev,
+            buf_filtered, channel.preamble_ref, channel.preamble_ref_rev,
             MIN_NCC, SAMPLE_RATE,
         )
 
@@ -406,7 +399,7 @@ def test_multi_frame_detection(cfo_hz: int, channel: SyncFixture) -> None:
 @pytest.mark.parametrize("cfo_hz", CFO_VALUES_HZ)
 def test_ota_combined(cfo_hz: int, channel: SyncFixture) -> None:
     """Full over-the-air impairments: phase noise, AGC, SRO, clipping."""
-    if cfo_hz > SINGLE_STAGE_CFO_RANGE_HZ * 0.85:
+    if cfo_hz > CFO_RANGE_HZ * 0.85:
         pytest.xfail(f"CFO {cfo_hz / 1e3:.0f} kHz exceeds acquisition range")
 
     expected_fine = _expected_fine_sample()
@@ -490,7 +483,7 @@ def test_phase_estimate_at_payload(
     )
 
     # sample_idxs is in the filtered domain; add group_delay for physical time
-    payload_pos    = fine.sample_idxs[0] + len(channel.long_ref) + channel.group_delay
+    payload_pos    = fine.sample_idxs[0] + len(channel.preamble_ref) + channel.group_delay
     expected_phase = initial_phase + 2 * np.pi * cfo_hz * payload_pos / SAMPLE_RATE
     err_rad        = abs(np.angle(np.exp(1j * (fine.phase_estimates[0] - expected_phase))))
 
@@ -509,7 +502,7 @@ def test_spurious_detection_rate(channel: SyncFixture) -> None:
        must be sidelobes / payload bits accidentally correlating with the ZC).
     Run with pytest -s to see output.
     """
-    noise_len = SAMPLE_OFFSET + N_PAYLOAD_SYMBOLS * SPS + len(channel.long_ref)
+    noise_len = SAMPLE_OFFSET + N_PAYLOAD_SYMBOLS * SPS + len(channel.preamble_ref)
 
     # --- 1. Noise-only ---
     noise_spurious = 0
@@ -520,7 +513,7 @@ def test_spurious_detection_rate(channel: SyncFixture) -> None:
         ).astype(np.complex64)
         fine, _ = full_buffer_xcorr_sync(
             match_filter(noise, channel.rrc_taps),
-            channel.long_ref, channel.long_ref_rev,
+            channel.preamble_ref, channel.preamble_ref_rev,
             MIN_NCC, SAMPLE_RATE,
         )
         noise_spurious += fine.sample_idxs.size
@@ -544,7 +537,7 @@ def test_spurious_detection_rate(channel: SyncFixture) -> None:
             channel.rrc_taps,
         )
         fine, cfos = full_buffer_xcorr_sync(
-            buf_filtered, channel.long_ref, channel.long_ref_rev,
+            buf_filtered, channel.preamble_ref, channel.preamble_ref_rev,
             MIN_NCC, SAMPLE_RATE,
         )
 
@@ -586,7 +579,7 @@ def test_false_positive_colored_noise(lo_hz: int, channel: SyncFixture) -> None:
     noise_len = (
         SAMPLE_OFFSET
         + N_PAYLOAD_SYMBOLS * SPS
-        + len(channel.long_ref)
+        + len(channel.preamble_ref)
     )
     lo_amp = channel.noise_scale * 10 ** (_LO_EXCESS_DB / 20)
     t = np.arange(noise_len, dtype=np.float32) / float(SAMPLE_RATE)
@@ -601,7 +594,7 @@ def test_false_positive_colored_noise(lo_hz: int, channel: SyncFixture) -> None:
 
         filtered = match_filter(colored, channel.rrc_taps)
         fine, _  = full_buffer_xcorr_sync(
-            filtered, channel.long_ref, channel.long_ref_rev,
+            filtered, channel.preamble_ref, channel.preamble_ref_rev,
             MIN_NCC, SAMPLE_RATE,
         )
         assert fine.sample_idxs.size == 0, (
@@ -663,7 +656,7 @@ def test_false_positive_hw_matched_noise(channel: SyncFixture) -> None:
 
     rx_pipe  = RXPipeline(PipelineConfig())
     # ~10 frames worth of samples — mirrors the hardware capture length
-    noise_len = 10 * (_cfg.GUARD_SYMS_LENGTH * SPS + len(channel.long_ref) + N_PAYLOAD_SYMBOLS * SPS)
+    noise_len = 10 * (_cfg.GUARD_SYMS_LENGTH * SPS + len(channel.preamble_ref) + N_PAYLOAD_SYMBOLS * SPS)
     noise_len = int(2 ** np.ceil(np.log2(noise_len)))  # round to power-of-2
 
     for seed in range(_HW_NOISE_TRIALS):

@@ -48,7 +48,6 @@ def rrc_filter(sps: int, alpha: np.float32, num_taps: int) -> np.ndarray:
         ],
     )
 
-    # h_norm = (h / np.sqrt(np.sum(h**2))) 
     h_norm = h / np.max(h)
     return h_norm.astype(np.float32)
 
@@ -93,9 +92,3 @@ def match_filter(signal: np.ndarray, rrc_taps: np.ndarray) -> np.ndarray:
 def decimate(signal: np.ndarray, sps: int) -> np.ndarray:
     n_symbols = len(signal) // sps
     return signal[:n_symbols * sps : sps]
-
-
-if __name__ == "__main__":
-    taps = rrc_filter(8, np.float32(0.25), 2 * 8 * 8 + 1)
-    plt.plot(taps)
-    plt.savefig("rrc.png")

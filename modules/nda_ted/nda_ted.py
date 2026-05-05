@@ -1,26 +1,15 @@
-"""NDA symbol timing synchroniser.
+"""
+NDA symbol timing synchroniser.
 
 Non-Data-Aided symbol timing recovery using the algorithm from:
     M. Rice, "Digital Communications: A Discrete-Time Approach",
     Prentice Hall, 2009.
-
-Uses a Farrow cubic interpolator and a modulo-1 counter loop with
-a smoothed NDA timing error detector.
-
-Build the C++ extension (recommended) with:
-    uv run python setup.py build_ext --inplace
-
-The pure-Python fallback is used automatically if the extension is not available.
 """
 
 import logging
 import numpy as np
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Load pybind11 extension
-# ---------------------------------------------------------------------------
 
 try:
     from modules.nda_ted import nda_ted_ext as _ext
@@ -31,10 +20,6 @@ except ImportError:
         "nda_ted_ext not found — falling back to pure-Python implementation. "
         "Build it with: uv run python setup.py build_ext --inplace"
     )
-
-# ---------------------------------------------------------------------------
-# Pure-Python fallback — direct port of Rice NDA_symb_sync
-# ---------------------------------------------------------------------------
 
 def _nda_py(z: np.ndarray, Ns: int, L: int, BnTs: float, zeta: float) -> np.ndarray:
     K0 = -1.0
@@ -103,10 +88,6 @@ def _nda_py(z: np.ndarray, Ns: int, L: int, BnTs: float, zeta: float) -> np.ndar
     zz   /= np.std(zz) if np.std(zz) > 1e-10 else 1.0
     return zz.astype(np.complex64)
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def apply_nda_ted(
     signal: np.ndarray,

@@ -192,36 +192,16 @@ class RXPipeline:
         self.psk8  = PSK8()
         self.psk16 = PSK16()
 
-        # generate the known long preamble for matched filtering
-        self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
-        self.long_ref_rev = build_long_ref_rev(self.long_ref)
+        # generate the known preamble for matched filtering
+        self.preamble_ref = build_preamble_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
+        self.preamble_ref_rev = build_preamble_ref_rev(self.preamble_ref)
 
-        # Per-call diagnostic counters, refreshed at the start of each receive().
-        # `last_payload_failures` counts detections where the header decoded but
-        # the payload raised (CRC-16 mismatch, LDPC failure, etc.) — these are
-        # real packet losses that callers may want to surface in stats.
-        # `last_tail_cutoffs` counts IndexErrors where the frame extended past
-        # the buffer; the receive() loop breaks on those so the same detection
-        # gets retried on the next iteration with more samples appended, so
-        # callers should NOT treat them as drops.
+        # diagnostics
         self.last_payload_failures: int = 0
         self.last_tail_cutoffs:     int = 0
 
     def receive(self, buffer: np.ndarray, search_from: int = 0) -> tuple[list[Packet], int]:
-        """Detect and decode all frames in buffer.
-
-        search_from: sample offset into buffer where detection begins.  Samples
-        before this index are ignored, which prevents re-detecting frames that
-        were already decoded in a previous sliding-window iteration.
-
-        Returns (packets, max_detection_sample) where max_detection_sample is the
-        absolute position of the last detection attempted (success or failure).
-        Callers should advance search_from to at least this position to avoid
-        re-detecting packets that already failed decode.
-        """
         search_buf = buffer[search_from:]
-        # RX always uses software matched filter; FPGA no longer has an RRC
-        # filter on the RX path (it was removed to save DSP resources).
         filtered_buffer = match_filter(search_buf, self.rrc_taps)
         detections = self.detect(filtered_buffer)
         if not detections:
@@ -230,9 +210,9 @@ class RXPipeline:
         logger.debug(f"Detected {len(detections)} packets\n\t Cfo's: {[float(det.cfo_estimate) for det in detections]}'")
 
         packets = []
-        n_payload_failures = 0   # header decoded but payload raised — real losses
-        n_tail_cutoffs     = 0   # IndexError: frame past buffer end — will retry
-        max_detection_sample = search_from  # track furthest detection attempted
+        n_payload_failures = 0 
+        n_tail_cutoffs     = 0
+        max_detection_sample = search_from
         for det in detections:
             abs_payload_start = search_from + det.payload_start
             rx_syms = filtered_buffer[det.payload_start:]
@@ -242,14 +222,6 @@ class RXPipeline:
                 packets.append(decoded_packet)
                 max_detection_sample = max(max_detection_sample, abs_payload_start)
             except IndexError as e:
-                # Tail cutoff: this frame extends beyond the buffer. Stop
-                # processing remaining detections so they stay eligible for
-                # retry on the next iteration (once more data is appended).
-                # Without this break, a shorter frame detected at a higher
-                # position could still decode and advance max_det past this
-                # cutoff — permanently losing it. Matters for variable-length
-                # payloads; with fixed lengths every later detection would
-                # also cut off, so the break is a no-op.
                 n_tail_cutoffs += 1
                 logger.debug(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
                 break
@@ -269,14 +241,13 @@ class RXPipeline:
         return packets, max_detection_sample
 
     def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:
-        """Detect frames in a match-filtered buffer via full-buffer xcorr against
-        the long-ZC reference."""
+        """Detect frames in a match-filtered buffer via full-buffer xcorr against the long-ZC reference."""
         cfg = self.config.SYNC_CONFIG
 
         try:
             fine, cfo_hats = full_buffer_xcorr_sync(
-                filtered_buffer, self.long_ref, self.long_ref_rev,
-                float(cfg.single_stage_ncc_threshold), self.config.SAMPLE_RATE,
+                filtered_buffer, self.preamble_ref, self.preamble_ref_rev,
+                float(cfg.ncc_threshold), self.config.SAMPLE_RATE,
             )
             if fine.sample_idxs.size == 0:
                 return []
@@ -284,7 +255,7 @@ class RXPipeline:
             logger.info(e)
             return []
 
-        payload_starts = fine.sample_idxs + len(self.long_ref)
+        payload_starts = fine.sample_idxs + len(self.preamble_ref)
         return [
             DetectionResult(
                 payload_start=int(payload_starts[i]),

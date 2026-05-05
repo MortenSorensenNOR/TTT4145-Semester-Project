@@ -1,43 +1,257 @@
-"""LDPC encoding/decoding using IEEE 802.11 base matrices."""
+"""LDPC encoding/decoding using IEEE 802.11 base matrices.
 
-import logging
-from dataclasses import dataclass
-from enum import Enum
-
-logger = logging.getLogger(__name__)
-
-try:
-    import numba
-
-    _njit = numba.njit(cache=True)
-except ImportError:
-
-    def _njit[F](f: F) -> F:
-        """Identity fallback when numba is not installed."""
-        return f
-
+The hot paths are the C++ extension (modules.ldpc.ldpc_ext); this module
+just builds the structures the extension needs (encoder packed tables,
+decoder edge lists) and caches them per LDPCConfig.
+"""
 
 import numpy as np
-from scipy import sparse
+from dataclasses import dataclass
+from .channel_coding import CodeRates
+
+import logging
+logger = logging.getLogger(__name__)
 
 try:
     from modules.ldpc import ldpc_ext as _ext
     logger.info("Loaded ldpc_ext pybind11 C++ extension.")
-except ImportError:
-    _ext = None
-    logger.warning(
-        "ldpc_ext not found — falling back to pure-Python implementation. "
-        "Build it with: uv run python setup.py build_ext --inplace"
+except ImportError as e:
+    msg = "ldpc_ext C++ extension is required. Build it with: uv sync --reinstall"
+    raise RuntimeError(msg) from e
+
+
+@dataclass(frozen=True)
+class LDPCConfig:
+    """Configuration for LDPC encoding/decoding"""
+
+    k: int
+    code_rate: CodeRates
+
+    @property
+    def n(self) -> int:
+        num, denom = self.code_rate.rate_fraction
+        n = (self.k * denom) // num
+        if n not in (648, 1296, 1944):
+            msg = f"Invalid k={self.k} for {self.code_rate}: computed n={n} is not a valid block length (648, 1296, or 1944)."
+            raise ValueError(msg)
+        return n
+
+    @property
+    def z(self) -> int:
+        """Circulant size derived from n"""
+        return {648: 27, 1296: 54, 1944: 81}[self.n]
+
+
+# Per-config caches for derived structures.
+_encoding_cache: dict[LDPCConfig, tuple[np.ndarray, np.ndarray]] = {}
+_encoder_tables_cache: dict[LDPCConfig, tuple] = {}
+_decode_cache: dict[LDPCConfig, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+
+
+def ldpc_clear_cache() -> None:
+    """Clear all cached LDPC structures"""
+    _encoding_cache.clear()
+    _encoder_tables_cache.clear()
+    _decode_cache.clear()
+
+
+def interleave(bits: np.ndarray, n: int) -> np.ndarray:
+    """Randomly permute bits using a seed derived from the codeword length.
+
+    TX and RX produce identical permutations from n alone -- no signaling needed.
+    """
+    rng = np.random.default_rng(seed=n)
+    perm = rng.permutation(len(bits))
+    return bits[perm]
+
+
+def deinterleave(bits: np.ndarray, n: int) -> np.ndarray:
+    """Inverse of interleave(): restore original bit order."""
+    rng = np.random.default_rng(seed=n)
+    perm = rng.permutation(len(bits))
+    out = np.empty_like(bits)
+    out[perm] = bits
+    return out
+
+
+def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray:
+    """Encode a k-bit message to an n-bit codeword"""
+    if len(message) != config.k:
+        msg = f"Message length {len(message)} != expected {config.k}"
+        raise ValueError(msg)
+    msg_u8 = np.ascontiguousarray(message, dtype=np.uint8)
+    h_s_packed, h_p_inv_cols, _k, n = _get_encoder_tables(config)
+    return _ext.encode(msg_u8, h_s_packed, h_p_inv_cols, n)
+
+
+def ldpc_encode_batch(messages: np.ndarray, config: LDPCConfig) -> np.ndarray:
+    """Encode n_cw messages in a single C++ call"""
+    flat = np.ascontiguousarray(messages, dtype=np.uint8).ravel()
+    if len(flat) % config.k != 0:
+        msg = f"messages length {len(flat)} not a multiple of k={config.k}"
+        raise ValueError(msg)
+    n_cw = len(flat) // config.k
+    h_s_packed, h_p_inv_cols, _k, n = _get_encoder_tables(config)
+    return _ext.encode_batch(flat, h_s_packed, h_p_inv_cols, n, n_cw)
+
+
+def ldpc_decode_batch(
+    llrs: np.ndarray,
+    config: LDPCConfig,
+    max_iterations: int = 50,
+    alpha: float = 0.75,
+) -> np.ndarray:
+    """Decode n_cw concatenated codewords in a single C++ cal."""
+    flat = np.ascontiguousarray(llrs, dtype=np.float32).ravel()
+    if flat.size % config.n != 0:
+        msg = f"llrs length {flat.size} not a multiple of n={config.n}"
+        raise ValueError(msg)
+    n_cw = flat.size // config.n
+    edge_var, check_order, check_bounds = _get_decode_structures(config)
+    return _ext.decode_batch(
+        flat, edge_var, check_order, check_bounds,
+        int(config.n), int(config.k), int(n_cw),
+        int(max_iterations), float(alpha),
     )
 
-# Minimum number of edges connected to a check node for meaningful BP update
-MIN_CHECK_DEGREE = 2
 
-from .channel_coding import CodeRates
+def _get_encoder_tables(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray, int, int]:
+    if config in _encoder_tables_cache:
+        return _encoder_tables_cache[config]
+
+    _, h_permuted = _get_encoding_structures(config)
+    m, n = h_permuted.shape
+    k = n - m
+
+    h_s = (h_permuted[:, :k] & 1).astype(np.uint8)
+    h_p = (h_permuted[:, k:] & 1).astype(np.uint8)
+    h_p_inv = _gf2_inverse(h_p)
+
+    result = (
+        _pack_bits_rows(h_s),
+        _pack_bits_rows(h_p_inv.T),
+        int(k), int(n),
+    )
+    _encoder_tables_cache[config] = result
+    return result
 
 
-# Base matrices for 802.11 LDPC codes
-# Source: IEEE Std 802.11-2020, Annex F, Tables F-1 through F-3
+def _get_decode_structures(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build the edge-list view of H that the BP decoder consumes"""
+    if config in _decode_cache:
+        return _decode_cache[config]
+
+    _, h_permuted = _get_encoding_structures(config)
+    num_checks = h_permuted.shape[0]
+
+    rows, cols = np.nonzero(h_permuted)
+    check_order = np.argsort(rows).astype(np.int64)
+    check_bounds = np.searchsorted(rows[check_order], np.arange(num_checks + 1)).astype(np.int64)
+    edge_var = cols.astype(np.int64)
+
+    result = (edge_var, check_order, check_bounds)
+    _decode_cache[config] = result
+    return result
+
+
+def _get_encoding_structures(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray]:
+    """Compute (G, H_permuted) from the 802.11 base matrix; cached"""
+    if config in _encoding_cache:
+        return _encoding_cache[config]
+
+    h_permuted, g_transposed = _coding_matrix_systematic(_expand_h(config))
+    _encoding_cache[config] = (g_transposed.T, h_permuted)
+    return _encoding_cache[config]
+
+
+def _expand_h(config: LDPCConfig) -> np.ndarray:
+    """Expand the base matrix into the full H matrix"""
+    n, z = config.n, config.z
+    h_base = get_ldpc_base_matrix(config.code_rate, n)
+    num_block_rows, num_block_cols = h_base.shape
+
+    h_mat = np.zeros((num_block_rows * z, num_block_cols * z), dtype=int)
+    bi, bj = np.nonzero(h_base != -1)
+    shifts = h_base[bi, bj]
+
+    idx = np.arange(z)
+    rows = (bi[:, None] * z + idx[None, :]).ravel()
+    cols = (bj[:, None] * z + (idx[None, :] + shifts[:, None]) % z).ravel()
+    h_mat[rows, cols] = 1
+    return h_mat
+
+
+def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """GF(2) Gaussian elimination producing systematic generator and parity-check matrices"""
+    m, n = h.shape
+    k = n - m
+    work = np.array(h, dtype=int) % 2
+    col_perm = np.arange(n)
+
+    for r in range(m):
+        target_col = k + r
+        found_row, found_col = _find_pivot(work, r, target_col, n, m)
+        if found_row < 0:
+            break
+        if found_row != r:
+            work[[r, found_row]] = work[[found_row, r]]
+        if found_col != target_col:
+            work[:, [target_col, found_col]] = work[:, [found_col, target_col]]
+            col_perm[[target_col, found_col]] = col_perm[[found_col, target_col]]
+        for row in range(m):
+            if row != r and work[row, target_col]:
+                work[row] ^= work[r]
+
+    g = np.hstack([np.eye(k, dtype=int), work[:, :k].T])
+    return h[:, col_perm], g.T
+
+
+def _find_pivot(work: np.ndarray, r: int, target_col: int, n: int, m: int) -> tuple[int, int]:
+    """Find a pivot row and column for one Gaussian-elimination step"""
+    for c in list(range(target_col, n)) + list(range(r, target_col)):
+        for row in range(r, m):
+            if work[row, c]:
+                return row, c
+    return -1, -1
+
+
+def _gf2_inverse(M: np.ndarray) -> np.ndarray:
+    """Invert an n x n binary matrix over GF(2). Raises if singular"""
+    n = M.shape[0]
+    if M.shape != (n, n):
+        msg = f"Matrix must be square, got {M.shape}"
+        raise ValueError(msg)
+    A = np.hstack([np.asarray(M, dtype=np.uint8) % 2, np.eye(n, dtype=np.uint8)])
+    for r in range(n):
+        if not A[r, r]:
+            for rr in range(r + 1, n):
+                if A[rr, r]:
+                    A[[r, rr]] = A[[rr, r]]
+                    break
+            else:
+                msg = "Matrix is singular over GF(2)"
+                raise ValueError(msg)
+        for rr in range(n):
+            if rr != r and A[rr, r]:
+                A[rr] ^= A[r]
+    return A[:, n:]
+
+
+def _pack_bits_rows(bits: np.ndarray) -> np.ndarray:
+    """Pack a (R, C) {0,1} matrix into uint64 words (LSB-first along axis 1)"""
+    R, C = bits.shape
+    n_words = (C + 63) // 64
+    pad = n_words * 64 - C
+    if pad:
+        bits = np.hstack([bits, np.zeros((R, pad), dtype=bits.dtype)])
+    bits = bits.astype(np.uint64, copy=False)
+    bit_pos = np.arange(64, dtype=np.uint64)
+    return (bits.reshape(R, n_words, 64) << bit_pos).sum(axis=2).astype(np.uint64)
+
+
+# ---------------------------------------------------------------------------
+# 802.11 LDPC base matrices (IEEE Std 802.11-2020, Annex F, Tables F-1..F-3).
+# ---------------------------------------------------------------------------
 
 # n=648, Z=27
 _N648_R23 = np.array(
@@ -152,7 +366,7 @@ _N1944_R56 = np.array(
 
 
 def get_ldpc_base_matrix(code_rate: CodeRates, n: int) -> np.ndarray:
-    """Return the base matrix for the given code rate and block length."""
+    """Return the 802.11 base matrix for the given code rate and block length."""
     matrices = {
         648: {
             CodeRates.TWO_THIRDS_RATE: _N648_R23,
@@ -177,457 +391,3 @@ def get_ldpc_base_matrix(code_rate: CodeRates, n: int) -> np.ndarray:
         msg = f"Unsupported code rate {code_rate} for n={n}."
         raise ValueError(msg)
     return matrices[n][code_rate]
-
-
-@dataclass(frozen=True)
-class LDPCConfig:
-    """Configuration for LDPC encoding/decoding.
-
-    Only k (message length) and code_rate are required - n and Z are derived.
-    Made frozen (immutable) so it can be used as a cache key.
-    """
-
-    k: int  # message length (payload bits)
-    code_rate: CodeRates
-
-    @property
-    def n(self) -> int:
-        """Codeword length derived from k and code_rate."""
-        num, denom = self.code_rate.rate_fraction
-        n = (self.k * denom) // num
-        if n not in (648, 1296, 1944):
-            msg = (
-                f"Invalid k={self.k} for {self.code_rate}: computed n={n} "
-                f"is not a valid block length (648, 1296, or 1944)."
-            )
-            raise ValueError(
-                msg,
-            )
-        return n
-
-    @property
-    def z(self) -> int:
-        """Circulant size derived from n."""
-        params = {648: 27, 1296: 54, 1944: 81}
-        return params[self.n]
-
-
-# ---------------------------------------------------------------------------
-# LDPC module-level caches
-# ---------------------------------------------------------------------------
-_h_cache: dict[LDPCConfig, np.ndarray] = {}
-_encoding_cache: dict[LDPCConfig, tuple[np.ndarray, np.ndarray]] = {}
-_decode_cache: dict[LDPCConfig, tuple[sparse.csr_matrix, int, int, np.ndarray, np.ndarray, np.ndarray]] = {}
-# Per-config encoder tables (see _get_encoder_tables).
-_encoder_tables_cache: dict[LDPCConfig, tuple] = {}
-
-
-# ---------------------------------------------------------------------------
-# LDPC public API
-# ---------------------------------------------------------------------------
-
-
-def interleave(bits: np.ndarray, n: int) -> np.ndarray:
-    """Randomly permute bits using a seed derived from the codeword length.
-
-    TX and RX produce identical permutations from n alone -- no signaling needed.
-    """
-    rng = np.random.default_rng(seed=n)
-    perm = rng.permutation(len(bits))
-    return bits[perm]
-
-
-def deinterleave(bits: np.ndarray, n: int) -> np.ndarray:
-    """Inverse of interleave(): restore original bit order."""
-    rng = np.random.default_rng(seed=n)
-    perm = rng.permutation(len(bits))
-    out = np.empty_like(bits)
-    out[perm] = bits
-    return out
-
-
-def ldpc_get_supported_payload_lengths(code_rate: CodeRates = CodeRates.FIVE_SIXTH_RATE) -> np.ndarray:
-    """Return supported message lengths (k) for LDPC with the given code rate."""
-    valid_n = [648, 1296, 1944]
-    num, denom = code_rate.rate_fraction
-    return np.array([n * num // denom for n in valid_n])
-
-
-def ldpc_get_h_matrix(config: LDPCConfig) -> np.ndarray:
-    """Get (or compute and cache) the full H parity-check matrix."""
-    if config not in _h_cache:
-        _h_cache[config] = _expand_h(config)
-    return _h_cache[config]
-
-
-def ldpc_clear_cache() -> None:
-    """Clear all cached LDPC structures."""
-    _h_cache.clear()
-    _encoding_cache.clear()
-    _decode_cache.clear()
-    _encoder_tables_cache.clear()
-
-
-def _pack_bits_rows(bits: np.ndarray) -> np.ndarray:
-    """Pack a (R, C) {0,1} matrix into uint64 words (LSB-first along axis 1).
-
-    Returns shape (R, ceil(C/64)).
-    """
-    R, C = bits.shape
-    n_words = (C + 63) // 64
-    pad = n_words * 64 - C
-    if pad:
-        bits = np.hstack([bits, np.zeros((R, pad), dtype=bits.dtype)])
-    bits = bits.astype(np.uint64, copy=False)
-    bit_pos = np.arange(64, dtype=np.uint64)
-    return (bits.reshape(R, n_words, 64) << bit_pos).sum(axis=2).astype(np.uint64)
-
-
-def _gf2_inverse(M: np.ndarray) -> np.ndarray:
-    """Invert an n×n binary matrix over GF(2). Raises if not invertible."""
-    n = M.shape[0]
-    if M.shape != (n, n):
-        msg = f"Matrix must be square, got {M.shape}"
-        raise ValueError(msg)
-    A = np.hstack([np.asarray(M, dtype=np.uint8) % 2, np.eye(n, dtype=np.uint8)])
-    for r in range(n):
-        if not A[r, r]:
-            for rr in range(r + 1, n):
-                if A[rr, r]:
-                    A[[r, rr]] = A[[rr, r]]
-                    break
-            else:
-                msg = "Matrix is singular over GF(2)"
-                raise ValueError(msg)
-        for rr in range(n):
-            if rr != r and A[rr, r]:
-                A[rr] ^= A[r]
-    return A[:, n:]
-
-
-def _get_encoder_tables(config: LDPCConfig) -> tuple:
-    """Build (and cache) encoder tables: structured H_p^{-1}-based encoder.
-
-    Returns a tuple compatible with the C++ encode_struct entry point:
-        (h_s_packed, h_p_inv_cols, k, n)
-    where:
-      - h_s_packed: uint64[m, ceil(k/64)] — H_s rows (h_permuted[:, :k]) bit-packed
-      - h_p_inv_cols: uint64[m, ceil(m/64)] — columns of H_p^{-1}
-        (where H_p = h_permuted[:, k:]); row j of this array is column j of H_p^{-1}.
-      - k, n: scalars
-
-    Encoder algorithm (in C++):
-      1. syn[i] = popcount(h_s_packed[i] & m_packed) mod 2  for i in 0..m-1
-      2. For each set bit j in syn: p ^= h_p_inv_cols[j]
-      3. codeword = [message | p]
-    """
-    if config in _encoder_tables_cache:
-        return _encoder_tables_cache[config]
-
-    _, h_permuted = _get_encoding_structures(config)
-    m, n = h_permuted.shape
-    k = n - m
-
-    h_s = (h_permuted[:, :k] & 1).astype(np.uint8)
-    h_p = (h_permuted[:, k:] & 1).astype(np.uint8)
-    h_p_inv = _gf2_inverse(h_p)
-
-    h_s_packed = _pack_bits_rows(h_s)            # (m, ceil(k/64))
-    h_p_inv_cols = _pack_bits_rows(h_p_inv.T)    # (m, ceil(m/64))
-
-    result = (h_s_packed, h_p_inv_cols, int(k), int(n))
-    _encoder_tables_cache[config] = result
-    return result
-
-
-def ldpc_encode(message: np.ndarray, config: LDPCConfig) -> np.ndarray:
-    """Encode k-bit message to an n-bit codeword."""
-    k = config.k
-    if len(message) != k:
-        msg = f"Message length {len(message)} != expected {k}"
-        raise ValueError(msg)
-
-    if _ext is not None:
-        msg_u8 = np.ascontiguousarray(message, dtype=np.uint8)
-        h_s_packed, h_p_inv_cols, _k, n = _get_encoder_tables(config)
-        # Return uint8 directly. Callers on the throughput-critical TX path want
-        # uint8 anyway; casting to int64 here only to be cast right back was pure overhead.
-        return _ext.encode(msg_u8, h_s_packed, h_p_inv_cols, n)
-
-    g_mat, _ = _get_encoding_structures(config)
-    codeword = message @ g_mat % 2
-    return codeword.astype(np.uint8)
-
-
-def ldpc_encode_batch(messages: np.ndarray, config: LDPCConfig) -> np.ndarray:
-    """Encode `n_cw` messages in one C++ call.
-
-    `messages` has shape (n_cw, k) or shape (n_cw * k,) — both are accepted.
-    Returns uint8[n_cw, n], one row per codeword.
-    """
-    k = config.k
-    flat = np.ascontiguousarray(messages, dtype=np.uint8).ravel()
-    if len(flat) % k != 0:
-        msg = f"messages length {len(flat)} not a multiple of k={k}"
-        raise ValueError(msg)
-    n_cw = len(flat) // k
-
-    if _ext is not None and hasattr(_ext, "encode_batch"):
-        h_s_packed, h_p_inv_cols, _k, n = _get_encoder_tables(config)
-        return _ext.encode_batch(flat, h_s_packed, h_p_inv_cols, n, n_cw)
-
-    # Fallback: loop the per-codeword encoder.
-    n = config.n
-    out = np.empty((n_cw, n), dtype=np.uint8)
-    for i in range(n_cw):
-        out[i] = ldpc_encode(flat[i * k:(i + 1) * k], config)
-    return out
-
-
-@_njit
-def _check_node_update(
-    v2c: np.ndarray,
-    c2v: np.ndarray,
-    check_order: np.ndarray,
-    check_bounds: np.ndarray,
-    alpha: float,
-) -> None:
-    """JIT-compiled check node update (min-sum)."""
-    num_checks = len(check_bounds) - 1
-    for ci in range(num_checks):
-        start = check_bounds[ci]
-        end = check_bounds[ci + 1]
-        d = end - start
-        if d < MIN_CHECK_DEGREE:
-            for j in range(start, end):
-                c2v[check_order[j]] = 0.0
-            continue
-
-        total_sign = 1.0
-        min1 = np.inf
-        min2 = np.inf
-        argmin_local = 0
-        for j in range(start, end):
-            msg = v2c[check_order[j]]
-            if msg >= 0:
-                total_sign *= 1.0
-            else:
-                total_sign *= -1.0
-            mag = abs(msg)
-            if mag < min1:
-                min2 = min1
-                min1 = mag
-                argmin_local = j - start
-            elif mag < min2:
-                min2 = mag
-
-        for j in range(start, end):
-            msg = v2c[check_order[j]]
-            sign = 1.0 if msg >= 0 else -1.0
-            sign_excl = total_sign * sign
-            min_excl = min1 if (j - start) != argmin_local else min2
-            c2v[check_order[j]] = alpha * sign_excl * min_excl
-
-
-def ldpc_decode_batch(
-    llrs: np.ndarray,
-    config: LDPCConfig,
-    max_iterations: int = 50,
-    alpha: float = 0.75,
-) -> np.ndarray:
-    """Decode `n_cw` concatenated codewords sharing one parity-check matrix.
-
-    `llrs` has shape (n_cw, n) or shape (n_cw * n,) — both accepted.
-    Returns uint8[n_cw, k], one row per decoded message.
-
-    Single C++ call amortises pybind11 marshalling and scratch allocation
-    across the batch — was the dominant cost for short-codeword pipelines.
-    """
-    n, k = config.n, config.k
-    flat = np.ascontiguousarray(llrs, dtype=np.float32).ravel()
-    if flat.size % n != 0:
-        msg = f"llrs length {flat.size} not a multiple of n={n}"
-        raise ValueError(msg)
-    n_cw = flat.size // n
-
-    (h_sparse, _num_checks, _num_vars, edge_var, check_order, check_bounds) = _get_decode_structures(config)
-
-    if _ext is not None and hasattr(_ext, "decode_batch"):
-        return _ext.decode_batch(
-            flat, edge_var.astype(np.int64, copy=False),
-            check_order, check_bounds,
-            int(n), int(k), int(n_cw),
-            int(max_iterations), float(alpha),
-        )
-
-    # Fallback: per-codeword loop.
-    out = np.empty((n_cw, k), dtype=np.uint8)
-    for i in range(n_cw):
-        out[i] = ldpc_decode(flat[i * n:(i + 1) * n], config,
-                             max_iterations=max_iterations, alpha=alpha).astype(np.uint8)
-    return out
-
-
-def ldpc_decode(
-    llr_channel: np.ndarray,
-    config: LDPCConfig,
-    max_iterations: int = 50,
-    alpha: float = 0.75,
-) -> np.ndarray:
-    """Decode using min-sum belief propagation.
-
-    Source: https://en.wikipedia.org/wiki/Low-density_parity-check_code#Message_passing_algorithms
-    """
-    n, k = config.n, config.k
-    if len(llr_channel) != n:
-        msg = f"Expected {n}, got {len(llr_channel)}"
-        raise ValueError(msg)
-
-    (h_sparse, _num_checks, _num_vars, edge_var, check_order, check_bounds) = _get_decode_structures(config)
-
-    if _ext is not None:
-        llr_f32 = np.ascontiguousarray(llr_channel, dtype=np.float32)
-        return _ext.decode(
-            llr_f32, edge_var.astype(np.int64, copy=False),
-            check_order, check_bounds,
-            int(k), int(max_iterations), float(alpha),
-        ).astype(int)
-
-    llr = llr_channel.astype(np.float32)
-    num_edges = len(edge_var)
-
-    # Message arrays indexed by edge
-    v2c = llr[edge_var].copy()
-    c2v = np.zeros(num_edges, dtype=np.float32)
-    hard_decision = (llr_channel < 0).astype(int)
-
-    for _iteration in range(max_iterations):
-        # --- Check node update (min-sum, JIT) ---
-        _check_node_update(v2c, c2v, check_order, check_bounds, alpha)
-
-        # --- Variable node update ---
-        l_total = llr.copy()
-        np.add.at(l_total, edge_var, c2v)
-        v2c[:] = l_total[edge_var] - c2v
-
-        # Hard decision + syndrome check (sparse matrix-vector multiply)
-        hard_decision = (l_total < 0).astype(int)
-        syndrome = h_sparse @ hard_decision
-        if np.all(syndrome % 2 == 0):
-            return hard_decision[:k]
-
-    return hard_decision[:k]
-
-
-# ---------------------------------------------------------------------------
-# LDPC internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _find_pivot(work: np.ndarray, r: int, target_col: int, n: int, m: int) -> tuple[int, int]:
-    """Find pivot row and column for GF(2) Gaussian elimination step."""
-    for c in list(range(target_col, n)) + list(range(r, target_col)):
-        for row in range(r, m):
-            if work[row, c]:
-                return row, c
-    return -1, -1
-
-
-def _coding_matrix_systematic(h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """GF(2) Gaussian elimination producing systematic parity-check and generator matrices.
-
-    Produces H in the form [P | I_m] so that G = [I_k | P^T], ensuring the first k
-    positions of every codeword equal the message (systematic encoding).
-    Returns (h_sys, g_transposed) where g_transposed.T is the kxn generator matrix.
-    Replaces pyldpc.coding_matrix_systematic.
-    """
-    m, n = h.shape
-    k = n - m
-    work = np.array(h, dtype=int) % 2
-    col_perm = np.arange(n)
-
-    for r in range(m):
-        target_col = k + r
-        found_row, found_col = _find_pivot(work, r, target_col, n, m)
-        if found_row < 0:
-            break
-        if found_row != r:
-            work[[r, found_row]] = work[[found_row, r]]
-        if found_col != target_col:
-            work[:, [target_col, found_col]] = work[:, [found_col, target_col]]
-            col_perm[[target_col, found_col]] = col_perm[[found_col, target_col]]
-        for row in range(m):
-            if row != r and work[row, target_col]:
-                work[row] ^= work[r]
-
-    # work = [P | I_m]; G = [I_k | P^T] -- identity in first k columns gives systematic encoding.
-    # Return original sparse H with columns permuted (not row-reduced work) to preserve
-    # the LDPC Tanner graph structure needed for belief propagation decoding.
-    parity = work[:, :k]
-    g = np.hstack([np.eye(k, dtype=int), parity.T])
-
-    return h[:, col_perm], g.T
-
-
-def _get_encoding_structures(config: LDPCConfig) -> tuple[np.ndarray, np.ndarray]:
-    """Get or compute the generator matrix G and permuted H matrix."""
-    if config in _encoding_cache:
-        return _encoding_cache[config]
-
-    h_mat = ldpc_get_h_matrix(config)
-
-    h_permuted, g_transposed = _coding_matrix_systematic(h_mat)
-    g_mat = g_transposed.T
-
-    g_mat = np.asarray(g_mat, dtype=int)
-    h_permuted = np.asarray(h_permuted, dtype=int)
-
-    _encoding_cache[config] = (g_mat, h_permuted)
-    return g_mat, h_permuted
-
-
-def _get_decode_structures(
-    config: LDPCConfig,
-) -> tuple[sparse.csr_matrix, int, int, np.ndarray, np.ndarray, np.ndarray]:
-    """Get cached edge-based structures for BP decoding."""
-    if config in _decode_cache:
-        return _decode_cache[config]
-
-    _, h_permuted = _get_encoding_structures(config)
-    num_checks, num_vars = h_permuted.shape
-
-    rows, cols = np.nonzero(h_permuted)
-    h_sparse = sparse.csr_matrix(h_permuted)
-
-    check_order = np.argsort(rows).astype(np.int64)
-    sorted_checks = rows[check_order]
-    check_bounds = np.searchsorted(sorted_checks, np.arange(num_checks + 1)).astype(np.int64)
-
-    result = (h_sparse, num_checks, num_vars, cols, check_order, check_bounds)
-    _decode_cache[config] = result
-    return result
-
-
-def _expand_h(config: LDPCConfig) -> np.ndarray:
-    """Expand base matrix to full H matrix using vectorized circulant placement.
-
-    Each entry v >= 0 becomes a Z x Z identity matrix cyclically shifted by v.
-    Entries of -1 become Z x Z zero blocks.
-
-    Source: IEEE Std 802.11-2020, Section 19.3.11.6
-    """
-    n, z = config.n, config.z
-    h_base = get_ldpc_base_matrix(config.code_rate, n)
-    num_block_rows, num_block_cols = h_base.shape
-
-    h_mat = np.zeros((num_block_rows * z, num_block_cols * z), dtype=int)
-
-    bi, bj = np.nonzero(h_base != -1)
-    shifts = h_base[bi, bj]
-
-    idx = np.arange(z)
-    rows = (bi[:, np.newaxis] * z + idx[np.newaxis, :]).ravel()
-    cols = (bj[:, np.newaxis] * z + (idx[np.newaxis, :] + shifts[:, np.newaxis]) % z).ravel()
-    h_mat[rows, cols] = 1
-
-    return h_mat
