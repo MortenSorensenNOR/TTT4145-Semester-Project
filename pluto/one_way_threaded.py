@@ -136,7 +136,7 @@ if __name__ == "__main__":
                              "offline plotting without matplotlib.")
     parser.add_argument("--variable", action="store_true", help="Randomize payload size per packet (between --min-payload and --payload)")
     parser.add_argument("--min-payload", type=int, default=4, help="Minimum payload bytes when --variable is set (default: 4, must hold seq number)")
-    parser.add_argument("--tx-buf-mult", type=int, default=8, help="TX buffer size as multiple of next-power-of-2 frame length (default: 8)")
+    parser.add_argument("--tx-buf-mult", type=float, default=1.2, help="TX buffer size as multiple of next-power-of-2 frame length")
     parser.add_argument("--tx-filler-amp", type=float, default=0.0,
                         help="Per-component amplitude of complex Gaussian noise filler emitted "
                              "between packets (DAC-scale units). 0.0 = silent zero-fill (default, "
@@ -251,8 +251,8 @@ if __name__ == "__main__":
     _probe_pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=_probe_bits)
     _probe_samples = tx_pipe.transmit(_probe_pkt)
     frame_len      = len(_probe_samples)
-    rx_buf_size    = 16 * int(2 ** np.ceil(np.log2(frame_len)))
-    tx_buf_size    = args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len)))
+    rx_buf_size    = int(2 ** np.ceil(np.log2(frame_len)))
+    tx_buf_size    = int(args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len))))
 
     node_freqs = get_node_freqs(args.node, video=args.video)
     tx_freq = int(args.tx_freq) if args.tx_freq is not None else node_freqs["tx"]
