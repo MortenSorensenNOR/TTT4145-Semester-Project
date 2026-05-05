@@ -57,12 +57,20 @@ BUFSIZE="${MAXRATE_NUM}k"
 audio_input=""
 audio_encode=""
 if [[ "$AUDIO" == "1" ]]; then
-    audio_input="-f pulse -i $PULSE_SOURCE"
-    audio_encode="-c:a libopus -b:a 96k -ac 2 -application audio"
+    audio_input="-thread_queue_size 512 -fflags +nobuffer -f pulse -i $PULSE_SOURCE"
+    # `-application lowdelay` shrinks Opus algorithmic delay (~6.5 ms vs. 22.5 ms
+    # for the `audio` profile) at the cost of some coding efficiency — fine at 96k.
+    audio_encode="-c:a libopus -b:a 96k -ac 2 -application lowdelay -frame_duration 20"
 fi
 
+# Low-latency notes:
+#   -g $FRAMERATE      → IDR every 1 s (was 60 = 2 s)
+#   -bf 0              → no B-frames (tune ll already implies, but be explicit)
+#   -delay 0           → NVENC doesn't hold output frames
+#   -muxdelay/preload 0 + -flush_packets 1 → MPEG-TS pushes packets immediately
 # shellcheck disable=SC2086  # word splitting on audio_* args is intentional
 exec ffmpeg \
+    -fflags +nobuffer -flags +low_delay \
     -f v4l2 -input_format "$INPUT_FORMAT" \
     -video_size "${WIDTH}x${HEIGHT}" -framerate "$FRAMERATE" \
     -i "$VIDEO_DEV" \
@@ -70,8 +78,9 @@ exec ffmpeg \
     -c:v hevc_nvenc \
     -preset "$PRESET" -tune ll \
     -rc cbr -b:v "$BITRATE" -maxrate "$MAXRATE" -bufsize "$BUFSIZE" \
-    -g 60 \
+    -g "$FRAMERATE" -bf 0 -delay 0 \
     -zerolatency 1 \
     $audio_encode \
+    -muxdelay 0 -muxpreload 0 -flush_packets 1 \
     -f mpegts -mpegts_flags +resend_headers -pat_period 0.1 -sdt_period 0.1 \
     "udp://${DEST}:${PORT}?pkt_size=1316"

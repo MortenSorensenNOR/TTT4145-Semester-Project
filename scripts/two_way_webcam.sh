@@ -7,7 +7,8 @@
 # local PORT in listen mode. No port collision — same PORT works for both
 # directions.
 #
-# Receiver path (hevc_cuvid + low-latency ffplay) matches scripts/run_ffplay_hevc.sh.
+# Receiver path defaults to mpv (run_mpv_hevc.sh) for sub-100 ms display latency.
+# Set RECEIVER=ffplay to fall back to scripts/run_ffplay_hevc.sh.
 #
 # Usage (from node A, sending to B at 10.0.0.2):
 #   scripts/two_way_webcam.sh 10.0.0.2
@@ -36,12 +37,18 @@ RX_PORT="${3:-$TX_PORT}"
 
 ENCODER="${ENCODER:-vaapi}"
 SOURCE="${SOURCE:-webcam}"
+RECEIVER="${RECEIVER:-mpv}"
 case "$ENCODER:$SOURCE" in
     vaapi:webcam) TX_SCRIPT="stream_webcam.sh" ;;
     vaapi:screen) TX_SCRIPT="stream_screen.sh" ;;
     nvenc:webcam) TX_SCRIPT="stream_webcam_nvenc.sh" ;;
     nvenc:screen) TX_SCRIPT="stream_screen_nvenc.sh" ;;
     *) echo "ERROR: ENCODER must be vaapi|nvenc, SOURCE must be webcam|screen (got $ENCODER:$SOURCE)" >&2; exit 2 ;;
+esac
+case "$RECEIVER" in
+    mpv)    RX_SCRIPT="run_mpv_hevc.sh" ;;
+    ffplay) RX_SCRIPT="run_ffplay_hevc.sh" ;;
+    *) echo "ERROR: RECEIVER must be mpv|ffplay (got $RECEIVER)" >&2; exit 2 ;;
 esac
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -60,7 +67,7 @@ trap cleanup EXIT INT TERM
 # RX first so the listening socket is bound before the peer's first packets
 # arrive. Without this, an unlucky race burns ~1s of video while ffplay
 # initializes and the kernel drops the early packets.
-"$SCRIPT_DIR/run_ffplay_hevc.sh" "$RX_PORT" &
+"$SCRIPT_DIR/$RX_SCRIPT" "$RX_PORT" &
 pids+=("$!")
 
 # Small head-start for ffplay before we kick off the encoder.
