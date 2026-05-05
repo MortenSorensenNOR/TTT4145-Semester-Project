@@ -210,9 +210,16 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # IP overrides force the ip: backend for that side; otherwise the global
-    # --backend setting picks ip:<addr> or usb:<bus.dev.intf> via serial.
-    tx_uri = f"ip:{args.tx_ip}" if args.tx_ip else setup.tx_uri(args.node, args.backend)
-    rx_uri = f"ip:{args.rx_ip}" if args.rx_ip else setup.rx_uri(args.node, args.backend)
+    # --backend setting picks ip:<addr> or usb:<bus.dev.intf> via serial. Only
+    # resolve the side(s) we actually intend to open — usb resolution scans
+    # libiio and would fail in tx-only / rx-only modes if the unused Pluto
+    # isn't plugged in.
+    tx_uri = None
+    rx_uri = None
+    if args.mode in ("tx", "both"):
+        tx_uri = f"ip:{args.tx_ip}" if args.tx_ip else setup.tx_uri(args.node, args.backend)
+    if args.mode in ("rx", "both"):
+        rx_uri = f"ip:{args.rx_ip}" if args.rx_ip else setup.rx_uri(args.node, args.backend)
 
     # Resolve RX-LO CFO offset: manual CLI override wins; otherwise pull the
     # measured value for this node from the calibration; otherwise 0. TX always
