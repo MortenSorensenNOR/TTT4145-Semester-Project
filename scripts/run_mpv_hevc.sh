@@ -11,7 +11,9 @@
 #
 # Knobs:
 #   HWDEC=auto-safe  (default)   HWDEC=vaapi / nvdec / no
-#   AUDIO=0                       drop the audio track
+#   AUDIO=1                       enable audio (default off — assumes no
+#                                 speaker on the receive side; mpv otherwise
+#                                 underruns the (absent) sink)
 #
 # Hot keys while playing:
 #   i   toggle the stats overlay (full demuxer + decoder timings)
@@ -20,7 +22,7 @@ set -euo pipefail
 
 PORT="${1:-5000}"
 HWDEC="${HWDEC:-auto-safe}"
-AUDIO="${AUDIO:-1}"
+AUDIO="${AUDIO:-0}"
 
 # Why each flag matters:
 #   --video-sync=display-desync → don't snap each frame to an integer count of
