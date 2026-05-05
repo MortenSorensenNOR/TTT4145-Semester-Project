@@ -28,12 +28,15 @@ DEST="${1:-10.0.0.1}"
 PORT="${2:-5000}"
 
 VIDEO_DEV="${VIDEO_DEV:-/dev/video0}"
-WIDTH="${WIDTH:-1280}"
-HEIGHT="${HEIGHT:-720}"
+# Defaults tuned for low-latency over a bandwidth-constrained radio link.
+# Override (e.g. WIDTH=1280 HEIGHT=720 BITRATE=2500k) for hardwired/loopback use.
+WIDTH="${WIDTH:-854}"
+HEIGHT="${HEIGHT:-480}"
 FRAMERATE="${FRAMERATE:-30}"
 INPUT_FORMAT="${INPUT_FORMAT:-mjpeg}"
 AUDIO="${AUDIO:-1}"
 PULSE_SOURCE="${PULSE_SOURCE:-default}"
+BITRATE="${BITRATE:-1000k}"
 
 VAAPI_DEVICE="${VAAPI_DEVICE:-/dev/dri/renderD129}"
 export LIBVA_DRIVER_NAME=radeonsi
@@ -63,7 +66,7 @@ exec ffmpeg \
     -vaapi_device "$VAAPI_DEVICE" \
     -vf 'format=nv12,hwupload' \
     -c:v hevc_vaapi -rc_mode CBR \
-    -b:v 2500k \
+    -b:v "$BITRATE" \
     -g "$FRAMERATE" -bf 0 -async_depth 1 \
     $audio_encode \
     -muxdelay 0 -muxpreload 0 -flush_packets 1 \

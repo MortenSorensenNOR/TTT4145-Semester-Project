@@ -48,11 +48,16 @@ else
     audio_args=(--no-audio)
 fi
 
+# UDP recv buffer was 8 MB — at 2.5 Mbps that's ~25 s of accumulation capacity.
+# 256 KiB is ~0.8 s headroom; if we fall behind that, the kernel drops packets
+# (visible as artifacts) instead of silently growing latency.
 exec mpv \
     --profile=low-latency \
     --no-cache \
-    --demuxer-max-bytes=512KiB \
+    --cache-secs=0 \
+    --demuxer-max-bytes=128KiB \
     --demuxer-max-back-bytes=0 \
+    --demuxer-readahead-secs=0 \
     --hwdec="$HWDEC" \
     --untimed \
     --video-sync=desync \
@@ -63,8 +68,8 @@ exec mpv \
     --demuxer-lavf-probesize=32 \
     --demuxer-lavf-analyzeduration=0 \
     --demuxer-lavf-o-add=fflags=+nobuffer+discardcorrupt \
-    --stream-lavf-o-add=buffer_size=8388608 \
-    --stream-lavf-o-add=fifo_size=8388608 \
+    --stream-lavf-o-add=buffer_size=262144 \
+    --stream-lavf-o-add=fifo_size=262144 \
     --stream-lavf-o-add=overrun_nonfatal=1 \
     "${audio_args[@]}" \
     "udp://0.0.0.0:${PORT}?listen"

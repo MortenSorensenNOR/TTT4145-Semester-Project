@@ -34,13 +34,15 @@ DEST="${1:-10.0.0.1}"
 PORT="${2:-5000}"
 
 VIDEO_DEV="${VIDEO_DEV:-/dev/video0}"
-WIDTH="${WIDTH:-1280}"
-HEIGHT="${HEIGHT:-720}"
+# Defaults tuned for low-latency over a bandwidth-constrained radio link.
+# Override (e.g. WIDTH=1280 HEIGHT=720 BITRATE=2500k) for hardwired/loopback use.
+WIDTH="${WIDTH:-854}"
+HEIGHT="${HEIGHT:-480}"
 FRAMERATE="${FRAMERATE:-30}"
 INPUT_FORMAT="${INPUT_FORMAT:-mjpeg}"
 AUDIO="${AUDIO:-1}"
 PULSE_SOURCE="${PULSE_SOURCE:-default}"
-BITRATE="${BITRATE:-2500k}"
+BITRATE="${BITRATE:-1000k}"
 PRESET="${PRESET:-p4}"
 
 # CBR maxrate sits ~15% above target so the encoder has room to track motion
