@@ -31,9 +31,13 @@ AUDIO="${AUDIO:-1}"
 #                                ASAP at the next vblank with no rate matching.
 #   --untimed                  → ignore PTS pacing, render frame the instant
 #                                the decoder spits it out
-#   --framedrop=decoder+vo     → drop late frames at both stages, like ffplay
-#                                -framedrop, so we stay near wall-clock
-#   --no-correct-pts           → don't reorder by PTS; trust decode order
+#   --framedrop=vo             → drop late frames AT THE OUTPUT only, never at
+#                                the decoder. HEVC P-frames reference the prior
+#                                frame even with -bf 0; skipping a decode breaks
+#                                the ref chain → "could not ref with poc" spam
+#                                until the next IDR.
+#   --demuxer-max-bytes=4MiB   → big enough for a fat 720p IDR plus headroom;
+#                                smaller and the demuxer stalls mid-frame.
 #   --speed=1.01               → tiny over-speed nudges the audio clock forward
 #                                so the buffer drains and we don't accumulate
 #                                latency over time (only used when audio is on)
@@ -58,14 +62,13 @@ exec mpv \
     --profile=low-latency \
     --no-cache \
     --cache-secs=0 \
-    --demuxer-max-bytes=128KiB \
+    --demuxer-max-bytes=4MiB \
     --demuxer-max-back-bytes=0 \
     --demuxer-readahead-secs=0 \
     --hwdec="$HWDEC" \
     --untimed \
     --video-sync=display-desync \
-    --framedrop=decoder+vo \
-    --no-correct-pts \
+    --framedrop=vo \
     --no-interpolation \
     --vd-lavc-threads=1 \
     --demuxer-lavf-probesize=32 \
