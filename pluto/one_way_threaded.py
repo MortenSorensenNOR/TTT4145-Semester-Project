@@ -152,6 +152,10 @@ if __name__ == "__main__":
     parser.add_argument("--save-n",      type=int, default=4,
                         help="How many RX buffers to dump (default: 4). Only buffers that "
                              "produced ≥1 detected packet are saved.")
+    parser.add_argument("--save-skip",   type=int, default=0,
+                        help="Number of initial RX buffers to skip before dumping starts "
+                             "(default: 0). Lets the Pluto's AGC/LO/clock warm up so the "
+                             "saved captures are representative of steady-state operation.")
     parser.add_argument("--workers",     type=int, default=0,
                         help="Number of worker processes used for TX packet build / "
                              "RX packet decode. 0 = run inline on the TX/RX threads "
@@ -704,7 +708,8 @@ if __name__ == "__main__":
         if args.save_rx_buf:
             _save_dir = Path(args.save_rx_buf)
             _save_dir.mkdir(parents=True, exist_ok=True)
-            status.log(f"  [RX] dumping up to {args.save_n} buffers to {_save_dir}/")
+            _skip_msg = f" after skipping first {args.save_skip}" if args.save_skip > 0 else ""
+            status.log(f"  [RX] dumping up to {args.save_n} buffers to {_save_dir}/{_skip_msg}")
 
         try:
             while True:
@@ -727,6 +732,7 @@ if __name__ == "__main__":
                 _buf_count += 1
 
                 if (_save_dir is not None and _saved_n < args.save_n
+                    and _buf_count > args.save_skip
                     and len(packets) > 0):
                     _n_valid_buf = sum(1 for p in packets if p.valid)
                     # Ground truth for offline replay: seq_nums of every valid

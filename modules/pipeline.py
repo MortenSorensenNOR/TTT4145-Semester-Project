@@ -68,14 +68,14 @@ class PipelineConfig:
     SPAN: int = 8
     RRC_ALPHA: np.float32 = np.float32(0.25)
     MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK16
-    CODING_RATE: CodeRates = CodeRates.THREE_QUARTER_RATE
+    CODING_RATE: CodeRates = CodeRates.FIVE_SIXTH_RATE
     LDPC_MAX_ITER: int = 20
     PRE_HEADER_GUARD_BITS: int = 0
     GUARD_SYMS_LENGTH: int = 16
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(
-        loop_noise_bandwidth_normalized=0.008,
+        loop_noise_bandwidth_normalized=0.05,
         # damping_factor=1.400
     )
     # Bn=0.008 empirically optimal for PSK8 over coax
@@ -85,8 +85,8 @@ class PipelineConfig:
     # consecutive constant-symbol BPSK pad, which gives the NDA TED nothing to
     # lock onto.  At BnTs >= 0.001 the loop wanders during this stretch and
     # corrupts the parity symbols that follow.
-    NDA_BN_TS: float = 0.0025
-    NDA_ZETA: float = 2.000
+    NDA_BN_TS: float = 0.00015
+    NDA_ZETA: float = 0.707
     NDA_L: int = 4              # TED smoothing half-length (window = 2L+1 symbols)
 
     pulse_shaping: bool = True
