@@ -75,18 +75,14 @@ class PipelineConfig:
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(
-        loop_noise_bandwidth_normalized=0.05,
-        # damping_factor=1.400
+        loop_noise_bandwidth_normalized=0.008,
+        # damping_factor=1/(2**0.5)
     )
     # Bn=0.008 empirically optimal for PSK8 over coax
 
     # NDA TED (Rice 2009) — see modules/nda_ted/nda_ted.py.
-    # BnTs must stay narrow: with LDPC the systematic-bits region holds 1500+
-    # consecutive constant-symbol BPSK pad, which gives the NDA TED nothing to
-    # lock onto.  At BnTs >= 0.001 the loop wanders during this stretch and
-    # corrupts the parity symbols that follow.
-    NDA_BN_TS: float = 0.00015
-    NDA_ZETA: float = 0.707
+    NDA_BN_TS: float = 0.0025
+    NDA_ZETA: float = 2
     NDA_L: int = 4              # TED smoothing half-length (window = 2L+1 symbols)
 
     pulse_shaping: bool = True
@@ -414,6 +410,7 @@ class RXPipeline:
             payload=payload,
             valid=header.crc_passed,
             rx_symbols=rx_symbols,
+            mod_scheme=header.mod_scheme,
         )
 
     def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32, np.float32]:

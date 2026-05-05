@@ -1,0 +1,207 @@
+{
+  "dataset": "psk16",
+  "n_trials": 600,
+  "train_size": 102,
+  "val_size": 26,
+  "baseline_val": {
+    "valid": 40,
+    "detected": 40,
+    "matched": 40,
+    "expected": 40,
+    "evm_pct": 5.156681244576223
+  },
+  "best": {
+    "params": {
+      "bn": 0.02045204155396746,
+      "bnts": 0.006499466437563288,
+      "L": 19
+    },
+    "val_valid": 52,
+    "val_detected": 52,
+    "val_matched": 40,
+    "val_expected": 40,
+    "val_evm_pct": 3.2090954267102108
+  },
+  "top": [
+    {
+      "params": {
+        "bn": 0.02045204155396746,
+        "bnts": 0.006499466437563288,
+        "L": 19
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.2090954267102108
+    },
+    {
+      "params": {
+        "bn": 0.013426066650593862,
+        "bnts": 0.00565138911475245,
+        "L": 17
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.210327060454378
+    },
+    {
+      "params": {
+        "bn": 0.02365015277283317,
+        "bnts": 0.0062520646464074865,
+        "L": 16
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.2134015813168446
+    },
+    {
+      "params": {
+        "bn": 0.024615207024183027,
+        "bnts": 0.006175843861976434,
+        "L": 20
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.2149137572109994
+    },
+    {
+      "params": {
+        "bn": 0.02564103284828416,
+        "bnts": 0.00605233909301177,
+        "L": 20
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.215882349178989
+    },
+    {
+      "params": {
+        "bn": 0.019186692490043386,
+        "bnts": 0.005150653707874955,
+        "L": 18
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.2163983035207497
+    },
+    {
+      "params": {
+        "bn": 0.018213459303300962,
+        "bnts": 0.005238090928012601,
+        "L": 20
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.2164041679333693
+    },
+    {
+      "params": {
+        "bn": 0.013370660720360602,
+        "bnts": 0.007714444048992855,
+        "L": 15
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.2168525154426724
+    },
+    {
+      "params": {
+        "bn": 0.009694494099301752,
+        "bnts": 0.005661301899624214,
+        "L": 21
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.221003139986342
+    },
+    {
+      "params": {
+        "bn": 0.01082115036176392,
+        "bnts": 0.005349893930768062,
+        "L": 22
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.222722213468009
+    },
+    {
+      "params": {
+        "bn": 0.0226079046553985,
+        "bnts": 0.004921213565709352,
+        "L": 22
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.2263173932498974
+    },
+    {
+      "params": {
+        "bn": 0.01079490006258703,
+        "bnts": 0.0047049971666085376,
+        "L": 22
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.232226636809462
+    },
+    {
+      "params": {
+        "bn": 0.009068478626519412,
+        "bnts": 0.007940777679772101,
+        "L": 22
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.238846556463832
+    },
+    {
+      "params": {
+        "bn": 0.01842617884128837,
+        "bnts": 0.004244800492538686,
+        "L": 12
+      },
+      "val_valid": 52,
+      "val_detected": 52,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.2510151278680754
+    },
+    {
+      "params": {
+        "bn": 0.04276581955010344,
+        "bnts": 0.004498750571881539,
+        "L": 19
+      },
+      "val_valid": 51,
+      "val_detected": 51,
+      "val_matched": 40,
+      "val_expected": 40,
+      "val_evm_pct": 3.2568645913233993
+    }
+  ]
+}

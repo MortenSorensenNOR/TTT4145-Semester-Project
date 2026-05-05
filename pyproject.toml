@@ -11,6 +11,7 @@ dependencies = [
     "pybind11>=3.0.2",
     "setuptools>=82.0.1",
     "scipy>=1.17.1",
+    "optuna>=4.8.0",
 ]
 
 [dependency-groups]
