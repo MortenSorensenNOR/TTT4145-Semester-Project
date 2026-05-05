@@ -149,7 +149,7 @@ def score_buffers(rx: RXPipeline, buffers: list[Buffer]) -> ScoreResult:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("dataset", choices=["psk8", "psk16"])
+    ap.add_argument("dataset", choices=["psk8", "psk16", "both"])
     ap.add_argument("--n-trials", type=int, default=300,
                     help="number of Optuna trials (default 300)")
     ap.add_argument("--train-frac", type=float, default=0.8,
@@ -183,9 +183,13 @@ def main() -> int:
 
     rng = np.random.default_rng(args.seed)
 
-    buf_dir = Path(__file__).resolve().parents[1] / "pluto" / "rx_buffs" / args.dataset
-    buffers = load_buffers(buf_dir)
-    print(f"Loaded {len(buffers)} buffers from {buf_dir}")
+    base_dir = Path(__file__).resolve().parents[1] / "pluto" / "rx_buffs"
+    if args.dataset == "both":
+        buffers = load_buffers(base_dir / "psk8") + load_buffers(base_dir / "psk16")
+        print(f"Loaded {len(buffers)} buffers from psk8 + psk16")
+    else:
+        buffers = load_buffers(base_dir / args.dataset)
+        print(f"Loaded {len(buffers)} buffers from {base_dir / args.dataset}")
 
     n = len(buffers)
     perm = rng.permutation(n)

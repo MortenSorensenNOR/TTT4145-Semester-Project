@@ -75,15 +75,14 @@ class PipelineConfig:
 
     SYNC_CONFIG = SynchronizerConfig()
     COSTAS_CONFIG = CostasConfig(
-        loop_noise_bandwidth_normalized=0.008,
-        # damping_factor=1/(2**0.5)
+        loop_noise_bandwidth_normalized=0.01593,
+        damping_factor=0.7071
     )
-    # Bn=0.008 empirically optimal for PSK8 over coax
 
     # NDA TED (Rice 2009) — see modules/nda_ted/nda_ted.py.
-    NDA_BN_TS: float = 0.0025
-    NDA_ZETA: float = 2
-    NDA_L: int = 4              # TED smoothing half-length (window = 2L+1 symbols)
+    NDA_BN_TS: float = 0.006489
+    NDA_ZETA: float = 0.7071
+    NDA_L: int = 19              # TED smoothing half-length (window = 2L+1 symbols)
 
     pulse_shaping: bool = True
     pilots: bool = False
