@@ -23,19 +23,22 @@ HWDEC="${HWDEC:-auto-safe}"
 AUDIO="${AUDIO:-1}"
 
 # Why each flag matters:
+#   --video-sync=display-desync → don't snap frames to integer display-refresh
+#                                cycles. On a 144 Hz monitor playing 30 fps,
+#                                integer alignment picks 5 vblanks per frame =
+#                                28.8 fps display rate = 4 % drift. Buffer grows
+#                                forever. This option just displays each frame
+#                                ASAP at the next vblank with no rate matching.
 #   --untimed                  → ignore PTS pacing, render frame the instant
-#                                the decoder spits it out (this is the big one)
-#   --video-sync=desync        → don't drop/dup to match a clock; just display
-#                                (overrides the low-latency profile's =audio)
+#                                the decoder spits it out
 #   --framedrop=decoder+vo     → drop late frames at both stages, like ffplay
 #                                -framedrop, so we stay near wall-clock
 #   --no-correct-pts           → don't reorder by PTS; trust decode order
 #   --speed=1.01               → tiny over-speed nudges the audio clock forward
 #                                so the buffer drains and we don't accumulate
 #                                latency over time (only used when audio is on)
-#   --no-cache + --demuxer-max-bytes=512KiB → no demuxer-side ring buffer
-#   --vo=gpu --gpu-context=auto → modern renderer; --no-interpolation kills
-#                                the 1-frame motion-interpolation buffer
+#   --no-cache + small demuxer buffers → no demuxer-side ring buffer
+#   --no-interpolation        → kill the 1-frame motion-interpolation buffer
 audio_args=()
 if [[ "$AUDIO" == "1" ]]; then
     # Smallest sane PulseAudio buffer; --speed=1.01 keeps it drained.
@@ -60,7 +63,7 @@ exec mpv \
     --demuxer-readahead-secs=0 \
     --hwdec="$HWDEC" \
     --untimed \
-    --video-sync=desync \
+    --video-sync=display-desync \
     --framedrop=decoder+vo \
     --no-correct-pts \
     --no-interpolation \
