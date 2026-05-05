@@ -245,12 +245,6 @@ if __name__ == "__main__":
     # ---------------------------------------------------------------------------
 
     pipe_cfg = PipelineConfig()
-    # Over coax, real-packet fine peak ratios sit at ~10–12 while spurious
-    # detections on the ~7 kB of silence at the tail of each TX buffer fire with
-    # ratio ~4–5. Bumping the gate to 7 cleanly rejects the latter — otherwise
-    # they still pass the default 3.0 gate, fail at header decode, and advance
-    # search_from past the real packet that followed them.
-    pipe_cfg.SYNC_CONFIG.fine_peak_ratio_min = np.float32(7.0)
     tx_pipe  = TXPipeline(pipe_cfg)
     rx_pipe  = RXPipeline(pipe_cfg)
 

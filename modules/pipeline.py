@@ -102,8 +102,6 @@ class TXPipeline:
         self.config = config
         self.frame_constructor = FrameConstructor()
 
-        # All four modulators always live on the TX pipeline so packets can
-        # override the default per-frame (e.g. ARQ pins itself to BPSK).
         self.bpsk  = BPSK()
         self.qpsk  = QPSK()
         self.psk8  = PSK8()
@@ -120,27 +118,27 @@ class TXPipeline:
         self.rrc_taps = rrc_filter(config.SPS, config.RRC_ALPHA, self.num_taps)
         self.guard_syms = np.zeros(config.GUARD_SYMS_LENGTH, dtype=np.complex64)
 
-        # sync
         self.sync_syms = generate_preamble(self.config.SYNC_CONFIG)
 
-    def _maybe_ldpc_encode(self, payload_bits: np.ndarray, code_rate: CodeRates) -> np.ndarray:
+    def _ldpc_encode(self, payload_bits: np.ndarray, code_rate: CodeRates) -> np.ndarray:
         """Pad payload to a multiple of k and emit n_cw concatenated codewords."""
         flat = payload_bits.ravel().astype(np.uint8)
         if code_rate == CodeRates.NONE:
             return flat
-        n_cw, k, n_air = _on_air_payload_n_bits(len(flat), code_rate)
+
+        # Pad to size
+        n_cw, k, _ = _on_air_payload_n_bits(len(flat), code_rate)
         pad = n_cw * k - len(flat)
         msg = np.concatenate([flat, _LDPC_PAD_BITS[:pad]]) if pad else flat
+
+        # Scramble
         msg = msg ^ _SCRAMBLE_BITS[:len(msg)]
         cfg = LDPCConfig(k=k, code_rate=code_rate)
-        # Single C++ call for all n_cw codewords — was the per-call pybind11
-        # marshalling that dominated runtime, not the XOR work.
+
+        # Return encoded payload
         return ldpc_encode_batch(msg, cfg).ravel()
 
     def transmit(self, packet: Packet) -> np.ndarray:
-        # Per-packet overrides win, otherwise fall back to config. Empty-payload
-        # control frames default to CodeRates.NONE since there's nothing but the
-        # 16-bit CRC to protect — the codeword overhead would be wasteful.
         mod_scheme = packet.mod_scheme if packet.mod_scheme is not None else self.config.MOD_SCHEME
         if packet.coding_rate is not None:
             coding_rate = packet.coding_rate
@@ -159,8 +157,8 @@ class TXPipeline:
         )
         (header_bits, payload_bits) = self.frame_constructor.encode(header, packet.payload)
 
-        # LDPC encode payload (data + CRC + pad-to-12) into n-bit codewords.
-        payload_for_mod = self._maybe_ldpc_encode(payload_bits, coding_rate)
+        # LDPC encode
+        payload_for_mod = self._ldpc_encode(payload_bits, coding_rate)
 
         # modulate
         payload_modulator = self._modulators[mod_scheme]
@@ -176,10 +174,10 @@ class TXPipeline:
 class DetectionResult:
     """Single frame detection result."""
 
-    payload_start: int
-    cfo_estimate: np.float32
+    payload_start:  int
+    cfo_estimate:   np.float32
     phase_estimate: np.float32
-    confidence: np.float32
+    confidence:     np.float32
 
 class RXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
@@ -196,13 +194,6 @@ class RXPipeline:
 
         # generate the known long preamble for matched filtering
         self.long_ref = build_long_ref(self.config.SYNC_CONFIG, self.config.SPS, self.rrc_taps)
-        self.ref_f = build_fine_ref(self.long_ref, self.config.SYNC_CONFIG, self.config.SPS)
-
-        # decimated (symbol-rate) reference for fine timing on the decimated buffer
-        self.long_ref_dec = decimate(self.long_ref, self.config.SPS)
-        self.ref_f_dec = build_fine_ref(self.long_ref_dec, self.config.SYNC_CONFIG, 1)
-
-        # Time-reversed conjugate ref for the single-stage detector path.
         self.long_ref_rev = build_long_ref_rev(self.long_ref)
 
         # Per-call diagnostic counters, refreshed at the start of each receive().
@@ -278,38 +269,17 @@ class RXPipeline:
         return packets, max_detection_sample
 
     def detect(self, filtered_buffer: np.ndarray) -> list[DetectionResult]:
-        """Detect frames in a match-filtered buffer.
-
-        two_stage_sync=True (default): Schmidl-Cox coarse + long-ZC fine.  Both
-            stages run on the full-rate filtered buffer; fine timing preserves
-            sub-symbol precision needed for correct decimation in decode().
-        two_stage_sync=False: skip coarse, just convolve the buffer with the
-            long-ZC reference and pick peaks.  No CFO estimate — Costas captures.
-        """
+        """Detect frames in a match-filtered buffer via full-buffer xcorr against
+        the long-ZC reference."""
         cfg = self.config.SYNC_CONFIG
-        sps = self.config.SPS
 
         try:
-            if self.config.two_stage_sync:
-                coarse = coarse_sync(filtered_buffer, self.config.SAMPLE_RATE, sps, cfg)
-                if coarse.m_peaks.size == 0:
-                    return []
-                fine = fine_timing(filtered_buffer, self.long_ref, coarse.d_hats, coarse.cfo_hats,
-                                   self.config.SAMPLE_RATE, sps, cfg, self.ref_f)
-                cfo_hats = coarse.cfo_hats
-                # peak_ratio is a peak-to-mean ratio over a small fine_timing
-                # window — gate via fine_peak_ratio_min (default 3.0).
-                gate = lambda r: cfg.fine_peak_ratio_min <= 0 or r >= cfg.fine_peak_ratio_min
-            else:
-                fine, cfo_hats = full_buffer_xcorr_sync(
-                    filtered_buffer, self.long_ref, self.long_ref_rev,
-                    float(cfg.single_stage_ncc_threshold), self.config.SAMPLE_RATE,
-                )
-                if fine.sample_idxs.size == 0:
-                    return []
-                # peak_ratio is the NCC ∈ [0,1]; threshold is already applied
-                # inside the helper, so no extra gate here.
-                gate = lambda r: True
+            fine, cfo_hats = full_buffer_xcorr_sync(
+                filtered_buffer, self.long_ref, self.long_ref_rev,
+                float(cfg.single_stage_ncc_threshold), self.config.SAMPLE_RATE,
+            )
+            if fine.sample_idxs.size == 0:
+                return []
         except Exception as e:
             logger.info(e)
             return []
@@ -323,27 +293,18 @@ class RXPipeline:
                 confidence=np.float32(fine.peak_ratios[i]),
             )
             for i in range(len(payload_starts))
-            if gate(fine.peak_ratios[i])
         ]
 
     def decode(self, buffer: np.ndarray, cfo: np.float32, phase_estimate: np.float32) -> Packet:
         cfo_rad_per_symbol = np.float32(2 * np.pi * float(cfo) / self.config.SAMPLE_RATE * self.config.SPS)
 
-        header, payload_start, current_phase_estimate, current_timing_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
+        header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
 
-        # if header.crc_passed:
-        #     logger.debug(f"HEADER: crc: {header.crc_passed}, header: length {header.length} bytes, coding rate: {header.coding_rate}, type: {header.frame_type}")
-
-        logger.info(f"HEADER: crc: {header.crc_passed}, header: length {header.length} bytes, mod scheme: {header.mod_scheme}, coding rate: {header.coding_rate}, type: {header.frame_type}")
-
-        # length=0 is legitimate for control frames (e.g. ARQ ACKs). Skip
-        # payload_decode for them — there is nothing but the 16-bit CRC to
-        # verify, and payload_decode would return an empty array anyway.
         if header.length == 0:
             payload = np.empty((0, 1), dtype=int)
             rx_symbols = np.empty(0, dtype=np.complex64)
         else:
-            payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate, current_timing_estimate)
+            payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
 
         return Packet(
             src_mac=header.src,
@@ -357,25 +318,14 @@ class RXPipeline:
             mod_scheme=header.mod_scheme,
         )
 
-    def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32, np.float32]:
+    def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
-        # Use header_encoded_n_bits (rounded to even) instead of raw header_total_size
-        # so payload_start matches what TX actually emits — the encoder pads odd-length
-        # headers up by one bit.
         header_end = self.frame_constructor.header_encoded_n_bits
-
         if header_end*self.config.SPS > len(buffer):
             msg = "header end is outside of buffer"
             raise IndexError(msg)
 
         if self.config.nda_ted:
-            # NDA TED has two quirks vs naïve decimation:
-            #   1) intrinsic 1-sample bias — passing prepend_first=True makes
-            #      the kernel duplicate the first sample internally so the
-            #      bias cancels and outputs land on the symbol peaks.
-            #   2) output is (Ns-1) symbols short of naïve decimation —
-            #      extend the trailing guard by sps*sps so downstream
-            #      slicing has enough symbols.
             guard = self.config.SPS * self.config.SPS
             nda_in = buffer[:header_end*self.config.SPS+guard]
             header_syms = apply_nda_ted(
@@ -386,39 +336,29 @@ class RXPipeline:
                 L=self.config.NDA_L,
                 prepend_first=True,
             )
-            timing_est = [0.0]  # NDA TED does not expose state for handoff
         else:
-            header_syms, timing_est = decimate(buffer[:header_end*self.config.SPS], self.config.SPS), [0.0]
+            header_syms = decimate(buffer[:header_end*self.config.SPS], self.config.SPS)
 
-        # costas correction on header symbols only (guard already used for phase estimation)
+        # costas correction on header symbols only
         header_only = header_syms[:header_end]
-        if self.config.costas_loop:
-            header_syms_corr, phase_est = apply_costas_loop(header_only, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
-        else:
-            header_syms_corr, phase_est = header_only * np.exp(-1j*current_phase_estimate), [current_phase_estimate]
+        header_syms_corr, phase_est = apply_costas_loop(header_only, self.config.COSTAS_CONFIG, ModulationSchemes.BPSK, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
 
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms_corr)
 
-        # Resolve BPSK π phase ambiguity: try both polarities.
-        # If normal polarity fails CRC, flip all bits (≡ +π phase) and retry.
-        # False-pass probability with CRC-8 is only 1/256.
+        # try both polarities, just in case the first fails
         try:
             header = self.frame_constructor.decode_header(header_bits)
         except Exception:
             header = self.frame_constructor.decode_header(1 - header_bits)
-            # Costas locked π off — correct the phase estimate so payload
-            # Costas loop gets the right starting point.
             phase_est[-1] = np.float32(phase_est[-1]) - np.pi
 
-        return header, header_end, np.float32(phase_est[-1] % (2 * np.pi)), np.float32(timing_est[-1])
+        return header, header_end, np.float32(phase_est[-1] % (2 * np.pi))
 
-    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32, current_timing_estimate: np.float32) -> tuple[np.ndarray, np.ndarray]:
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[np.ndarray, np.ndarray]:
         bps = header.mod_scheme.value + 1
         code_rate = CodeRates(header.coding_rate)
 
-        # Symbol count = on-air bit count / bits-per-symbol.  With LDPC the
-        # on-air count is (codewords × n) instead of just (data + CRC).
         pre_ldpc_n_bits = header.length * 8 + self.frame_constructor.PAYLOAD_CRC_BITS
         _n_cw, _k, n_air_bits = _on_air_payload_n_bits(pre_ldpc_n_bits, code_rate)
         payload_end = payload_start + ceil(n_air_bits / bps)
@@ -428,7 +368,6 @@ class RXPipeline:
             raise IndexError(msg)
 
         if self.config.nda_ted:
-            # See header_decode for prepend_first / sps*sps trailing-guard rationale.
             guard = self.config.SPS * self.config.SPS
             nda_in = buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard]
             rx_syms = apply_nda_ted(
@@ -439,14 +378,10 @@ class RXPipeline:
                 L=self.config.NDA_L,
                 prepend_first=True,
             )
-            timing_est = [0.0]  # NDA TED does not expose state for handoff
         else:
-            rx_syms, timing_est = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS), [0.0]
+            rx_syms = decimate(buffer[payload_start*self.config.SPS:payload_end*self.config.SPS], self.config.SPS)
 
-        if self.config.costas_loop:
-            rx_syms, phase_est = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
-        else:
-            rx_syms = rx_syms[:payload_end-payload_start]*np.exp(-1j*current_phase_estimate)
+        rx_syms, _ = apply_costas_loop(rx_syms[:payload_end-payload_start], self.config.COSTAS_CONFIG, header.mod_scheme, current_phase_estimate=current_phase_estimate, current_frequency_offset=cfo)
 
         match header.mod_scheme:
             case ModulationSchemes.BPSK:  mod = self.bpsk
@@ -456,32 +391,21 @@ class RXPipeline:
         logger.debug(f"Modulation scheme: {header.mod_scheme}")
 
         if code_rate == CodeRates.NONE:
-            # Hard-decision path (matches pre-LDPC behaviour).
             payload_bits_encoded = mod.symbols2bits(rx_syms).ravel()
             payload_bits = self.frame_constructor.decode_payload(header, payload_bits_encoded)
             return payload_bits.reshape(-1, 1), rx_syms
 
         # Soft demap → LDPC decode → strip LDPC pad → frame_constructor.decode_payload.
-        llrs_per_sym = mod.symbols2llrs(rx_syms)              # (n_syms, bps)
-        llrs = llrs_per_sym.ravel()[:n_air_bits]              # (n_air_bits,)
-        n_cw = _n_cw
-        k = _k
-        n = n_air_bits // n_cw
-        cfg = LDPCConfig(k=k, code_rate=code_rate)
-        # One C++ call for all n_cw codewords — was dominated by per-codeword
-        # pybind11 marshalling and scratch alloc.
+        llrs_per_sym = mod.symbols2llrs(rx_syms)
+        llrs = llrs_per_sym.ravel()[:n_air_bits]
+        n   = n_air_bits // _n_cw
+        cfg = LDPCConfig(k=_k, code_rate=code_rate)
         decoded = ldpc_decode_batch(
-            llrs.reshape(n_cw, n), cfg,
+            llrs.reshape(_n_cw, n), cfg,
             max_iterations=self.config.LDPC_MAX_ITER,
         ).ravel()
 
-        # Trim the random pad we appended on TX to align with LDPC k, and
-        # undo the TX-side _SCRAMBLE_BITS XOR on the systematic data bits.
+        # trim ldpc padding and descramble
         payload_bits_pre_ldpc = decoded[:pre_ldpc_n_bits] ^ _SCRAMBLE_BITS[:pre_ldpc_n_bits]
         payload_bits = self.frame_constructor.decode_payload(header, payload_bits_pre_ldpc)
         return payload_bits.reshape(-1, 1), rx_syms
-
-if __name__ == "__main__":
-    config = PipelineConfig()
-    tx_pipe = TXPipeline(config)
-    rx_pipe = RXPipeline(config)

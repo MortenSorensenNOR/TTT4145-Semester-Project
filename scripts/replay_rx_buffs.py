@@ -21,11 +21,9 @@ from modules.pipeline import PipelineConfig, RXPipeline
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--iters", type=int, default=3)
-    p.add_argument("--two-stage", action="store_true")
     args = p.parse_args()
 
     cfg = PipelineConfig()
-    cfg.two_stage_sync = args.two_stage
     rx = RXPipeline(cfg)
 
     rx_buf_dir = Path(__file__).resolve().parents[1] / "pluto" / "rx_buffs"

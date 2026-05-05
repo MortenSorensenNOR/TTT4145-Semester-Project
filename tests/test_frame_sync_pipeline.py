@@ -196,9 +196,8 @@ def _prepend_zeros(tx: np.ndarray) -> np.ndarray:
 def _run_sync(rx: np.ndarray, ch: SyncFixture):
     """Match-filter then run the single-stage NCC detector.
 
-    Mirrors RXPipeline.detect() with two_stage_sync=False: full-buffer
-    cross-correlation against the long-ZC reference, NCC threshold gate,
-    half-window CFO estimate.
+    Mirrors RXPipeline.detect(): full-buffer cross-correlation against the
+    long-ZC reference, NCC threshold gate, half-window CFO estimate.
 
     Returns (fine, cfo_hats); both None when no detection fires.
     """
@@ -565,9 +564,8 @@ def test_spurious_detection_rate(channel: SyncFixture) -> None:
 # A pure tone correlated against a long Zadoff-Chu reference gives
 # |sum exp(jωm)·conj(zc[m])|² ≈ ||zc||² / N_zc (flat-spectrum ZC), so the
 # normalized cross-correlation collapses to ~1/N_ref ≈ 0.003 — well below
-# the NCC gate.  This is the structural reason single-stage sync is robust
-# to LO leakage where Schmidl-Cox needed an extra gate.  Test asserts no
-# detections fire on tone+noise even with a +15 dB LO excess.
+# the NCC gate.  Test asserts no detections fire on tone+noise even with
+# a +15 dB LO excess.
 # ---------------------------------------------------------------------------
 
 _LO_EXCESS_DB: float = 15.0

@@ -220,9 +220,6 @@ if __name__ == "__main__":
     # ---------------------------------------------------------------------------
 
     pipe_cfg = PipelineConfig()
-    # Same gate as one_way_threaded: rejects spurious detections on TX-buffer tail
-    # silence whose ratios sit ~4–5 vs ~10–12 for real packets.
-    pipe_cfg.SYNC_CONFIG.fine_peak_ratio_min = np.float32(7.0)
     tx_pipe = TXPipeline(pipe_cfg)
     rx_pipe = RXPipeline(pipe_cfg) if do_rx else None
 
