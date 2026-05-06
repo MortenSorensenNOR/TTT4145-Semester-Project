@@ -107,9 +107,6 @@ def test_ideal(specs, seed):
     seed=st.integers(0, 2**31),
 )
 def test_channel(snr_db, specs, cfo_hz, phase, seed):
-    if snr_db < 19 and any(s[2] == ModulationSchemes.PSK8 for s in specs):
-        pytest.xfail("8PSK requires ~18dB SNR; below this threshold decoding is unreliable")
-
     tx_packets, signal = make_packets_and_signal(specs, seed)
     _, config = tx_packets[0]
     channel = ChannelModel(ChannelConfig(
