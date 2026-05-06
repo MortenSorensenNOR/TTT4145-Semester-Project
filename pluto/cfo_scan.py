@@ -1,19 +1,26 @@
 """Continuously samples a large buffer, prints and plots the peak FFT bin.
 
-Useful for debugging CFO between two Plutos — tune center_freq to roughly
-where the TX carrier is and watch the reported peak drift.
+Useful for debugging CFO between two Plutos — points the chosen node's RX
+Pluto at the matching TX frequency from config.py and watches the reported
+peak drift.
 
 Usage:
-    uv run python pluto/cfo_scan.py --uri ip:192.168.2.1 --freq 2400000000
+    uv run python pluto/cfo_scan.py --node A
 """
 
 import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import adi
-from pluto.config import PIPELINE
+
+from pluto.config import PIPELINE, get_node_freqs
+from pluto.setup_config import load_or_die as load_setup
 
 SAMPLE_RATE = PIPELINE.SAMPLE_RATE
 BUF_SIZE = 131072  # 128k samples
@@ -33,22 +40,27 @@ def compute_spectrum(samples: np.ndarray, sample_rate: int):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="CFO peak-frequency scanner")
-    parser.add_argument("--uri", default="ip:192.168.2.1", help="PlutoSDR URI")
-    parser.add_argument("--freq", type=int, required=True, help="Center frequency in Hz")
-    parser.add_argument("--gain-mode", default="slow_attack", help="RX gain mode")
+    parser.add_argument("--node", choices=("A", "B"), default="A",
+                        help="Which node's RX Pluto to open (default: A)")
+    parser.add_argument("--video", action="store_true",
+                        help="Use the video-mode FDD pair (2327/2390 MHz) "
+                             "instead of the default network pair (2470/2475 MHz).")
     args = parser.parse_args()
 
-    sdr = adi.Pluto(uri=args.uri)
-    # sdr.gain_control_mode_chan0 = args.gain_mode
+    setup = load_setup()
+    uri = setup.rx_uri(args.node)
+    freq = get_node_freqs(args.node, video=args.video)["rx"]
+
+    sdr = adi.Pluto(uri=uri)
     sdr.gain_control_mode_chan0 = "manual"
     sdr.rx_hardwaregain_chan0 = 50
-    sdr.rx_lo = args.freq
+    sdr.rx_lo = freq
     sdr.sample_rate = SAMPLE_RATE
     sdr.rx_rf_bandwidth = SAMPLE_RATE
     sdr.rx_buffer_size = BUF_SIZE
 
-    print(f"Connected to {args.uri}")
-    print(f"Center freq : {args.freq / 1e6:.6f} MHz")
+    print(f"Connected to {uri}")
+    print(f"Center freq : {freq / 1e6:.6f} MHz")
     print(f"Sample rate : {SAMPLE_RATE / 1e6:.1f} MSPS")
     print(f"Buffer size : {BUF_SIZE} samples  ({BUF_SIZE / SAMPLE_RATE * 1e3:.1f} ms)")
     print(f"FFT res     : {SAMPLE_RATE / BUF_SIZE:.2f} Hz/bin")
@@ -60,7 +72,7 @@ def main() -> None:
 
     # --- build figure ---
     fig, (ax_spec, ax_hist) = plt.subplots(2, 1, figsize=(10, 7))
-    fig.suptitle(f"CFO scan  —  center {args.freq / 1e6:.3f} MHz", fontsize=11)
+    fig.suptitle(f"CFO scan  —  center {freq / 1e6:.3f} MHz", fontsize=11)
 
     # Top: live spectrum
     freqs_init = np.fft.fftshift(np.fft.fftfreq(BUF_SIZE, d=1.0 / SAMPLE_RATE))
@@ -93,7 +105,7 @@ def main() -> None:
         while True:
             samples = np.array(sdr.rx(), dtype=np.complex64)
             freqs, power_db, offset_hz = compute_spectrum(samples, SAMPLE_RATE)
-            abs_hz = args.freq + offset_hz
+            abs_hz = freq + offset_hz
 
             print(
                 f"peak offset: {offset_hz:+10.2f} Hz  |  "

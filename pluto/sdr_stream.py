@@ -31,22 +31,17 @@ TxStream — continuous queue-based transmit
         stream.stop()
 """
 
-import os
 import queue
-import time
 import threading
 import logging
 logger = logging.getLogger(__name__)
 
-
 import numpy as np
 import adi
-
 from pluto.config import DAC_SCALE
-from modules.parallel_pipeline import _apply_cpu_affinity
+
 
 _SCALE = np.float32(2.0 / DAC_SCALE)
-
 
 class RxStream:
     """Continuously drains PlutoSDR hardware buffers in a background thread.
@@ -183,7 +178,7 @@ class TxStream:
     """
 
     def __init__(self, sdr: adi.Pluto, sample_rate: int, buf_size: int, *,
-                 maxsize: int = 64, filler_amp: float = 0.0):
+                 maxsize: int = 64):
         """
         Args:
             sdr:         configured adi.Pluto instance (tx_cyclic_buffer=False)
@@ -192,14 +187,6 @@ class TxStream:
                          is exactly this many samples)
             maxsize:     maximum number of packet sample arrays to queue before
                          send() blocks
-            filler_amp:  per-component (I, Q) std-dev of complex Gaussian noise
-                         used to fill buffer slots NOT occupied by packet
-                         samples. Same units as the DAC-scaled packet samples
-                         (so DAC_SCALE/32 sits ~30 dB below packet peak).
-                         0.0 (default) preserves the legacy zero-fill. Non-zero
-                         values keep RX AGC / Costas / NDA-TED / DC-blocker
-                         loops engaged during sparse traffic so the receiver
-                         doesn't have to re-converge on every preamble.
         """
         self._sdr = sdr
         self._sample_rate = sample_rate
@@ -210,8 +197,6 @@ class TxStream:
         self._thread = threading.Thread(target=self._packer, daemon=True)
         self._bufs_sent = 0
         self._bufs_with_payload = 0
-        self._filler_amp = float(filler_amp)
-        self._filler_rng = np.random.default_rng()
 
     def start(self) -> None:
         """Launch the background packer/sender thread."""
@@ -254,19 +239,10 @@ class TxStream:
     # ------------------------------------------------------------------
 
     def _packer(self) -> None:
-        # A packet popped from the queue that didn't fit in the previous
-        # buffer. Placed at the head of the next buffer (keeps FIFO order
-        # without splitting the packet across the DMA boundary).
         pending: np.ndarray | None = None
 
         while not self._stop.is_set():
-            if self._filler_amp > 0.0:
-                # Complex Gaussian noise with per-component std = filler_amp.
-                re = self._filler_rng.standard_normal(self._buf_size).astype(np.float32)
-                im = self._filler_rng.standard_normal(self._buf_size).astype(np.float32)
-                buf = (re + 1j * im).astype(np.complex64) * self._filler_amp
-            else:
-                buf = np.zeros(self._buf_size, dtype=np.complex64)
+            buf = np.zeros(self._buf_size, dtype=np.complex64)
             write_pos = 0
 
             # Place held-over packet from previous buffer at the start.
@@ -275,10 +251,7 @@ class TxStream:
                 write_pos = len(pending)
                 pending = None
 
-            # Greedily pack queued packets. Never split a packet across a
-            # buffer boundary — the Pluto DMA can hiccup between kernel
-            # buffers, and a packet straddling that seam gets corrupted
-            # (seen as bursty CRC-16 mismatches at ~1 packet per TX buffer).
+            # Greedily pack queued packets
             while write_pos < self._buf_size:
                 try:
                     pkt_samples = self._q.get(timeout=0.001)
@@ -295,12 +268,6 @@ class TxStream:
                     pending = pkt_samples
                     break
 
-            # sdr.tx() blocks on the iio kernel TX ring (nb_blocks=4 under
-            # libiio v1): once the ring is full it returns at the rate the
-            # DMA drains, giving natural backpressure. No manual sleep here
-            # — an explicit time.sleep() after tx() was causing repeated
-            # DMA underruns between buffers and silently dropping ~5–10 %
-            # of packets on coax.
             self._sdr.tx(buf)
             self._bufs_sent += 1
             if write_pos > 0:
