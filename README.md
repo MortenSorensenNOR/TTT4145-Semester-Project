@@ -45,8 +45,8 @@ in [`report/Radiokommunikasjon.pdf`](report/Radiokommunikasjon.pdf).
 The DSP blocks are Python with pybind11 C++ extensions on the hot paths;
 pure-Python fallbacks remain in place if an extension fails to import.
 Frame sync is a full-buffer normalised cross-correlation against the
-Zadoff-Chu preamble — peaks above 0.3 are accepted, and the correlation
-phase seeds the Costas loop so it never has to acquire blind.
+Zadoff-Chu preamble where peaks above 0.3 are accepted. The correlation
+phase seeds the Costas loop so it never has to lock on blind.
 
 ## Frame format
 
