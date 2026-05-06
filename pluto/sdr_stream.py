@@ -110,7 +110,6 @@ class RxStream:
         """Number of buffers dropped because the consumer was too slow."""
         return self._overruns
 
-    # ------------------------------------------------------------------
 
     def _producer(self) -> None:
         while not self._stop.is_set():
@@ -236,7 +235,6 @@ class TxStream:
         """TX buffers that carried real packet samples (vs all-silence)."""
         return self._bufs_with_payload
 
-    # ------------------------------------------------------------------
 
     def _packer(self) -> None:
         pending: np.ndarray | None = None

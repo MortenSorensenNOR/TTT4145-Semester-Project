@@ -249,9 +249,7 @@ def _pack_bits_rows(bits: np.ndarray) -> np.ndarray:
     return (bits.reshape(R, n_words, 64) << bit_pos).sum(axis=2).astype(np.uint64)
 
 
-# ---------------------------------------------------------------------------
 # 802.11 LDPC base matrices (IEEE Std 802.11-2020, Annex F, Tables F-1..F-3).
-# ---------------------------------------------------------------------------
 
 # n=648, Z=27
 _N648_R23 = np.array(

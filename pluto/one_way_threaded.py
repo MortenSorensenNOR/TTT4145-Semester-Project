@@ -35,10 +35,7 @@ from pluto.live_status import (
 import logging
 logging.basicConfig(level=logging.INFO)
 
-# ---------------------------------------------------------------------------
 # CLI
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--gain",     type=float, default=-10,           help="TX gain in dB (default: -10)")
@@ -59,8 +56,8 @@ if __name__ == "__main__":
                              "--rx-gain-mode=manual (default: 50, AD9361 range "
                              "~0–71). Ignored for any auto AGC mode.")
     parser.add_argument("--constellation", action="store_true",
-                        help="Collect post-Costas PSK8 symbols and refresh a "
-                             "live constellation plot (X11 only).")
+                        help="Collect post-Costas symbols and refresh a live "
+                             "constellation plot (X11 only).")
     parser.add_argument("--variable", action="store_true", help="Randomize payload size per packet (between --min-payload and --payload)")
     parser.add_argument("--min-payload", type=int, default=4, help="Minimum payload bytes when --variable is set (default: 4, must hold seq number)")
     parser.add_argument("--tx-buf-mult", type=float, default=1.05, help="TX buffer size as multiple of next-power-of-2 frame length")
@@ -100,10 +97,7 @@ if __name__ == "__main__":
         rx_cfo_hz = setup.cfo.rx_offset_for(args.node)
         cfo_src   = f"calibration ({setup.cfo.measured_at or 'unknown date'})"
 
-    # ---------------------------------------------------------------------------
     # Pipelines
-    # ---------------------------------------------------------------------------
-
     pipe_cfg = PipelineConfig()
     tx_pipe  = TXPipeline(pipe_cfg)
     rx_pipe  = RXPipeline(pipe_cfg)
@@ -111,7 +105,6 @@ if __name__ == "__main__":
     rng = np.random.default_rng(0)
 
     # Buffer sizing — probe one packet to learn frame_len.
-
     _probe_bits    = rng.integers(0, 2, args.payload * 8, dtype=np.uint8)
     _probe_pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=_probe_bits)
     _probe_samples = tx_pipe.transmit(_probe_pkt)
@@ -146,13 +139,10 @@ if __name__ == "__main__":
 
     print()
 
-    # ---------------------------------------------------------------------------
     # SDR setup — per direction. Each node runs a dedicated TX Pluto and a
     # dedicated RX Pluto; we only open the device(s) that the current mode
     # actually needs, so tx/rx-only invocations don't require both radios to
     # be plugged in.
-    # ---------------------------------------------------------------------------
-
     tx_sdr = None
     rx_sdr = None
 
@@ -166,10 +156,7 @@ if __name__ == "__main__":
                      gain_mode=args.rx_gain_mode, gain=args.rx_gain)
         rx_sdr.rx_buffer_size = rx_buf_size
 
-    # ---------------------------------------------------------------------------
     # TX helpers
-    # ---------------------------------------------------------------------------
-
     def _make_payload_bytes(seq: int, payload_bytes: int) -> bytes:
         """Build the per-packet payload as bytes: 32-bit big-endian seq + random pad.
 
@@ -198,10 +185,7 @@ if __name__ == "__main__":
         return (samples * DAC_SCALE).astype(np.complex64)
 
 
-    # ---------------------------------------------------------------------------
     # TX mode — continuous streaming via TxStream
-    # ---------------------------------------------------------------------------
-
     def run_tx():
         status = LiveStatus(n_lines=1)
         _install_live_logging(status)
@@ -247,16 +231,16 @@ if __name__ == "__main__":
         finally:
             status.stop()
 
-    # ---------------------------------------------------------------------------
     # RX mode — run forever, print every decoded packet
-    # ---------------------------------------------------------------------------
-
     def _setup_constellation_plot():
-        """Set up a live PSK8 constellation figure (X11 only)."""
         import matplotlib
         matplotlib.use("TkAgg")
         import matplotlib.pyplot as plt
         plt.ion()
+
+        ideal = tx_pipe._modulators[pipe_cfg.MOD_SCHEME].symbol_mapping
+        scheme_name = pipe_cfg.MOD_SCHEME.name
+        n_points = len(ideal)
 
         fig, ax = plt.subplots(figsize=(6, 6))
         ax.set_aspect("equal")
@@ -264,27 +248,22 @@ if __name__ == "__main__":
         ax.set_ylim(-1.6, 1.6)
         ax.set_xlabel("I")
         ax.set_ylabel("Q")
-        ax.set_title("PSK8 constellation — accumulating…")
+        ax.set_title(f"{scheme_name} constellation — accumulating…")
         ax.grid(True, alpha=0.25)
 
-        # Decision boundary lines at every π/4
-        for k in range(8):
-            angle = k * np.pi / 4 + np.pi / 8
-            ax.plot([0, 1.55 * np.cos(angle)], [0, 1.55 * np.sin(angle)],
-                    "k--", alpha=0.15, linewidth=0.8)
+        # Decision boundaries between adjacent constellation points
+        for k in range(n_points):
+            angle = (k + 0.5) * 2 * np.pi / n_points
+            ax.plot([0, 1.55 * np.cos(angle)], [0, 1.55 * np.sin(angle)], "k--", alpha=0.15, linewidth=0.8)
 
         # Unit circle
         theta = np.linspace(0, 2 * np.pi, 256)
         ax.plot(np.cos(theta), np.sin(theta), "k-", alpha=0.08, linewidth=1)
 
-        # Ideal 8-PSK points
-        ideal = rx_pipe.psk8.symbol_mapping
-        ax.scatter(ideal.real, ideal.imag, s=200, marker="*", c="red",
-                   zorder=6, label="Ideal", linewidths=0)
+        ax.scatter(ideal.real, ideal.imag, s=200, marker="*", c="red", zorder=6, label="Ideal", linewidths=0)
 
         # Received symbols — start empty
-        scat = ax.scatter([], [], s=6, alpha=0.35, c="steelblue",
-                          label="Received", linewidths=0)
+        scat = ax.scatter([], [], s=6, alpha=0.35, c="steelblue", label="Received", linewidths=0)
         ax.legend(loc="upper right", fontsize=8)
         fig.tight_layout()
         plt.pause(0.01)
@@ -436,8 +415,8 @@ if __name__ == "__main__":
                                 all_syms = np.concatenate(_sym_buf)
                                 _scat.set_offsets(np.column_stack([all_syms.real, all_syms.imag]))
                                 _ax.set_title(
-                                    f"PSK8 constellation — last {_pkt_count} pkts "
-                                    f"({len(all_syms)} symbols)"
+                                    f"{pipe_cfg.MOD_SCHEME.name} constellation — "
+                                    f"last {_pkt_count} pkts ({len(all_syms)} symbols)"
                                 )
                                 _fig.canvas.flush_events()
                                 plt.pause(0.001)
@@ -465,10 +444,7 @@ if __name__ == "__main__":
                 plt.ioff()
                 plt.show()  # keep window open after run ends
 
-    # ---------------------------------------------------------------------------
     # Run
-    # ---------------------------------------------------------------------------
-
     if args.mode == "tx":
         try:
             run_tx()
@@ -478,10 +454,7 @@ if __name__ == "__main__":
     else:  # "rx"
         run_rx()
 
-    # ---------------------------------------------------------------------------
     # Cleanup
-    # ---------------------------------------------------------------------------
-
     if tx_sdr is not None:
         try:
             tx_sdr.tx_destroy_buffer()

@@ -111,10 +111,7 @@ if __name__ == "__main__":
     tun_ip     = args.tun_ip or DEFAULT_TUN_IP[args.node]
     peer_tun_ip = DEFAULT_TUN_IP[peer]
 
-    # ---------------------------------------------------------------------------
     # Pipelines
-    # ---------------------------------------------------------------------------
-
     pipe_cfg = PipelineConfig()
     tx_pipe = TXPipeline(pipe_cfg)
     rx_pipe = RXPipeline(pipe_cfg) if do_rx else None
@@ -159,10 +156,7 @@ if __name__ == "__main__":
         print(f"TX gain   : {args.gain} dB")
     print()
 
-    # ---------------------------------------------------------------------------
     # SDR setup
-    # ---------------------------------------------------------------------------
-
     tx_sdr = None
     rx_sdr = None
     if do_tx:
@@ -174,9 +168,7 @@ if __name__ == "__main__":
                      gain_mode=args.rx_gain_mode, gain=args.rx_gain)
         rx_sdr.rx_buffer_size = rx_buf_size
 
-    # ---------------------------------------------------------------------------
     # TUN bring-up — open device, then assign address and bring the link up.
-    # ---------------------------------------------------------------------------
 
     def _ip(*ip_args):
         subprocess.run(["ip", *ip_args], check=True)
@@ -192,10 +184,7 @@ if __name__ == "__main__":
         print("       (need root + clean /24, e.g. no stale pluto0 from a prior run)", file=sys.stderr)
         sys.exit(1)
 
-    # ---------------------------------------------------------------------------
     # Threads
-    # ---------------------------------------------------------------------------
-
     send_q: queue.Queue = queue.Queue(maxsize=args.queue_depth)
     stop_event = threading.Event()
     n_status_lines = (1 if do_tx else 0) + (1 if do_rx else 0)
@@ -369,9 +358,7 @@ if __name__ == "__main__":
         t_tun.start()
         threads.append(t_tun)
 
-    # ---------------------------------------------------------------------------
     # Idle in main thread; daemons do the work. Ctrl-C exits.
-    # ---------------------------------------------------------------------------
 
     try:
         while True:
