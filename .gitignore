@@ -32,6 +32,10 @@ docs/plans/
 # Large binaries and external repos
 references/
 
+# Data dumps (regenerated locally, not for VCS)
+*.csv
+*.npy
+
 # images
 *.png
 *.jpg
