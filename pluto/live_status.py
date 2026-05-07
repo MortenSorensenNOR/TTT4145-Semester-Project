@@ -21,21 +21,26 @@ class RateMeter:
         self._events: collections.deque = collections.deque()
         self._t_start = time.perf_counter()
         self.total_bytes = 0
+        # Without the GIL (free-threaded CPython) concurrent add() / rate_bps reads race the deque.
+        self._lock = threading.Lock()
 
     def add(self, n_bytes: int) -> None:
         now = time.perf_counter()
-        self._events.append((now, n_bytes))
-        self.total_bytes += n_bytes
         cutoff = now - self.window_s
-        while self._events and self._events[0][0] < cutoff:
-            self._events.popleft()
+        with self._lock:
+            self._events.append((now, n_bytes))
+            self.total_bytes += n_bytes
+            while self._events and self._events[0][0] < cutoff:
+                self._events.popleft()
 
     @property
     def rate_bps(self) -> float:
-        if not self._events:
-            return 0.0
-        b   = sum(n for _, n in self._events)
-        win = max(time.perf_counter() - self._events[0][0], 1e-3)
+        with self._lock:
+            if not self._events:
+                return 0.0
+            b = sum(n for _, n in self._events)
+            t0 = self._events[0][0]
+        win = max(time.perf_counter() - t0, 1e-3)
         return b / win
 
     @property
