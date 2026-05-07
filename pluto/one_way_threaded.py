@@ -62,7 +62,12 @@ if __name__ == "__main__":
     parser.add_argument("--variable", action="store_true", help="Randomize payload size per packet (between --min-payload and --payload)")
     parser.add_argument("--min-payload", type=int, default=4, help="Minimum payload bytes when --variable is set (default: 4, must hold seq number)")
     parser.add_argument("--tx-buf-mult", type=float, default=1.05, help="TX buffer size as multiple of next-power-of-2 frame length")
-    parser.add_argument("--rx-buf-mult", type=float, default=1.75, help="RX buffer size as multiple of next-power-of-2 frame length")
+    parser.add_argument("--rx-buf-mult", type=float, default=None,
+                        help="RX buffer size as multiple of frame_len. If unset, uses "
+                             "max(2.5 * frame_len, 42000) — the empirical floor below which "
+                             "the AD9361/libiio refill seam corrupts straddling packets.")
+    parser.add_argument("--rx-buf-samples", type=int, default=None,
+                        help="Override rx_buffer_size with an exact sample count (ignores --rx-buf-mult). RX only.")
     parser.add_argument("--save-rx-buf", type=str, default=None,
                         help="Directory to dump raw RX buffers (.npz) for offline replay by "
                              "scripts/sweep_*_params.py. RX mode only.")
@@ -110,8 +115,18 @@ if __name__ == "__main__":
     _probe_pkt     = Packet(src_mac=0, dst_mac=1, type=0, seq_num=0, length=args.payload, payload=_probe_bits)
     _probe_samples = tx_pipe.transmit(_probe_pkt)
     frame_len      = len(_probe_samples)
-    rx_buf_size    = round_up(int(args.rx_buf_mult * frame_len))
+    RX_BUF_FLOOR = 60000  # empirical: below this samples/buf, refill seam corrupts straddling packets
+    if args.mode == "rx" and args.rx_buf_samples is not None:
+        if args.rx_buf_samples < frame_len:
+            print(f"ERROR: --rx-buf-samples ({args.rx_buf_samples}) must be >= frame_len ({frame_len})")
+            sys.exit(1)
+        rx_buf_size = args.rx_buf_samples
+    elif args.rx_buf_mult is not None:
+        rx_buf_size = round_up(int(args.rx_buf_mult * frame_len))
+    else:
+        rx_buf_size = max(round_up(int(2.5 * frame_len)), RX_BUF_FLOOR)
     tx_buf_size    = round_up(int(args.tx_buf_mult * frame_len))
+
 
     node_freqs = get_node_freqs(args.node, video=args.video)
     tx_freq = node_freqs["tx"]

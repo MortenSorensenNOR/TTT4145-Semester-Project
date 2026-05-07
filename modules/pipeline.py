@@ -50,7 +50,7 @@ class PipelineConfig:
     SPS: int = 4
     SPAN: int = 8
     RRC_ALPHA: np.float32 = np.float32(0.25)
-    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK8
+    MOD_SCHEME: ModulationSchemes = ModulationSchemes.PSK16
     CODING_RATE: CodeRates = CodeRates.FIVE_SIXTH_RATE
     LDPC_MAX_ITER: int = 20
     GUARD_SYMS_LENGTH: int = 16
@@ -300,12 +300,12 @@ class RXPipeline:
     def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32]:
         """Decode the header part of the packet. Assumes buffer input is already decimated."""
         header_end = self.frame_constructor.header_encoded_n_bits
-        if header_end*self.config.SPS > len(buffer):
+        guard = self.config.SPS * self.config.SPS if self.config.nda_ted else 0
+        if header_end*self.config.SPS + guard > len(buffer):
             msg = "header end is outside of buffer"
             raise IndexError(msg)
 
         if self.config.nda_ted:
-            guard = self.config.SPS * self.config.SPS
             nda_in = buffer[:header_end*self.config.SPS+guard]
             header_syms = apply_nda_ted(
                 nda_in,
@@ -342,12 +342,12 @@ class RXPipeline:
         _n_cw, _k, n_air_bits = _on_air_payload_n_bits(pre_ldpc_n_bits, code_rate)
         payload_end = payload_start + ceil(n_air_bits / bps)
 
-        if payload_end*self.config.SPS > len(buffer):
+        guard = self.config.SPS * self.config.SPS if self.config.nda_ted else 0
+        if payload_end*self.config.SPS + guard > len(buffer):
             msg = "payload end is outside of buffer"
             raise IndexError(msg)
 
         if self.config.nda_ted:
-            guard = self.config.SPS * self.config.SPS
             nda_in = buffer[payload_start*self.config.SPS:payload_end*self.config.SPS+guard]
             rx_syms = apply_nda_ted(
                 nda_in,
