@@ -122,7 +122,7 @@ class TXPipeline:
 
         self.sync_syms = generate_preamble(self.config.SYNC_CONFIG)
 
-    def _ldpc_encode(self, payload_bits: np.ndarray, code_rate: CodeRates) -> np.ndarray:
+    def _ldpc_encode(self, payload_bits: np.ndarray, code_rate: CodeRates, mod_scheme: ModulationSchemes) -> np.ndarray:
         """Pad payload to a multiple of k and emit n_cw concatenated codewords."""
         flat = payload_bits.ravel().astype(np.uint8)
         if code_rate == CodeRates.NONE:
@@ -139,11 +139,17 @@ class TXPipeline:
 
         coded = ldpc_encode_batch(msg, cfg).ravel()
 
-        # Block interleaver: codewords as rows, read out by columns. Spreads any
-        # symbol-burst across n_cw codewords instead of concentrating it in one.
-        if self.config.interleaving and n_cw > 1:
+        # Symbol-level block interleaver. A bit-level transpose with stride n_cw
+        # divisible by bps locks each codeword to one PSK bit-position, which
+        # creates systematically weak codewords (worst-LSB cw). Interleaving
+        # whole modulator-symbols (bps-bit chunks) keeps each codeword's
+        # bit-position mix balanced while still spreading any burst across
+        # n_cw codewords.
+        bps = mod_scheme.value + 1
+        if self.config.interleaving and n_cw > 1 and bps > 1:
             n = coded.size // n_cw
-            coded = coded.reshape(n_cw, n).T.ravel()
+            n_syms = n // bps
+            coded = coded.reshape(n_cw, n_syms, bps).transpose(1, 0, 2).reshape(-1)
 
         return coded
 
@@ -167,7 +173,7 @@ class TXPipeline:
         (header_bits, payload_bits) = self.frame_constructor.encode(header, packet.payload)
 
         # LDPC encode
-        payload_for_mod = self._ldpc_encode(payload_bits, coding_rate)
+        payload_for_mod = self._ldpc_encode(payload_bits, coding_rate, mod_scheme)
 
         # modulate
         payload_modulator = self._modulators[mod_scheme]
@@ -397,9 +403,11 @@ class RXPipeline:
         llrs = llrs_per_sym.ravel()[:n_air_bits]
         n   = n_air_bits // _n_cw
 
-        # Inverse of the TX block interleaver: regroup LLRs by codeword.
-        if self.config.interleaving and _n_cw > 1:
-            llrs = llrs.reshape(n, _n_cw).T.ravel()
+        # Inverse of the TX symbol-level block interleaver: regroup LLRs by codeword,
+        # preserving bit-position order within each modulator-symbol.
+        if self.config.interleaving and _n_cw > 1 and bps > 1:
+            n_syms = n // bps
+            llrs = llrs.reshape(n_syms, _n_cw, bps).transpose(1, 0, 2).reshape(-1)
 
         # Per-codeword pre-decode quality. Mean is too coarse for sparse bursts
         # (a few "shot-out" symbols barely move it), so also count bits with
