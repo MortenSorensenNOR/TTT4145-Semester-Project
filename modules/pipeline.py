@@ -68,7 +68,7 @@ class PipelineConfig:
     pulse_shaping: bool = True
     costas_loop: bool = True
     nda_ted: bool = True
-    interleaving: bool = True
+    interleaving: bool = False
     cfo_correction: bool = True
 
 
@@ -96,6 +96,8 @@ class Packet:
     err_reason:   str = ""
     sample_start: int = -1
     rx_symbols: np.ndarray | None = field(default=None)  # for diagnostics
+    llr_abs_mean_per_cw: np.ndarray | None = field(default=None)  # per-codeword |LLR| means (pre-decode)
+    llr_weak_per_cw: np.ndarray | None = field(default=None)  # per-codeword count of |LLR| < threshold
 
 class TXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
@@ -280,12 +282,14 @@ class RXPipeline:
         header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
 
         valid = header.crc_passed
-        err_reason = ""
+        err_reason = "" if header.crc_passed else "header CRC failed"
+        llr_abs_mean_per_cw: np.ndarray | None = None
+        llr_weak_per_cw: np.ndarray | None = None
         if header.length == 0:
             payload = np.empty((0, 1), dtype=int)
             rx_symbols = np.empty(0, dtype=np.complex64)
         else:
-            payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
+            payload, rx_symbols, llr_abs_mean_per_cw, llr_weak_per_cw = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
             if payload is None:
                 payload = np.empty((0, 1), dtype=int)
                 valid = False
@@ -302,6 +306,8 @@ class RXPipeline:
             err_reason=err_reason,
             rx_symbols=rx_symbols,
             mod_scheme=header.mod_scheme,
+            llr_abs_mean_per_cw=llr_abs_mean_per_cw,
+            llr_weak_per_cw=llr_weak_per_cw,
         )
 
     def header_decode(self, buffer: np.ndarray, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[FrameHeader, int, np.float32]:
@@ -341,7 +347,9 @@ class RXPipeline:
 
         return header, header_end, np.float32(phase_est[-1] % (2 * np.pi))
 
-    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[np.ndarray | None, np.ndarray]:
+    LLR_WEAK_THRESHOLD: float = 0.1  # |LLR| below this counts as "uncertain" bit
+
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[np.ndarray | None, np.ndarray, np.ndarray | None, np.ndarray | None]:
         bps = header.mod_scheme.value + 1
         code_rate = CodeRates(header.coding_rate)
 
@@ -381,8 +389,8 @@ class RXPipeline:
             try:
                 payload_bits = self.frame_constructor.decode_payload(header, payload_bits_encoded)
             except (ValueError, RuntimeError):
-                return None, rx_syms
-            return payload_bits.reshape(-1, 1), rx_syms
+                return None, rx_syms, None, None
+            return payload_bits.reshape(-1, 1), rx_syms, None, None
 
         # Soft demap → LDPC decode → strip LDPC pad → frame_constructor.decode_payload.
         llrs_per_sym = mod.symbols2llrs(rx_syms)
@@ -392,6 +400,13 @@ class RXPipeline:
         # Inverse of the TX block interleaver: regroup LLRs by codeword.
         if self.config.interleaving and _n_cw > 1:
             llrs = llrs.reshape(n, _n_cw).T.ravel()
+
+        # Per-codeword pre-decode quality. Mean is too coarse for sparse bursts
+        # (a few "shot-out" symbols barely move it), so also count bits with
+        # |LLR| below a threshold — these are the bits the decoder must fix.
+        abs_llrs = np.abs(llrs.reshape(_n_cw, n))
+        llr_abs_mean_per_cw = abs_llrs.mean(axis=1)
+        llr_weak_per_cw = (abs_llrs < self.LLR_WEAK_THRESHOLD).sum(axis=1).astype(np.int32)
 
         cfg = LDPCConfig(k=_k, code_rate=code_rate)
         decoded = ldpc_decode_batch(
@@ -404,5 +419,5 @@ class RXPipeline:
         try:
             payload_bits = self.frame_constructor.decode_payload(header, payload_bits_pre_ldpc)
         except (ValueError, RuntimeError):
-            return None, rx_syms
-        return payload_bits.reshape(-1, 1), rx_syms
+            return None, rx_syms, llr_abs_mean_per_cw, llr_weak_per_cw
+        return payload_bits.reshape(-1, 1), rx_syms, llr_abs_mean_per_cw, llr_weak_per_cw

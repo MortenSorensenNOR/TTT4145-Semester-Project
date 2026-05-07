@@ -310,6 +310,9 @@ if __name__ == "__main__":
         n_total     = 0
         n_valid     = 0
         n_dropped   = 0
+        n_hdr_fail  = 0
+        n_pl_fail   = 0
+        n_detections = 0
         last_seq    = None
         prev_buf    = None
         search_from = 0
@@ -346,6 +349,7 @@ if __name__ == "__main__":
                 _proc_ms = (time.perf_counter() - _t0) * 1e3
                 _proc_times.append(_proc_ms)
                 _buf_count += 1
+                n_detections += len(packets)
 
                 if (_save_dir is not None and _saved_n < args.save_n
                     and _buf_count > args.save_skip
@@ -383,9 +387,16 @@ if __name__ == "__main__":
                                f"seqs={_seqs_in_buf})")
                 if _buf_count % 500 == 0:
                     buf_dur_ms = rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3
+                    # detections = packets that produced a header attempt; vs
+                    # n_total (everything seen incl. failed) and n_valid (CRC ok).
+                    # If detections >> n_total there's a bug; if seq_gap >> 0
+                    # while detections matches expected TX rate, packets are
+                    # being missed at preamble correlation.
                     status.log(f"  [RX perf] proc={np.mean(_proc_times):.2f} ms avg / "
                                f"{max(_proc_times):.2f} ms max  (buf={buf_dur_ms:.2f} ms, "
-                               f"queue≈{stream._q.qsize()}/{stream._q.maxsize})")
+                               f"queue≈{stream._q.qsize()}/{stream._q.maxsize})  "
+                               f"detections={n_detections}, ok={n_valid}, "
+                               f"hdr_fail={n_hdr_fail}, pl_fail={n_pl_fail}, gap_dropped≈{n_dropped}")
                     _proc_times.clear()
 
                 prev_buf = curr_buf
@@ -423,8 +434,27 @@ if __name__ == "__main__":
                                       f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
                     else:
                         reason = pkt.err_reason or "payload CRC failed"
+                        if reason.startswith("header"):
+                            n_hdr_fail += 1
+                        else:
+                            n_pl_fail += 1
+                        # Per-codeword diagnostics. weak/cw counts bits with
+                        # |LLR| < threshold — sensitive to sparse "shot-out"
+                        # symbols that don't move the mean. One outlier in
+                        # weak/cw = burst landed in a single codeword (and
+                        # interleaver missed it); roughly equal high counts =
+                        # burst spread across codewords; all near zero with
+                        # CRC still failing = look elsewhere (Costas slip,
+                        # buffer seam, decoder convergence).
+                        if pkt.llr_abs_mean_per_cw is not None:
+                            mean_str = " ".join(f"{v:.2f}" for v in pkt.llr_abs_mean_per_cw)
+                            weak_str = " ".join(f"{int(v):d}" for v in pkt.llr_weak_per_cw)
+                            llr_diag = f"  |LLR|/cw=[{mean_str}]  weak/cw=[{weak_str}]"
+                        else:
+                            llr_diag = ""
                         status.log(f"  [RX] #{n_total}  {reason}  "
-                                   f"(ok={n_valid}, dropped≈{n_dropped})")
+                                   f"(ok={n_valid}, hdr_fail={n_hdr_fail}, pl_fail={n_pl_fail}, "
+                                   f"dropped≈{n_dropped}){llr_diag}")
 
                     # Collect symbols for constellation plot — both valid and
                     # invalid packets carry useful diagnostic info (sync /
