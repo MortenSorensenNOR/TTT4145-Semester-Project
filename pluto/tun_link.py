@@ -74,7 +74,12 @@ if __name__ == "__main__":
                              "--rx-gain-mode=manual (default: 50, AD9361 range "
                              "~0–71). Ignored for any auto AGC mode.")
     parser.add_argument("--tx-buf-mult", type=float, default=1.05, help="TX buffer size as multiple of next-power-of-2 frame length")
-    parser.add_argument("--rx-buf-mult", type=float, default=1.75, help="RX buffer size as multiple of next-power-of-2 frame length")
+    parser.add_argument("--rx-buf-mult", type=float, default=None,
+                        help="RX buffer size as multiple of frame_len. If unset, uses "
+                             "max(2.5 * frame_len, 60000) — the empirical floor below which "
+                             "the AD9361/libiio refill seam corrupts straddling packets.")
+    parser.add_argument("--rx-buf-samples", type=int, default=None,
+                        help="Override rx_buffer_size with an exact sample count (ignores --rx-buf-mult).")
     parser.add_argument("--tun-name", type=str,   default="pluto0", help="TUN interface name (default: pluto0)")
     parser.add_argument("--tun-ip",   type=str,   default=None,   help="TUN IPv4 address with /24 implicit (default: 10.0.0.1 for A, 10.0.0.2 for B)")
     parser.add_argument("--mtu",      type=int,   default=1500,   help="TUN MTU in bytes (default: 1500)")
@@ -125,7 +130,16 @@ if __name__ == "__main__":
                             length=args.mtu, payload=_probe_bits)
     _probe_samples = tx_pipe.transmit(_probe_pkt)
     frame_len      = len(_probe_samples)
-    rx_buf_size    = round_up(int(args.rx_buf_mult * frame_len))
+    RX_BUF_FLOOR = 60000  # empirical: below this samples/buf, refill seam corrupts straddling packets
+    if do_rx and args.rx_buf_samples is not None:
+        if args.rx_buf_samples < frame_len:
+            print(f"ERROR: --rx-buf-samples ({args.rx_buf_samples}) must be >= frame_len ({frame_len})")
+            sys.exit(1)
+        rx_buf_size = args.rx_buf_samples
+    elif args.rx_buf_mult is not None:
+        rx_buf_size = round_up(int(args.rx_buf_mult * frame_len))
+    else:
+        rx_buf_size = max(round_up(int(2.5 * frame_len)), RX_BUF_FLOOR)
     tx_buf_size    = round_up(int(args.tx_buf_mult * frame_len))
 
     node_freqs = get_node_freqs(args.node, video=args.video)
