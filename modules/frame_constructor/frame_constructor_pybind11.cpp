@@ -83,7 +83,7 @@ struct FrameHeader {
     int               frame_type = 0;
     ModulationSchemes mod_scheme = ModulationSchemes::BPSK;
     int               sequence_number = 0;
-    int               coding_rate = 3;  // CodeRates.FIVE_SIXTH_RATE.value
+    int               coding_rate = 4;  // CodeRates.FIVE_SIXTH_RATE.value
     int               crc = 0;
     bool              crc_passed = true;
 };
@@ -92,10 +92,10 @@ struct FrameHeaderConfig {
     int  payload_length_bits  = 11;
     int  src_bits             = 2;
     int  dst_bits             = 2;
-    int  frame_type_bits      = 1;
+    int  frame_type_bits      = 2;
     int  mod_scheme_bits      = 3;
-    int  sequence_number_bits = 4;
-    int  coding_rate_bits     = 2;
+    int  sequence_number_bits = 7;
+    int  coding_rate_bits     = 3;
     int  crc_bits             = 8;
 
     int header_total_size() const {
@@ -346,7 +346,7 @@ PYBIND11_MODULE(frame_constructor_ext, m, py::mod_gil_not_used()) {
         }), py::arg("length"), py::arg("src"), py::arg("dst"),
             py::arg("frame_type"), py::arg("mod_scheme"),
             py::arg("sequence_number"),
-            py::arg("coding_rate") = 3,
+            py::arg("coding_rate") = 4,
             py::arg("crc") = 0,
             py::arg("crc_passed") = true)
         .def_readwrite("length",          &FrameHeader::length)

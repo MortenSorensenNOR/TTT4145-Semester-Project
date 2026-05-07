@@ -99,7 +99,7 @@ class PacketType(IntEnum):
     """Frame types carried in the 2-bit `frame_type` header field."""
     DATA = 0  # carries a TUN payload
     ACK  = 1  # cumulative ACK; seq_num = last in-order DATA seq received
-    NAK  = 2  # raw packets; no arq
+    RAW  = 2  # bypass-ARQ payload — write straight to TUN, no seq, no ACK
     CTRL = 3  # reserved (link control / probe)
 
 
