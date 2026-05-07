@@ -39,6 +39,7 @@ from pluto.sdr_stream import RxStream, TxStream
 from pluto.live_status import (
     LiveStatus, RateMeter, _fmt_rate, _fmt_bytes, _install_live_logging,
 )
+from utils.bit import round_up
 
 import logging
 logging.basicConfig(
@@ -124,8 +125,8 @@ if __name__ == "__main__":
                             length=args.mtu, payload=_probe_bits)
     _probe_samples = tx_pipe.transmit(_probe_pkt)
     frame_len      = len(_probe_samples)
-    rx_buf_size    = int(args.rx_buf_mult * int(2 ** np.ceil(np.log2(frame_len))))
-    tx_buf_size    = int(args.tx_buf_mult * int(2 ** np.ceil(np.log2(frame_len))))
+    rx_buf_size    = round_up(int(args.rx_buf_mult * frame_len))
+    tx_buf_size    = round_up(int(args.tx_buf_mult * frame_len))
 
     node_freqs = get_node_freqs(args.node, video=args.video)
     tx_freq = node_freqs["tx"]

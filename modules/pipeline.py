@@ -235,8 +235,7 @@ class RXPipeline:
 
         n_decode_errors = n_payload_failures + n_tail_cutoffs
         if n_decode_errors:
-            logger.info(f"{n_decode_errors}/{len(detections)} detections failed decode "
-                        f"({n_payload_failures} payload, {n_tail_cutoffs} tail-cutoff)")
+            logger.debug(f"{n_decode_errors}/{len(detections)} detections failed decode " f"({n_payload_failures} payload, {n_tail_cutoffs} tail-cutoff)")
 
         self.last_payload_failures = n_payload_failures
         self.last_tail_cutoffs     = n_tail_cutoffs
