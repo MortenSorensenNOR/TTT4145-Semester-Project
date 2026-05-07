@@ -333,6 +333,11 @@ if __name__ == "__main__":
                     search_from = max(0, max_det - prev_len)
 
                 for pkt in packets:
+                    # Invalid packets (payload CRC / LDPC fail) carry symbols
+                    # for constellation diagnostics but no usable payload —
+                    # already counted via data_rx_payload_bad above.
+                    if not pkt.valid:
+                        continue
                     payload_bytes = (
                         np.packbits(pkt.payload[:pkt.length * 8].astype(np.uint8)).tobytes()
                         if pkt.length > 0 else b""

@@ -210,7 +210,7 @@ class RXPipeline:
         logger.debug(f"Detected {len(detections)} packets\n\t Cfo's: {[float(det.cfo_estimate) for det in detections]}'")
 
         packets = []
-        n_payload_failures = 0 
+        n_payload_failures = 0
         n_tail_cutoffs     = 0
         max_detection_sample = search_from
         for det in detections:
@@ -221,6 +221,8 @@ class RXPipeline:
                 decoded_packet.sample_start = abs_payload_start
                 packets.append(decoded_packet)
                 max_detection_sample = max(max_detection_sample, abs_payload_start)
+                if not decoded_packet.valid:
+                    n_payload_failures += 1
             except IndexError as e:
                 n_tail_cutoffs += 1
                 logger.debug(f"DECODE ERROR (cfo={det.cfo_estimate:.0f} Hz, ratio={det.confidence:.1f}): {type(e).__name__}: {e}")
@@ -271,11 +273,17 @@ class RXPipeline:
 
         header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
 
+        valid = header.crc_passed
+        err_reason = ""
         if header.length == 0:
             payload = np.empty((0, 1), dtype=int)
             rx_symbols = np.empty(0, dtype=np.complex64)
         else:
             payload, rx_symbols = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
+            if payload is None:
+                payload = np.empty((0, 1), dtype=int)
+                valid = False
+                err_reason = "payload CRC failed"
 
         return Packet(
             src_mac=header.src,
@@ -284,7 +292,8 @@ class RXPipeline:
             seq_num=header.sequence_number,
             length=header.length,
             payload=payload,
-            valid=header.crc_passed,
+            valid=valid,
+            err_reason=err_reason,
             rx_symbols=rx_symbols,
             mod_scheme=header.mod_scheme,
         )
@@ -326,7 +335,7 @@ class RXPipeline:
 
         return header, header_end, np.float32(phase_est[-1] % (2 * np.pi))
 
-    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[np.ndarray, np.ndarray]:
+    def payload_decode(self, buffer: np.ndarray, header: FrameHeader, payload_start, cfo:np.float32, current_phase_estimate: np.float32) -> tuple[np.ndarray | None, np.ndarray]:
         bps = header.mod_scheme.value + 1
         code_rate = CodeRates(header.coding_rate)
 
@@ -363,7 +372,10 @@ class RXPipeline:
 
         if code_rate == CodeRates.NONE:
             payload_bits_encoded = mod.symbols2bits(rx_syms).ravel()
-            payload_bits = self.frame_constructor.decode_payload(header, payload_bits_encoded)
+            try:
+                payload_bits = self.frame_constructor.decode_payload(header, payload_bits_encoded)
+            except (ValueError, RuntimeError):
+                return None, rx_syms
             return payload_bits.reshape(-1, 1), rx_syms
 
         # Soft demap → LDPC decode → strip LDPC pad → frame_constructor.decode_payload.
@@ -378,5 +390,8 @@ class RXPipeline:
 
         # trim ldpc padding and descramble
         payload_bits_pre_ldpc = decoded[:pre_ldpc_n_bits] ^ _SCRAMBLE_BITS[:pre_ldpc_n_bits]
-        payload_bits = self.frame_constructor.decode_payload(header, payload_bits_pre_ldpc)
+        try:
+            payload_bits = self.frame_constructor.decode_payload(header, payload_bits_pre_ldpc)
+        except (ValueError, RuntimeError):
+            return None, rx_syms
         return payload_bits.reshape(-1, 1), rx_syms

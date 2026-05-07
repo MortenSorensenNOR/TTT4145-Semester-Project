@@ -405,26 +405,31 @@ if __name__ == "__main__":
                                       f"q={stream._q.qsize():>3d}/{stream._q.maxsize}{gain_str}  "
                                       f"rate={_fmt_rate(rate.rate_bps)}  "
                                       f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
-
-                        # Collect symbols for constellation plot
-                        if args.constellation and pkt.rx_symbols is not None:
-                            _sym_buf.append(pkt.rx_symbols)
-                            _pkt_count += 1
-                            if _pkt_count >= _PLOT_EVERY:
-                                import matplotlib.pyplot as plt
-                                all_syms = np.concatenate(_sym_buf)
-                                _scat.set_offsets(np.column_stack([all_syms.real, all_syms.imag]))
-                                _ax.set_title(
-                                    f"{pipe_cfg.MOD_SCHEME.name} constellation — "
-                                    f"last {_pkt_count} pkts ({len(all_syms)} symbols)"
-                                )
-                                _fig.canvas.flush_events()
-                                plt.pause(0.001)
-                                _sym_buf.clear()
-                                _pkt_count = 0
                     else:
-                        status.log(f"  [RX] #{n_total}  header CRC failed  "
+                        reason = pkt.err_reason or "payload CRC failed"
+                        status.log(f"  [RX] #{n_total}  {reason}  "
                                    f"(ok={n_valid}, dropped≈{n_dropped})")
+
+                    # Collect symbols for constellation plot — both valid and
+                    # invalid packets carry useful diagnostic info (sync /
+                    # carrier / EVM problems show up the same way).
+                    if (args.constellation
+                            and pkt.rx_symbols is not None
+                            and pkt.rx_symbols.size > 0):
+                        _sym_buf.append(pkt.rx_symbols)
+                        _pkt_count += 1
+                        if _pkt_count >= _PLOT_EVERY:
+                            import matplotlib.pyplot as plt
+                            all_syms = np.concatenate(_sym_buf)
+                            _scat.set_offsets(np.column_stack([all_syms.real, all_syms.imag]))
+                            _ax.set_title(
+                                f"{pipe_cfg.MOD_SCHEME.name} constellation — "
+                                f"last {_pkt_count} pkts ({len(all_syms)} symbols)"
+                            )
+                            _fig.canvas.flush_events()
+                            plt.pause(0.001)
+                            _sym_buf.clear()
+                            _pkt_count = 0
 
                 # Refresh the live line every buffer (even on idle ones).
                 last_seq_str = f"{last_seq:>10d}" if last_seq is not None else "         -"
