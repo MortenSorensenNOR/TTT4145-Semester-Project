@@ -68,7 +68,7 @@ class PipelineConfig:
     pulse_shaping: bool = True
     costas_loop: bool = True
     nda_ted: bool = True
-    interleaving: bool = False
+    interleaving: bool = True
     cfo_correction: bool = True
 
 
@@ -135,8 +135,15 @@ class TXPipeline:
         msg = msg ^ _SCRAMBLE_BITS[:len(msg)]
         cfg = LDPCConfig(k=k, code_rate=code_rate)
 
-        # Return encoded payload
-        return ldpc_encode_batch(msg, cfg).ravel()
+        coded = ldpc_encode_batch(msg, cfg).ravel()
+
+        # Block interleaver: codewords as rows, read out by columns. Spreads any
+        # symbol-burst across n_cw codewords instead of concentrating it in one.
+        if self.config.interleaving and n_cw > 1:
+            n = coded.size // n_cw
+            coded = coded.reshape(n_cw, n).T.ravel()
+
+        return coded
 
     def transmit(self, packet: Packet) -> np.ndarray:
         mod_scheme = packet.mod_scheme if packet.mod_scheme is not None else self.config.MOD_SCHEME
@@ -381,6 +388,11 @@ class RXPipeline:
         llrs_per_sym = mod.symbols2llrs(rx_syms)
         llrs = llrs_per_sym.ravel()[:n_air_bits]
         n   = n_air_bits // _n_cw
+
+        # Inverse of the TX block interleaver: regroup LLRs by codeword.
+        if self.config.interleaving and _n_cw > 1:
+            llrs = llrs.reshape(n, _n_cw).T.ravel()
+
         cfg = LDPCConfig(k=_k, code_rate=code_rate)
         decoded = ldpc_decode_batch(
             llrs.reshape(_n_cw, n), cfg,

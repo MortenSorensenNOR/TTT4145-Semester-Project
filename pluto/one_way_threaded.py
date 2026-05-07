@@ -301,7 +301,7 @@ if __name__ == "__main__":
         _fig = _ax = _scat = None
         _sym_buf: list[np.ndarray] = []   # post-Costas symbols accumulated across packets
         _pkt_count = 0                    # valid packets since last plot refresh
-        _PLOT_EVERY = 10                  # update plot every N valid packets
+        _PLOT_EVERY = 1                  # update plot every N valid packets
         if args.constellation:
             import matplotlib.pyplot as plt
             _fig, _ax, _scat = _setup_constellation_plot()
