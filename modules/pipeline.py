@@ -43,6 +43,29 @@ _SCRAMBLE_RNG  = np.random.default_rng(seed=0xC3C3C3C3)
 _SCRAMBLE_BITS = _SCRAMBLE_RNG.integers(0, 2, 1 << 16, dtype=np.uint8)
 
 
+# Rotated bit-level block interleaver. A plain transpose with stride n_cw
+# divisible by bps locks each codeword to one PSK bit-position; rotating each
+# column by its column index cycles the bit-position per codeword while
+# preserving the property that each modulator-symbol's bps bits land in bps
+# different codewords. Permutations are deterministic from (n_cw, n) and cached.
+_INTERLEAVER_PERM_CACHE: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
+
+def _interleaver_perms(n_cw: int, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return (tx_perm, rx_perm) for the rotated bit-level interleaver."""
+    key = (n_cw, n)
+    cached = _INTERLEAVER_PERM_CACHE.get(key)
+    if cached is not None:
+        return cached
+    p = np.arange(n_cw * n, dtype=np.int64)
+    col = p // n_cw
+    row = (p % n_cw - col) % n_cw
+    tx = row * n + col  # output[p] = original_flat[tx[p]]
+    rx = np.empty_like(tx)
+    rx[tx] = np.arange(n_cw * n, dtype=np.int64)
+    _INTERLEAVER_PERM_CACHE[key] = (tx, rx)
+    return tx, rx
+
+
 @dataclass
 class PipelineConfig:
     SAMPLE_RATE: int = 6_000_000
@@ -139,17 +162,14 @@ class TXPipeline:
 
         coded = ldpc_encode_batch(msg, cfg).ravel()
 
-        # Symbol-level block interleaver. A bit-level transpose with stride n_cw
-        # divisible by bps locks each codeword to one PSK bit-position, which
-        # creates systematically weak codewords (worst-LSB cw). Interleaving
-        # whole modulator-symbols (bps-bit chunks) keeps each codeword's
-        # bit-position mix balanced while still spreading any burst across
-        # n_cw codewords.
+        # Rotated bit-level interleaver: max bit-spreading (each modulator
+        # symbol's bps bits land in bps different codewords) AND balanced
+        # bit-position mix per codeword (no systematically weak codewords).
         bps = mod_scheme.value + 1
         if self.config.interleaving and n_cw > 1 and bps > 1:
             n = coded.size // n_cw
-            n_syms = n // bps
-            coded = coded.reshape(n_cw, n_syms, bps).transpose(1, 0, 2).reshape(-1)
+            tx_perm, _ = _interleaver_perms(n_cw, n)
+            coded = coded[tx_perm]
 
         return coded
 
@@ -403,11 +423,11 @@ class RXPipeline:
         llrs = llrs_per_sym.ravel()[:n_air_bits]
         n   = n_air_bits // _n_cw
 
-        # Inverse of the TX symbol-level block interleaver: regroup LLRs by codeword,
-        # preserving bit-position order within each modulator-symbol.
+        # Inverse of the TX rotated bit-level interleaver: regroup LLRs into
+        # per-codeword order before LDPC decode.
         if self.config.interleaving and _n_cw > 1 and bps > 1:
-            n_syms = n // bps
-            llrs = llrs.reshape(n_syms, _n_cw, bps).transpose(1, 0, 2).reshape(-1)
+            _, rx_perm = _interleaver_perms(_n_cw, n)
+            llrs = llrs[rx_perm]
 
         # Per-codeword pre-decode quality. Mean is too coarse for sparse bursts
         # (a few "shot-out" symbols barely move it), so also count bits with
