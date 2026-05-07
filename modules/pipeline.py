@@ -91,7 +91,7 @@ class PipelineConfig:
     pulse_shaping: bool = True
     costas_loop: bool = True
     nda_ted: bool = True
-    interleaving: bool = False
+    interleaving: bool = True
     cfo_correction: bool = True
 
 
