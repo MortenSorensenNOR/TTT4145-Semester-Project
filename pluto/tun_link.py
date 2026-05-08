@@ -61,7 +61,7 @@ if __name__ == "__main__":
                              "'rx': open only the RX Pluto, write received "
                              "packets to TUN, never transmit. 'both' (default): "
                              "full-duplex, open both Plutos.")
-    parser.add_argument("--gain",     type=float, default=-10,    help="TX gain in dB (default: -10)")
+    parser.add_argument("--gain",     type=float, default=0,    help="TX gain in dB (default: 0)")
     parser.add_argument("--video",    action="store_true",        help="Use the video-mode FDD pair (2327/2390 MHz) instead of the default network pair (2470/2475 MHz).")
     parser.add_argument("--rx-gain-mode", type=str, default="manual",
                         choices=("slow_attack", "fast_attack", "hybrid", "manual"),
