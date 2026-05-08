@@ -2,15 +2,14 @@
 # Stream a video file with HEVC hardware encode on an NVIDIA GPU (NVENC),
 # transported over SRT. NVENC counterpart of stream_video_srt.sh for boxes
 # without an AMD iGPU / VAAPI. SRT runs over UDP but is bidirectional, with
-# ARQ retransmit inside the latency window — so we can afford a longer GOP
-# than the one-way UDP variant.
+# ARQ retransmit inside the latency window.
 #
 # Targets 3 Mbps video CBR.
 #
 # Usage:
 #   scripts/stream_video_srt_nvenc.sh ~/oled.mp4                        # → 10.0.0.1:5000
 #   scripts/stream_video_srt_nvenc.sh ~/oled.mp4 192.168.0.169 1234     # explicit dst:port
-#   scripts/stream_video_srt_nvenc.sh ~/oled.mp4 192.168.0.169 1234 200 # custom latency (ms)
+#   scripts/stream_video_srt_nvenc.sh ~/oled.mp4 192.168.0.169 1234 300 # custom latency (ms)
 #
 # IMPORTANT: receiver must decode HEVC, not H.264. See run_ffplay_srt.sh.
 #
@@ -26,7 +25,9 @@ set -euo pipefail
 INPUT="${1:?usage: $0 <input-file> [dest-ip] [dest-port] [latency-ms]}"
 DEST="${2:-10.0.0.1}"
 PORT="${3:-5000}"
-LATENCY_MS="${4:-120}"
+# Rule of thumb: SRT latency >= 4*RTT. Radio link RTT ~50 ms, so 250 ms gives
+# room for two NAK round-trips before TLPKTDROP starts trashing frames.
+LATENCY_MS="${4:-250}"
 
 LATENCY_US=$(( LATENCY_MS * 1000 ))
 
@@ -53,11 +54,11 @@ exec ffmpeg -re \
     -vf "$VF" \
     -c:v hevc_nvenc \
     -preset "$PRESET" -tune hq \
-    -rc cbr -b:v 3000k \
+    -rc cbr -b:v 3000k -maxrate 3300k -bufsize 1000k \
     -rc-lookahead 32 -spatial_aq 1 -temporal_aq "$TEMPORAL_AQ" -aq-strength 8 \
     "${bframe_args[@]}" "${refs_args[@]}" \
-    -g 240 \
+    -g 60 \
     -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv \
     -c:a libopus -b:a 96k -ac 2 -application audio \
-    -f mpegts \
-    "srt://${DEST}:${PORT}?mode=caller&latency=${LATENCY_US}&pkt_size=1316"
+    -f mpegts -mpegts_flags +resend_headers -pat_period 0.1 -sdt_period 0.1 \
+    "srt://${DEST}:${PORT}?mode=caller&latency=${LATENCY_US}&pkt_size=1316&maxbw=440000"

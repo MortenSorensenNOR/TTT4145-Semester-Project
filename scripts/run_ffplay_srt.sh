@@ -4,13 +4,13 @@
 # must allow packets in both directions on this port.
 #
 # Usage:
-#   scripts/run_ffplay_srt.sh              # listen on 5000, 120 ms latency
+#   scripts/run_ffplay_srt.sh              # listen on 5000, 250 ms latency
 #   scripts/run_ffplay_srt.sh 1234         # explicit port
-#   scripts/run_ffplay_srt.sh 1234 200     # custom latency (ms)
+#   scripts/run_ffplay_srt.sh 1234 300     # custom latency (ms)
 set -euo pipefail
 
 PORT="${1:-5000}"
-LATENCY_MS="${2:-120}"
+LATENCY_MS="${2:-250}"
 LATENCY_US=$(( LATENCY_MS * 1000 ))
 
 exec ffplay \
