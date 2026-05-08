@@ -25,9 +25,10 @@ set -euo pipefail
 INPUT="${1:?usage: $0 <input-file> [dest-ip] [dest-port] [latency-ms]}"
 DEST="${2:-10.0.0.1}"
 PORT="${3:-5000}"
-# 500 ms covers the ~250-300 ms TxStream packer queue (sdr_stream.py, maxsize=64)
-# plus headroom for ARQ retransmits. One-way video doesn't care about latency.
-LATENCY_MS="${4:-500}"
+# 1000 ms — covers the ~333 ms TUN queue (txqueuelen 100) + ~190 ms TxStream
+# packer queue + RTT for ARQ retransmits that have to traverse the same queue.
+# One-way video doesn't care about glass-to-glass latency.
+LATENCY_MS="${4:-1000}"
 
 LATENCY_US=$(( LATENCY_MS * 1000 ))
 
