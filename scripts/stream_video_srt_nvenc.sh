@@ -25,9 +25,9 @@ set -euo pipefail
 INPUT="${1:?usage: $0 <input-file> [dest-ip] [dest-port] [latency-ms]}"
 DEST="${2:-10.0.0.1}"
 PORT="${3:-5000}"
-# Rule of thumb: SRT latency >= 4*RTT. Radio link RTT ~50 ms, so 250 ms gives
-# room for two NAK round-trips before TLPKTDROP starts trashing frames.
-LATENCY_MS="${4:-250}"
+# 500 ms covers the ~250-300 ms TxStream packer queue (sdr_stream.py, maxsize=64)
+# plus headroom for ARQ retransmits. One-way video doesn't care about latency.
+LATENCY_MS="${4:-500}"
 
 LATENCY_US=$(( LATENCY_MS * 1000 ))
 
