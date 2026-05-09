@@ -40,6 +40,7 @@ from pluto.live_status import (
     LiveStatus, RateMeter, _fmt_rate, _fmt_bytes, _install_live_logging,
 )
 from utils.bit import round_up
+from utils.profile import Profiler, NULL_PROFILER
 
 import logging
 logging.basicConfig(
@@ -94,6 +95,10 @@ if __name__ == "__main__":
                         help="Kernel TUN tx queue length in packets (default: "
                              "200). Lower values tighten backpressure but risk "
                              "I-frame burst drops on plain UDP video.")
+    parser.add_argument("--profile", action="store_true",
+                        help="Record per-stage timings (queue wait, build, "
+                             "stream send, receive sub-stages, tun write, "
+                             "iter total) and log p50/p95/p99/max every 2 s.")
     args = parser.parse_args()
 
     setup = load_setup()
@@ -131,6 +136,11 @@ if __name__ == "__main__":
     pipe_cfg = PipelineConfig()
     tx_pipe = TXPipeline(pipe_cfg)
     rx_pipe = RXPipeline(pipe_cfg) if do_rx else None
+
+    profiler = Profiler() if args.profile else NULL_PROFILER
+    tx_pipe.profiler = profiler
+    if rx_pipe is not None:
+        rx_pipe.profiler = profiler
 
     rng = np.random.default_rng(0)
 
@@ -181,6 +191,8 @@ if __name__ == "__main__":
         print(f"RX buf    : {rx_buf_size} samples  ({rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
     if do_tx:
         print(f"TX gain   : {args.gain} dB")
+    if args.profile:
+        print(f"Profile   : enabled — dumps every 2s")
     print()
 
     # SDR setup
@@ -286,13 +298,20 @@ if __name__ == "__main__":
         stream.start()
         try:
             while not stop_event.is_set():
-                try:
-                    payload = send_q.get(timeout=0.05)
-                except queue.Empty:
-                    continue
-                stream.send(_tx_build(payload))
+                with profiler.stage("tx.queue_wait"):
+                    try:
+                        payload = send_q.get(timeout=0.05)
+                    except queue.Empty:
+                        continue
+                with profiler.stage("tx.iter_total"):
+                    with profiler.stage("tx.build"):
+                        samples = _tx_build(payload)
+                    with profiler.stage("tx.stream_send"):
+                        stream.send(samples)
                 tx_rate.add(len(payload))
                 _tx_status(stream)
+                if profiler.enabled and profiler.should_dump():
+                    logger.info(profiler.dump())
         finally:
             stream.stop()
 
@@ -343,38 +362,45 @@ if __name__ == "__main__":
         search_from = 0
         try:
             while not stop_event.is_set():
-                try:
-                    curr_buf = stream.get(timeout=0.05)
-                except queue.Empty:
-                    continue
-
-                prev_len = len(prev_buf) if prev_buf is not None else 0
-                raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
-
-                packets, max_det = rx_pipe.receive(raw, search_from=search_from)
-                stats["data_rx_payload_bad"] += rx_pipe.last_payload_failures
-
-                prev_buf = curr_buf
-                if packets:
-                    last_ps = max(p.sample_start for p in packets)
-                    search_from = max(0, max(last_ps, max_det) - prev_len)
-                else:
-                    search_from = max(0, max_det - prev_len)
-
-                for pkt in packets:
-                    # Invalid packets (payload CRC / LDPC fail) carry symbols
-                    # for constellation diagnostics but no usable payload —
-                    # already counted via data_rx_payload_bad above.
-                    if not pkt.valid:
+                with profiler.stage("rx.queue_wait"):
+                    try:
+                        curr_buf = stream.get(timeout=0.05)
+                    except queue.Empty:
                         continue
-                    payload_bytes = (
-                        np.packbits(pkt.payload[:pkt.length * 8].astype(np.uint8)).tobytes()
-                        if pkt.length > 0 else b""
-                    )
-                    if not _rx_handle_packet(valid=pkt.valid, dst_mac=pkt.dst_mac,
-                                             length=pkt.length, payload_bytes=payload_bytes):
-                        return
+
+                with profiler.stage("rx.iter_total"):
+                    prev_len = len(prev_buf) if prev_buf is not None else 0
+                    raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
+
+                    with profiler.stage("rx.receive"):
+                        packets, max_det = rx_pipe.receive(raw, search_from=search_from)
+                    stats["data_rx_payload_bad"] += rx_pipe.last_payload_failures
+
+                    prev_buf = curr_buf
+                    if packets:
+                        last_ps = max(p.sample_start for p in packets)
+                        search_from = max(0, max(last_ps, max_det) - prev_len)
+                    else:
+                        search_from = max(0, max_det - prev_len)
+
+                    for pkt in packets:
+                        # Invalid packets (payload CRC / LDPC fail) carry symbols
+                        # for constellation diagnostics but no usable payload —
+                        # already counted via data_rx_payload_bad above.
+                        if not pkt.valid:
+                            continue
+                        payload_bytes = (
+                            np.packbits(pkt.payload[:pkt.length * 8].astype(np.uint8)).tobytes()
+                            if pkt.length > 0 else b""
+                        )
+                        with profiler.stage("rx.tun_write"):
+                            ok = _rx_handle_packet(valid=pkt.valid, dst_mac=pkt.dst_mac,
+                                                   length=pkt.length, payload_bytes=payload_bytes)
+                        if not ok:
+                            return
                 _rx_status(stream)
+                if profiler.enabled and profiler.should_dump():
+                    logger.info(profiler.dump())
         finally:
             stream.stop()
 

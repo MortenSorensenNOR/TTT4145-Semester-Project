@@ -13,6 +13,7 @@ from modules.ldpc.channel_coding import *
 from modules.nda_ted.nda_ted import *
 
 from utils.plotting import *
+from utils.profile import NULL_PROFILER
 
 import logging
 logger = logging.getLogger(__name__)
@@ -125,6 +126,7 @@ class Packet:
 class TXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
+        self.profiler = NULL_PROFILER
         self.frame_constructor = FrameConstructor()
 
         self.bpsk  = BPSK()
@@ -192,17 +194,17 @@ class TXPipeline:
         )
         (header_bits, payload_bits) = self.frame_constructor.encode(header, packet.payload)
 
-        # LDPC encode
-        payload_for_mod = self._ldpc_encode(payload_bits, coding_rate, mod_scheme)
+        with self.profiler.stage("tx.ldpc_encode"):
+            payload_for_mod = self._ldpc_encode(payload_bits, coding_rate, mod_scheme)
 
-        # modulate
-        payload_modulator = self._modulators[mod_scheme]
-        header_syms = self.bpsk.bits2symbols(header_bits)
-        payload_syms = payload_modulator.bits2symbols(payload_for_mod.reshape(-1, mod_scheme.value+1))
+        with self.profiler.stage("tx.modulate"):
+            payload_modulator = self._modulators[mod_scheme]
+            header_syms = self.bpsk.bits2symbols(header_bits)
+            payload_syms = payload_modulator.bits2symbols(payload_for_mod.reshape(-1, mod_scheme.value+1))
 
-        # construct signal
-        tx_syms = np.concatenate([self.guard_syms,self.sync_syms, header_syms, payload_syms,self.guard_syms])
-        tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
+        with self.profiler.stage("tx.upsample"):
+            tx_syms = np.concatenate([self.guard_syms,self.sync_syms, header_syms, payload_syms,self.guard_syms])
+            tx_signal = upsample(tx_syms, self.config.SPS, self.rrc_taps)
         return tx_signal
 
 @dataclass
@@ -217,6 +219,7 @@ class DetectionResult:
 class RXPipeline:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
+        self.profiler = NULL_PROFILER
         self.frame_constructor = FrameConstructor()
 
         self.num_taps = 2 * config.SPS * config.SPAN + 1
@@ -237,8 +240,10 @@ class RXPipeline:
 
     def receive(self, buffer: np.ndarray, search_from: int = 0) -> tuple[list[Packet], int]:
         search_buf = buffer[search_from:]
-        filtered_buffer = match_filter(search_buf, self.rrc_taps)
-        detections = self.detect(filtered_buffer)
+        with self.profiler.stage("rx.match_filter"):
+            filtered_buffer = match_filter(search_buf, self.rrc_taps)
+        with self.profiler.stage("rx.detect"):
+            detections = self.detect(filtered_buffer)
         if not detections:
             return [], search_from
 
@@ -252,7 +257,8 @@ class RXPipeline:
             abs_payload_start = search_from + det.payload_start
             rx_syms = filtered_buffer[det.payload_start:]
             try:
-                decoded_packet = self.decode(rx_syms, det.cfo_estimate, det.phase_estimate)
+                with self.profiler.stage("rx.decode"):
+                    decoded_packet = self.decode(rx_syms, det.cfo_estimate, det.phase_estimate)
                 decoded_packet.sample_start = abs_payload_start
                 packets.append(decoded_packet)
                 max_detection_sample = max(max_detection_sample, abs_payload_start)
@@ -305,7 +311,8 @@ class RXPipeline:
     def decode(self, buffer: np.ndarray, cfo: np.float32, phase_estimate: np.float32) -> Packet:
         cfo_rad_per_symbol = np.float32(2 * np.pi * float(cfo) / self.config.SAMPLE_RATE * self.config.SPS)
 
-        header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
+        with self.profiler.stage("rx.header_decode"):
+            header, payload_start, current_phase_estimate = self.header_decode(buffer, cfo_rad_per_symbol, phase_estimate)
 
         valid = header.crc_passed
         err_reason = "" if header.crc_passed else "header CRC failed"
@@ -315,7 +322,8 @@ class RXPipeline:
             payload = np.empty((0, 1), dtype=int)
             rx_symbols = np.empty(0, dtype=np.complex64)
         else:
-            payload, rx_symbols, llr_abs_mean_per_cw, llr_weak_per_cw = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
+            with self.profiler.stage("rx.payload_decode"):
+                payload, rx_symbols, llr_abs_mean_per_cw, llr_weak_per_cw = self.payload_decode(buffer, header, payload_start, cfo_rad_per_symbol, current_phase_estimate)
             if payload is None:
                 payload = np.empty((0, 1), dtype=int)
                 valid = False

@@ -32,6 +32,7 @@ from pluto.live_status import (
     LiveStatus, RateMeter, _fmt_rate, _fmt_bytes, _install_live_logging,
 )
 from utils.bit import round_up
+from utils.profile import Profiler, NULL_PROFILER
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -78,6 +79,9 @@ if __name__ == "__main__":
                         help="Number of initial RX buffers to skip before dumping starts "
                              "(default: 0). Lets the Pluto's AGC/LO/clock warm up so the "
                              "saved captures are representative of steady-state operation.")
+    parser.add_argument("--profile", action="store_true",
+                        help="Record per-stage timings on the hot loop and log "
+                             "p50/p95/p99/max every 2 s.")
     args = parser.parse_args()
 
     setup = load_setup()
@@ -107,6 +111,10 @@ if __name__ == "__main__":
     pipe_cfg = PipelineConfig()
     tx_pipe  = TXPipeline(pipe_cfg)
     rx_pipe  = RXPipeline(pipe_cfg)
+
+    profiler = Profiler() if args.profile else NULL_PROFILER
+    tx_pipe.profiler = profiler
+    rx_pipe.profiler = profiler
 
     rng = np.random.default_rng(0)
 
@@ -152,6 +160,8 @@ if __name__ == "__main__":
     print(f"Gap       : {args.interval} ms")
     print(f"Packets   : {args.packets} per burst")
     print(f"TX gain   : {args.gain} dB")
+    if args.profile:
+        print(f"Profile   : enabled — dumps every 2s")
 
     print()
 
@@ -228,9 +238,14 @@ if __name__ == "__main__":
                     else:
                         pay_size = args.payload
 
-                    samples = _build_packet(global_seq, pay_size)
-                    stream.send(samples)
+                    with profiler.stage("tx.iter_total"):
+                        with profiler.stage("tx.build"):
+                            samples = _build_packet(global_seq, pay_size)
+                        with profiler.stage("tx.stream_send"):
+                            stream.send(samples)
                     rate.add(pay_size)
+                    if profiler.enabled and profiler.should_dump():
+                        status.log(profiler.dump())
                     status.set(0, f"  [TX] seq={global_seq+1:>10d}  burst={burst_num:>4d}  "
                                   f"pending={stream.pending:>3d}  rate={_fmt_rate(rate.rate_bps)}  "
                                   f"avg={_fmt_rate(rate.avg_bps)}  total={_fmt_bytes(rate.total_bytes)}")
@@ -332,20 +347,22 @@ if __name__ == "__main__":
 
         try:
             while True:
-                try:
-                    curr_buf = stream.get(timeout=0.05)
-                except queue.Empty:
-                    if args.constellation and _fig is not None:
-                        import matplotlib.pyplot as plt
-                        plt.pause(0.001)
-                    continue
+                with profiler.stage("rx.queue_wait"):
+                    try:
+                        curr_buf = stream.get(timeout=0.05)
+                    except queue.Empty:
+                        if args.constellation and _fig is not None:
+                            import matplotlib.pyplot as plt
+                            plt.pause(0.001)
+                        continue
 
                 prev_len = len(prev_buf) if prev_buf is not None else 0
                 raw = np.concatenate([prev_buf, curr_buf]) if prev_buf is not None else curr_buf
 
                 _t0 = time.perf_counter()
                 _rx_search_from = search_from
-                packets, max_det = rx_pipe.receive(raw, search_from=search_from)
+                with profiler.stage("rx.receive"):
+                    packets, max_det = rx_pipe.receive(raw, search_from=search_from)
                 _proc_ms = (time.perf_counter() - _t0) * 1e3
                 _proc_times.append(_proc_ms)
                 _buf_count += 1
@@ -398,6 +415,9 @@ if __name__ == "__main__":
                                f"detections={n_detections}, ok={n_valid}, "
                                f"hdr_fail={n_hdr_fail}, pl_fail={n_pl_fail}, gap_dropped≈{n_dropped}")
                     _proc_times.clear()
+
+                if profiler.enabled and profiler.should_dump():
+                    status.log(profiler.dump())
 
                 prev_buf = curr_buf
                 if packets:
