@@ -84,6 +84,16 @@ if __name__ == "__main__":
     parser.add_argument("--tun-ip",   type=str,   default=None,   help="TUN IPv4 address with /24 implicit (default: 10.0.0.1 for A, 10.0.0.2 for B)")
     parser.add_argument("--mtu",      type=int,   default=1500,   help="TUN MTU in bytes (default: 1500)")
     parser.add_argument("--queue-depth", type=int, default=64,    help="TUN→TX queue depth before drops (default: 64)")
+    parser.add_argument("--tx-stream-maxsize", type=int, default=64,
+                        help="TxStream packet queue depth (default: 64). Each "
+                             "queued packet is ~one DMA buffer of air-time, so "
+                             "64 ≈ 160 ms of hidden buffer. Lower (e.g. 8) to "
+                             "tighten backpressure for timestamp-based "
+                             "transports like SRT.")
+    parser.add_argument("--txqueuelen", type=int, default=200,
+                        help="Kernel TUN tx queue length in packets (default: "
+                             "200). Lower values tighten backpressure but risk "
+                             "I-frame burst drops on plain UDP video.")
     args = parser.parse_args()
 
     setup = load_setup()
@@ -147,7 +157,7 @@ if __name__ == "__main__":
     rx_freq = node_freqs["rx"]
 
     print(f"Node      : {args.node}  (peer {peer})  mode={args.mode}  freq={'video' if args.video else 'network'}")
-    print(f"TUN       : {args.tun_name} = {tun_ip}/24  (peer {peer_tun_ip})  MTU {args.mtu}")
+    print(f"TUN       : {args.tun_name} = {tun_ip}/24  (peer {peer_tun_ip})  MTU {args.mtu}  txqueuelen {args.txqueuelen}")
     if do_tx:
         print(f"TX radio  : {tx_uri}   @ {tx_freq / 1e6:.3f} MHz")
     else:
@@ -164,7 +174,9 @@ if __name__ == "__main__":
     print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
     print(f"Frame len : {frame_len} samples  ({frame_len / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
     if do_tx:
-        print(f"TX buf    : {tx_buf_size} samples  ({tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
+        print(f"TX buf    : {tx_buf_size} samples  ({tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)  "
+              f"stream_q={args.tx_stream_maxsize} "
+              f"(~{args.tx_stream_maxsize * tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.0f} ms hidden)")
     if do_rx:
         print(f"RX buf    : {rx_buf_size} samples  ({rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
     if do_tx:
@@ -191,6 +203,7 @@ if __name__ == "__main__":
     tun = TunDevice(name=args.tun_name, mtu=args.mtu)
     try:
         _ip("link", "set", "dev", args.tun_name, "mtu", str(args.mtu))
+        _ip("link", "set", "dev", args.tun_name, "txqueuelen", str(args.txqueuelen))
         _ip("addr", "add", f"{tun_ip}/24", "dev", args.tun_name)
         _ip("link", "set", args.tun_name, "up")
     except subprocess.CalledProcessError as e:
@@ -268,7 +281,8 @@ if __name__ == "__main__":
 
 
     def tx_thread_fn():
-        stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
+        stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size,
+                          maxsize=args.tx_stream_maxsize)
         stream.start()
         try:
             while not stop_event.is_set():

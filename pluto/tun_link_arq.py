@@ -239,6 +239,16 @@ if __name__ == "__main__":
                         help="TUN→ARQ queue depth before TUN reads are dropped (default: 64).")
     parser.add_argument("--no-bypass-udp", action="store_true",
                         help="Send UDP through ARQ too instead of via PacketType.RAW.")
+    parser.add_argument("--tx-stream-maxsize", type=int, default=64,
+                        help="TxStream packet queue depth (default: 64). Each "
+                             "queued packet is ~one DMA buffer of air-time, so "
+                             "64 ≈ 160 ms of hidden buffer. Lower (e.g. 8) to "
+                             "tighten backpressure for timestamp-based "
+                             "transports like SRT.")
+    parser.add_argument("--txqueuelen", type=int, default=200,
+                        help="Kernel TUN tx queue length in packets (default: "
+                             "200). Lower values tighten backpressure but risk "
+                             "I-frame burst drops on plain UDP video.")
     args = parser.parse_args()
 
     if args.window_size < 1 or args.window_size >= SEQ_SPACE // 2:
@@ -305,7 +315,7 @@ if __name__ == "__main__":
     bypass_udp = not args.no_bypass_udp
 
     print(f"Node      : {args.node}  (peer {peer})  mode=both (ARQ)  freq={'video' if args.video else 'network'}")
-    print(f"TUN       : {args.tun_name} = {tun_ip}/24  (peer {peer_tun_ip})  MTU {args.mtu}")
+    print(f"TUN       : {args.tun_name} = {tun_ip}/24  (peer {peer_tun_ip})  MTU {args.mtu}  txqueuelen {args.txqueuelen}")
     print(f"TX radio  : {tx_uri}   @ {tx_freq / 1e6:.3f} MHz")
     if args.rx_gain_mode == "manual":
         rx_gain_desc = f"manual {args.rx_gain:.1f} dB"
@@ -315,7 +325,9 @@ if __name__ == "__main__":
           f"(CFO {rx_cfo_hz:+d} Hz, {cfo_src}; {rx_gain_desc})")
     print(f"Pipeline  : SPS={pipe_cfg.SPS}, alpha={pipe_cfg.RRC_ALPHA}, mod={pipe_cfg.MOD_SCHEME.name}")
     print(f"Frame len : {frame_len} samples  ({frame_len / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
-    print(f"TX buf    : {tx_buf_size} samples  ({tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
+    print(f"TX buf    : {tx_buf_size} samples  ({tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)  "
+          f"stream_q={args.tx_stream_maxsize} "
+          f"(~{args.tx_stream_maxsize * tx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.0f} ms hidden)")
     print(f"RX buf    : {rx_buf_size} samples  ({rx_buf_size / pipe_cfg.SAMPLE_RATE * 1e3:.1f} ms)")
     print(f"TX gain   : {args.gain} dB")
     print(f"ARQ       : window={args.window_size} (selective-repeat, SEQ_SPACE={SEQ_SPACE}) "
@@ -337,6 +349,7 @@ if __name__ == "__main__":
     tun = TunDevice(name=args.tun_name, mtu=args.mtu)
     try:
         _ip("link", "set", "dev", args.tun_name, "mtu", str(args.mtu))
+        _ip("link", "set", "dev", args.tun_name, "txqueuelen", str(args.txqueuelen))
         _ip("addr", "add", f"{tun_ip}/24", "dev", args.tun_name)
         _ip("link", "set", args.tun_name, "up")
     except subprocess.CalledProcessError as e:
@@ -356,7 +369,8 @@ if __name__ == "__main__":
         "udp_bypass_rx":       0,
     }
 
-    tx_stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size)
+    tx_stream = TxStream(tx_sdr, pipe_cfg.SAMPLE_RATE, tx_buf_size,
+                         maxsize=args.tx_stream_maxsize)
     rx_stream = RxStream(rx_sdr, maxsize=128, lossless=True)
     tx_stream.start()
     rx_stream.start(flush=16)
