@@ -49,6 +49,7 @@ from pluto.live_status import (
     LiveStatus, RateMeter, _fmt_rate, _fmt_bytes, _install_live_logging,
 )
 from utils.bit import round_up
+from utils.profile import Profiler, NULL_PROFILER
 
 import logging
 logging.basicConfig(
@@ -108,20 +109,26 @@ class RadioTx:
 
     def __init__(self, tx_pipe: TXPipeline, tx_stream: TxStream,
                  tx_rate: RateMeter, my_addr: int, peer_addr: int,
-                 stats_dict: dict):
+                 stats_dict: dict, profiler=NULL_PROFILER):
         self._pipe = tx_pipe
         self._stream = tx_stream
         self._rate = tx_rate
         self._my_addr = my_addr
         self._peer_addr = peer_addr
         self._stats = stats_dict
+        self._profiler = profiler
 
     def _push(self, packet: Packet) -> None:
-        samples = self._pipe.transmit(packet)
-        peak = float(np.max(np.abs(samples)))
-        if peak > 0:
-            samples = samples / peak
-        self._stream.send((samples * DAC_SCALE).astype(np.complex64))
+        with self._profiler.stage("tx.build"):
+            samples = self._pipe.transmit(packet)
+            peak = float(np.max(np.abs(samples)))
+            if peak > 0:
+                samples = samples / peak
+            buf = (samples * DAC_SCALE).astype(np.complex64)
+        # tx.stream_send blocking == TxStream queue full == downstream bufferbloat,
+        # the smoking gun for SRT timestamp-based delivery breaking down.
+        with self._profiler.stage("tx.stream_send"):
+            self._stream.send(buf)
 
     def __call__(self, packet: Packet) -> None:
         self._push(packet)
@@ -152,7 +159,7 @@ class RadioRx:
 
     def __init__(self, rx_stream: RxStream, rx_pipe: RXPipeline,
                  rx_rate: RateMeter, stats_dict: dict, tun: TunDevice,
-                 my_addr: int):
+                 my_addr: int, profiler=NULL_PROFILER):
         self._stream = rx_stream
         self._pipe = rx_pipe
         self._rate = rx_rate
@@ -161,49 +168,54 @@ class RadioRx:
         self._my_addr = my_addr
         self._prev_buf: np.ndarray | None = None
         self._search_from = 0
+        self._profiler = profiler
 
     def __call__(self) -> list[Packet]:
-        try:
-            curr_buf = self._stream.get(timeout=0.05)
-        except queue.Empty:
-            return []
+        with self._profiler.stage("rx.queue_wait"):
+            try:
+                curr_buf = self._stream.get(timeout=0.05)
+            except queue.Empty:
+                return []
 
-        prev_len = len(self._prev_buf) if self._prev_buf is not None else 0
-        raw = (np.concatenate([self._prev_buf, curr_buf])
-               if self._prev_buf is not None else curr_buf)
+        with self._profiler.stage("rx.iter_total"):
+            prev_len = len(self._prev_buf) if self._prev_buf is not None else 0
+            raw = (np.concatenate([self._prev_buf, curr_buf])
+                   if self._prev_buf is not None else curr_buf)
 
-        packets, max_det = self._pipe.receive(raw, search_from=self._search_from)
-        self._stats["data_rx_payload_bad"] += self._pipe.last_payload_failures
+            with self._profiler.stage("rx.receive"):
+                packets, max_det = self._pipe.receive(raw, search_from=self._search_from)
+            self._stats["data_rx_payload_bad"] += self._pipe.last_payload_failures
 
-        self._prev_buf = curr_buf
-        if packets:
-            last_ps = max(p.sample_start for p in packets)
-            self._search_from = max(0, max(last_ps, max_det) - prev_len)
-        else:
-            self._search_from = max(0, max_det - prev_len)
+            self._prev_buf = curr_buf
+            if packets:
+                last_ps = max(p.sample_start for p in packets)
+                self._search_from = max(0, max(last_ps, max_det) - prev_len)
+            else:
+                self._search_from = max(0, max_det - prev_len)
 
-        forwarded: list[Packet] = []
-        for pkt in packets:
-            if not pkt.valid:
-                continue
-            if pkt.type == int(PacketType.RAW):
-                if pkt.dst_mac >= 0 and pkt.dst_mac != self._my_addr:
+            forwarded: list[Packet] = []
+            for pkt in packets:
+                if not pkt.valid:
                     continue
-                if pkt.length > 0:
-                    payload = np.packbits(
-                        pkt.payload[: pkt.length * 8].astype(np.uint8)
-                    ).tobytes()
-                    try:
-                        self._tun.write(payload)
-                    except OSError:
-                        pass
+                if pkt.type == int(PacketType.RAW):
+                    if pkt.dst_mac >= 0 and pkt.dst_mac != self._my_addr:
+                        continue
+                    if pkt.length > 0:
+                        payload = np.packbits(
+                            pkt.payload[: pkt.length * 8].astype(np.uint8)
+                        ).tobytes()
+                        with self._profiler.stage("rx.tun_write"):
+                            try:
+                                self._tun.write(payload)
+                            except OSError:
+                                pass
+                        self._rate.add(pkt.length)
+                        self._stats["udp_bypass_rx"] += 1
+                    continue
+                if pkt.length > 0 and pkt.type == int(PacketType.DATA):
                     self._rate.add(pkt.length)
-                    self._stats["udp_bypass_rx"] += 1
-                continue
-            if pkt.length > 0 and pkt.type == int(PacketType.DATA):
-                self._rate.add(pkt.length)
-            forwarded.append(pkt)
-        return forwarded
+                forwarded.append(pkt)
+            return forwarded
 
 
 if __name__ == "__main__":
@@ -250,6 +262,12 @@ if __name__ == "__main__":
                         help="Kernel TUN tx queue length in packets (default: "
                              "200). Lower values tighten backpressure but risk "
                              "I-frame burst drops on plain UDP video.")
+    parser.add_argument("--profile", action="store_true",
+                        help="Record per-stage timings (TX build, TX stream "
+                             "send, RX queue wait, RX receive, RX TUN write, "
+                             "plus pipeline internals) and log p50/p95/p99/max "
+                             "every 2 s. tx.stream_send tail latency is the "
+                             "primary signal for downstream bufferbloat.")
     args = parser.parse_args()
 
     if args.window_size < 1 or args.window_size >= SEQ_SPACE // 2:
@@ -288,6 +306,10 @@ if __name__ == "__main__":
     pipe_cfg = PipelineConfig()
     tx_pipe = TXPipeline(pipe_cfg)
     rx_pipe = RXPipeline(pipe_cfg)
+
+    profiler = Profiler() if args.profile else NULL_PROFILER
+    tx_pipe.profiler = profiler
+    rx_pipe.profiler = profiler
 
     rng = np.random.default_rng(0)
 
@@ -335,6 +357,8 @@ if __name__ == "__main__":
     print(f"ARQ       : window={args.window_size} (selective-repeat, SEQ_SPACE={SEQ_SPACE}) "
           f"timeout={args.retransmit_timeout}s  send_q={args.send_queue_maxsize}")
     print(f"UDP fast  : {'BYPASS (RAW frames, no ARQ)' if bypass_udp else 'OFF — UDP runs through ARQ'}")
+    if args.profile:
+        print(f"Profile   : enabled — dumps every 2s")
     print()
 
     tx_sdr = adi.Pluto(tx_uri)
@@ -377,8 +401,10 @@ if __name__ == "__main__":
     tx_stream.start()
     rx_stream.start(flush=16)
 
-    radio_tx = RadioTx(tx_pipe, tx_stream, tx_rate, my_addr, peer_addr, rx_stats)
-    radio_rx = RadioRx(rx_stream, rx_pipe, rx_rate, rx_stats, tun, my_addr)
+    radio_tx = RadioTx(tx_pipe, tx_stream, tx_rate, my_addr, peer_addr, rx_stats,
+                       profiler=profiler)
+    radio_rx = RadioRx(rx_stream, rx_pipe, rx_rate, rx_stats, tun, my_addr,
+                       profiler=profiler)
 
     arq_tun = BypassDemuxTun(tun, radio_tx.send_raw) if bypass_udp else tun
 
@@ -425,6 +451,8 @@ if __name__ == "__main__":
                 logger.info(tx_msg)
                 logger.info(rx_msg)
                 last_log_t = now
+            if profiler.enabled and profiler.should_dump():
+                logger.info(profiler.dump())
             stop_event.wait(timeout=0.2)
 
     t_status = threading.Thread(target=_status_loop, name="status", daemon=True)
