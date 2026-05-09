@@ -35,12 +35,18 @@ FPS="${FPS:-}"
 VF="scale=-2:${HEIGHT}:flags=lanczos,format=nv12,hwupload"
 [[ -n "$FPS" ]] && VF="fps=${FPS},${VF}"
 
+# maxrate + tight bufsize bound the I-frame microburst. Without them,
+# VAAPI's CBR is happy to dump a 30 KB I-frame to the wire in <10 ms
+# (~25 Mbps instantaneous) — well past the radio's 3.6 Mbps UDP capacity,
+# so any single MPEG-TS packet lost inside it corrupts the next GOP. With
+# bufsize=700k (~250 ms VBV at 2.8 Mbps) the encoder spends a few frames
+# of P-frame budget refilling after each I-frame instead of overshooting.
 exec ffmpeg -re \
     -vaapi_device "$VAAPI_DEVICE" \
     -i "$INPUT" \
     -vf "$VF" \
     -c:v hevc_vaapi -rc_mode CBR \
-    -b:v 2800k \
+    -b:v 2500k -maxrate 2800k -bufsize 700k \
     -g 60 \
     -c:a libopus -b:a 96k -ac 2 -application audio \
     -f mpegts -mpegts_flags +resend_headers -pat_period 0.1 -sdt_period 0.1 \
