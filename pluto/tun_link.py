@@ -99,6 +99,11 @@ if __name__ == "__main__":
                         help="Record per-stage timings (queue wait, build, "
                              "stream send, receive sub-stages, tun write, "
                              "iter total) and log p50/p95/p99/max every 2 s.")
+    parser.add_argument("--no-tune", action="store_true",
+                        help="Skip auto-running scripts/tune_link.sh after the "
+                             "TUN comes up. Disable if you've already tuned the "
+                             "host stack manually or have a conflicting global "
+                             "congctl/qdisc setup.")
     args = parser.parse_args()
 
     setup = load_setup()
@@ -224,6 +229,16 @@ if __name__ == "__main__":
         print(f"ERROR: failed to configure TUN {args.tun_name}: {e}", file=sys.stderr)
         print("       (need root + clean /24, e.g. no stale pluto0 from a prior run)", file=sys.stderr)
         sys.exit(1)
+
+    if not args.no_tune:
+        tune_script = Path(__file__).resolve().parents[1] / "scripts" / "tune_link.sh"
+        if tune_script.exists():
+            try:
+                subprocess.run([str(tune_script), args.tun_name, peer_tun_ip], check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"WARN: tune_link.sh exited {e.returncode}; continuing", file=sys.stderr)
+        else:
+            print(f"WARN: {tune_script} missing; skipping host stack tuning", file=sys.stderr)
 
     # Threads
     send_q: queue.Queue = queue.Queue(maxsize=args.queue_depth)
