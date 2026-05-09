@@ -10,8 +10,9 @@ Default IP plan (matches tun_link):
   --node B → TUN pluto0 = 10.0.0.2/24
 
 Usage:
-    sudo .venv/bin/python -m pluto.tun_link_arq --node A --gain -10 --rx-gain 45
-    sudo .venv/bin/python -m pluto.tun_link_arq --node B --gain -10 --rx-gain 45
+    sudo .venv/bin/python -m pluto.tun_link_arq                # node autodetected
+    sudo .venv/bin/python -m pluto.tun_link_arq --video        # video FDD pair
+    sudo .venv/bin/python -m pluto.tun_link_arq --node A       # force node A
 
 UDP datagrams read from TUN take a fast-path: PacketType.RAW frames that
 bypass ARQ entirely (no seq, no ACK, no retransmit). Disable with
@@ -42,7 +43,7 @@ from pluto.config import (
     configure_tx,
     get_node_freqs,
 )
-from pluto.setup_config import SETUP_PATH, load_or_die as load_setup
+from pluto.setup_config import SETUP_PATH, load_or_die as load_setup, resolve_node
 from pluto.sdr_stream import RxStream, TxStream
 from pluto.live_status import (
     LiveStatus, RateMeter, _fmt_rate, _fmt_bytes, _install_live_logging,
@@ -207,8 +208,8 @@ class RadioRx:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--node",     type=str,   default="A",    help="Node identity A or B; picks default TX/RX IPs from pluto/setup.json and TUN IP from DEFAULT_TUN_IP")
-    parser.add_argument("--gain",     type=float, default=0,    help="TX gain in dB (default: 0)")
+    parser.add_argument("--node",     type=str,   default=None,   help="Node identity A or B; picks default TX/RX IPs from pluto/setup.json and TUN IP from DEFAULT_TUN_IP. Autodetected from local Pluto subnet if omitted.")
+    parser.add_argument("--gain",     type=float, default=-3,   help="TX gain in dB (default: -3)")
     parser.add_argument("--video",    action="store_true",        help="Use the video-mode FDD pair (2327/2390 MHz) instead of the default network pair (2470/2475 MHz).")
     parser.add_argument("--rx-gain-mode", type=str, default="manual",
                         choices=("slow_attack", "fast_attack", "hybrid", "manual"),
@@ -216,9 +217,9 @@ if __name__ == "__main__":
                              "modes drift during the silence between bursts, "
                              "ramping gain up so the next packet clips the ADC "
                              "and the constellation widens 3–5×.")
-    parser.add_argument("--rx-gain", type=float, default=50.0,
+    parser.add_argument("--rx-gain", type=float, default=45.0,
                         help="Fixed RX hardware gain in dB when "
-                             "--rx-gain-mode=manual (default: 50, AD9361 range "
+                             "--rx-gain-mode=manual (default: 45, AD9361 range "
                              "~0–71). Ignored for any auto AGC mode.")
     parser.add_argument("--tx-buf-mult", type=float, default=1.05, help="TX buffer size as multiple of next-power-of-2 frame length")
     parser.add_argument("--rx-buf-mult", type=float, default=None,
@@ -233,8 +234,8 @@ if __name__ == "__main__":
     parser.add_argument("--window-size", type=int, default=63,
                         help=f"Selective-Repeat sender window in frames (default: 63). "
                              f"Must satisfy 1 <= window < SEQ_SPACE/2 (={SEQ_SPACE // 2}).")
-    parser.add_argument("--retransmit-timeout", type=float, default=0.5,
-                        help="Seconds with no ACK before unacked seqs are retransmitted (default: 0.5).")
+    parser.add_argument("--retransmit-timeout", type=float, default=0.1,
+                        help="Seconds with no ACK before unacked seqs are retransmitted (default: 0.1).")
     parser.add_argument("--send-queue-maxsize", type=int, default=64,
                         help="TUN→ARQ queue depth before TUN reads are dropped (default: 64).")
     parser.add_argument("--no-bypass-udp", action="store_true",
@@ -257,6 +258,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     setup = load_setup()
+    args.node = resolve_node(setup, args.node)
     if args.node not in setup.nodes:
         print(f"ERROR: --node must be one of {sorted(setup.nodes)}, got '{args.node}'")
         sys.exit(1)

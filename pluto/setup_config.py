@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import socket
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -81,6 +82,57 @@ class Setup:
 
     def rx_uri(self, node: str) -> str:
         return f"ip:{self.rx_ip(node)}"
+
+
+def _local_ip_in_24(host: str) -> bool:
+    """True if this machine has a local interface in the same /24 as ``host``.
+
+    UDP ``connect`` doesn't send a packet but does run the routing table;
+    ``getsockname`` then returns the source IP the kernel would use. If that
+    IP shares its /24 with ``host`` the subnet is directly attached, which is
+    the Pluto-over-USB convention (host gets ``192.168.X.10``, Pluto is
+    ``192.168.X.1``).
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((host, 1))
+            local = s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return False
+    return local.rsplit(".", 1)[0] == host.rsplit(".", 1)[0]
+
+
+def autodetect_node(setup: "Setup") -> str | None:
+    """Return the node whose Pluto subnets are locally attached, or ``None``.
+
+    Returns ``None`` if zero nodes match (no Pluto plugged in) or if more than
+    one matches (ambiguous — both nodes' subnets are reachable from this host).
+    """
+    matches = [
+        node for node, info in setup.nodes.items()
+        if _local_ip_in_24(info["tx"]) or _local_ip_in_24(info["rx"])
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def resolve_node(setup: "Setup", explicit: str | None) -> str:
+    """Return ``explicit`` if given, otherwise autodetect, otherwise exit."""
+    if explicit is not None:
+        return explicit
+    detected = autodetect_node(setup)
+    if detected is None:
+        print(
+            "ERROR: --node not specified and could not autodetect. "
+            "No local interface matched any node's Pluto subnet "
+            f"({sorted(setup.nodes)}). Pass --node explicitly.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"Auto-detected node: {detected}")
+    return detected
 
 
 def load(path: Path = SETUP_PATH) -> Setup:

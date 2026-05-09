@@ -26,7 +26,7 @@ from pluto.config import (
     configure_tx,
     get_node_freqs,
 )
-from pluto.setup_config import SETUP_PATH, load_or_die as load_setup
+from pluto.setup_config import SETUP_PATH, load_or_die as load_setup, resolve_node
 from pluto.sdr_stream import RxStream, TxStream
 from pluto.live_status import (
     LiveStatus, RateMeter, _fmt_rate, _fmt_bytes, _install_live_logging,
@@ -40,11 +40,11 @@ logging.basicConfig(level=logging.INFO)
 # CLI
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--gain",     type=float, default=-10,           help="TX gain in dB (default: -10)")
+    parser.add_argument("--gain",     type=float, default=-3,            help="TX gain in dB (default: -3)")
     parser.add_argument("--payload",  type=int,   default=1000,          help="Payload bytes (default: 1000)")
     parser.add_argument("--packets",  type=int,   default=20,            help="Number of packets per TX burst (default: 20)")
     parser.add_argument("--interval", type=float, default=0,             help="Inter-burst gap in ms (default: 0)")
-    parser.add_argument("--node",     type=str,   default="A",           help="Node identity A or B; picks TX/RX IPs from pluto/setup.json")
+    parser.add_argument("--node",     type=str,   default=None,          help="Node identity A or B; picks TX/RX IPs from pluto/setup.json. Autodetected from local Pluto subnet if omitted.")
     parser.add_argument("--mode",     type=str,   required=True, choices=("tx", "rx"), help="Operation mode")
     parser.add_argument("--video",    action="store_true",               help="Use the video-mode FDD pair (2327/2390 MHz) instead of the default network pair (2470/2475 MHz).")
     parser.add_argument("--rx-gain-mode", type=str, default="manual",
@@ -53,9 +53,9 @@ if __name__ == "__main__":
                              "modes drift during the silence between bursts, "
                              "ramping gain up so the next packet clips the ADC "
                              "and the constellation widens 3–5×.")
-    parser.add_argument("--rx-gain", type=float, default=50.0,
+    parser.add_argument("--rx-gain", type=float, default=45.0,
                         help="Fixed RX hardware gain in dB when "
-                             "--rx-gain-mode=manual (default: 50, AD9361 range "
+                             "--rx-gain-mode=manual (default: 45, AD9361 range "
                              "~0–71). Ignored for any auto AGC mode.")
     parser.add_argument("--constellation", action="store_true",
                         help="Collect post-Costas symbols and refresh a live "
@@ -85,6 +85,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     setup = load_setup()
+    args.node = resolve_node(setup, args.node)
     if args.node not in setup.nodes:
         print(f"ERROR: --node must be one of {sorted(setup.nodes)}, got '{args.node}'")
         sys.exit(1)
