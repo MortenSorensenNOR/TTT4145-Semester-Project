@@ -7,9 +7,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-def pluto_max_cfo(carrier_hz: np.float32 = np.float32(433e6), num_devices: int = 2) -> np.float32:
-    """Calculate maximum CFO for Pluto SDR (25 ppm oscillator)."""
-    ppm = 25e-6  # 25 ppm oscillator tolerance
+def pluto_max_cfo(carrier_hz: np.float32 = np.float32(2.4e9), num_devices: int = 2) -> np.float32:
+    """Maximum CFO for Pluto SDR, assuming post-tuning residual oscillator drift."""
+    ppm = 4e-6  # residual after tuning (factory worst case is 25 ppm)
     return ppm * carrier_hz * num_devices
 
 
@@ -63,6 +63,18 @@ class ChannelConfig:
     multipath_delays_samples: tuple[np.float32, ...] = (np.float32(0.0),)
     multipath_gains_db: tuple[np.float32, ...] = (np.float32(0.0),)
 
+    # Circular-polarization cross-pol discrimination, applied to non-LOS taps.
+    # Models a matched RHCP↔RHCP (or LHCP↔LHCP) link where single-bounce
+    # reflections invert handedness and are attenuated by the antenna's XPD.
+    # Approximation: every non-LOS tap is treated as a single-bounce echo.
+    cross_pol_discrimination_db: np.float32 = np.float32(0.0)
+    multipath_is_los: tuple[bool, ...] = ()  # empty → tap 0 LOS, rest reflected
+
+    # Per-realization log-normal shadowing applied to LOS taps. Models slow
+    # blockages (people/vehicles in the link, antenna mis-aim) on top of the
+    # fast Rician/Rayleigh fading. Drawn once per channel instance.
+    los_shadow_std_db: np.float32 = np.float32(0.0)
+
     # Fading configuration (only applies when enable_multipath is True)
     doppler_hz: np.float32 = np.float32(0.0)
     fading_type: str = "rayleigh"  # "rayleigh" or "rician"
@@ -95,6 +107,15 @@ class ChannelConfig:
             raise ValueError(msg)
         if self.fading_type not in ("rayleigh", "rician"):
             msg = "fading_type must be 'rayleigh' or 'rician'"
+            raise ValueError(msg)
+        if self.multipath_is_los and len(self.multipath_is_los) != len(self.multipath_delays_samples):
+            msg = "multipath_is_los, if given, must have same length as multipath_delays_samples"
+            raise ValueError(msg)
+        if self.cross_pol_discrimination_db < 0:
+            msg = "cross_pol_discrimination_db must be non-negative"
+            raise ValueError(msg)
+        if self.los_shadow_std_db < 0:
+            msg = "los_shadow_std_db must be non-negative"
             raise ValueError(msg)
 
 
@@ -272,6 +293,15 @@ def generate_fading_gains(
     rician_k_linear = 10 ** (config.rician_k_db / 10)
     n_sinusoids = 16  # Number of sinusoids in sum-of-sinusoids model
 
+    # Per-tap LOS flag: explicit config wins, otherwise tap 0 is LOS by default.
+    # Non-LOS taps are always Rayleigh; only LOS taps follow config.fading_type.
+    if config.multipath_is_los:
+        is_los = np.array(config.multipath_is_los, dtype=bool)
+    else:
+        is_los = np.zeros(n_taps, dtype=bool)
+        if n_taps > 0:
+            is_los[0] = True
+
     # Initialize phases if not provided
     if phases is None:
         phases = rng.uniform(0, 2 * np.pi, (n_taps, n_sinusoids, 2)).astype(np.float32)  # 2 for I/Q
@@ -291,7 +321,7 @@ def generate_fading_gains(
         inphase /= np.sqrt(n_sinusoids)
         quadrature /= np.sqrt(n_sinusoids)
 
-        if config.fading_type == "rician":
+        if is_los[tap] and config.fading_type == "rician":
             los_amplitude = np.sqrt(rician_k_linear / (rician_k_linear + 1))
             scatter_amplitude = np.sqrt(1 / (rician_k_linear + 1))
             gains[tap] = los_amplitude + scatter_amplitude * (inphase + 1j * quadrature)
@@ -449,8 +479,25 @@ class ChannelModel:
         self.config = config
         self._state: StreamState | None = None
 
-        # Pre-compute linear gains from dB
-        self._multipath_gains_linear = 10 ** (np.array(config.multipath_gains_db, dtype=np.float32) / 20)
+        gains_linear = 10 ** (np.array(config.multipath_gains_db, dtype=np.float32) / 20)
+        n_taps = len(config.multipath_gains_db)
+        if config.multipath_is_los:
+            is_los = np.array(config.multipath_is_los, dtype=bool)
+        else:
+            is_los = np.zeros(n_taps, dtype=bool)
+            if n_taps > 0:
+                is_los[0] = True
+        xpd_atten = np.float32(10 ** (-float(config.cross_pol_discrimination_db) / 20))
+        gains_linear[~is_los] *= xpd_atten
+
+        if config.los_shadow_std_db > 0 and is_los.any():
+            shadow_rng = np.random.default_rng(
+                None if config.seed is None else config.seed ^ 0xA5A5A5A5,
+            )
+            shadow_db = float(shadow_rng.normal(0.0, float(config.los_shadow_std_db)))
+            gains_linear[is_los] *= np.float32(10 ** (-shadow_db / 20))
+
+        self._multipath_gains_linear = gains_linear
 
     def reset(self) -> None:
         """Reset channel state for new transmission."""

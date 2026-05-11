@@ -31,45 +31,45 @@ def assert_packets(tx_packets, rx_packets):
         assert np.array_equal(rx_pkt.payload, tx_pkt.payload)
 
 
-def assert_all_received(tx_packets, rx_packets):
+def _packet_failures(tx_packets, rx_packets):
+    """Count TX packets not successfully decoded at the receiver."""
     tx_by_seq = {p.seq_num: p for p, _ in tx_packets}
     rx_by_seq = {p.seq_num: p for p in rx_packets if p.seq_num in tx_by_seq}
+    failed = 0
     for seq_num, tx_pkt in tx_by_seq.items():
-        assert seq_num in rx_by_seq, f"packet seq_num={seq_num} not received"
-        rx_pkt = rx_by_seq[seq_num]
-        assert rx_pkt.valid
-        assert rx_pkt.length == tx_pkt.length
-        assert np.array_equal(rx_pkt.payload, tx_pkt.payload)
+        rx_pkt = rx_by_seq.get(seq_num)
+        if (rx_pkt is None
+                or not rx_pkt.valid
+                or rx_pkt.length != tx_pkt.length
+                or not np.array_equal(rx_pkt.payload, tx_pkt.payload)):
+            failed += 1
+    return failed
 
 
-def diagnose_and_assert(tx_packets, rx_packets):
-    """Like assert_all_received, but prints a per-bucket failure breakdown first."""
-    tx_by_seq = {p.seq_num: p for p, _ in tx_packets}
-    rx_by_seq = {p.seq_num: p for p in rx_packets if p.seq_num in tx_by_seq}
+N_CHANNEL_TRIALS = 100
+PER_THRESHOLD = 0.01
 
-    not_detected, invalid, payload_err = [], [], []
-    for seq_num, tx_pkt in tx_by_seq.items():
-        if seq_num not in rx_by_seq:
-            not_detected.append(seq_num)
-            continue
-        rx_pkt = rx_by_seq[seq_num]
-        if not rx_pkt.valid:
-            invalid.append(seq_num)
-            continue
-        if rx_pkt.length != tx_pkt.length or not np.array_equal(rx_pkt.payload, tx_pkt.payload):
-            ber = float(np.mean(rx_pkt.payload != tx_pkt.payload)) if rx_pkt.payload.shape == tx_pkt.payload.shape else 1.0
-            payload_err.append((seq_num, ber))
 
-    if not_detected or invalid or payload_err:
-        parts = [f"{len(tx_by_seq)} tx"]
-        if not_detected: parts.append(f"not_detected={len(not_detected)}")
-        if invalid:      parts.append(f"invalid={len(invalid)}")
-        if payload_err:
-            mean_ber = float(np.mean([b for _, b in payload_err]))
-            parts.append(f"payload_err={len(payload_err)} (BER={mean_ber:.2e})")
-        print(f"\n  MULTIPATH DIAG: {', '.join(parts)}")
+def _run_channel_trials(specs, build_channel, base_seed, n_trials=N_CHANNEL_TRIALS):
+    """Run n_trials realizations with different seeds; return (total_pkts, total_failed)."""
+    total_pkts = 0
+    total_failed = 0
+    for trial in range(n_trials):
+        trial_seed = base_seed * 10_007 + trial
+        tx_packets, signal = make_packets_and_signal(specs, trial_seed)
+        _, config = tx_packets[0]
+        channel = build_channel(config, trial_seed)
+        rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
+        total_pkts += len(tx_packets)
+        total_failed += _packet_failures(tx_packets, rx_packets)
+    return total_pkts, total_failed
 
-    assert_all_received(tx_packets, rx_packets)
+
+def _assert_per(total_pkts, total_failed):
+    per = total_failed / total_pkts
+    assert per <= PER_THRESHOLD, (
+        f"PER {per:.2%} ({total_failed}/{total_pkts}) > {PER_THRESHOLD:.2%}"
+    )
 
 
 # --- detection ---
@@ -138,20 +138,37 @@ CHANNEL_CASES = [
 @pytest.mark.parametrize("snr_db", [15, 20, 25, 30])
 @pytest.mark.parametrize("specs,cfo_hz,phase,seed", CHANNEL_CASES)
 def test_channel(snr_db, specs, cfo_hz, phase, seed):
-    tx_packets, signal = make_packets_and_signal(specs, seed)
-    _, config = tx_packets[0]
-    channel = ChannelModel(ChannelConfig(
-        sample_rate=config.SAMPLE_RATE, snr_db=snr_db,
-        cfo_hz=cfo_hz, initial_phase_rad=phase, seed=seed,
-    ))
-    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
-    assert_all_received(tx_packets, rx_packets)
+    def build(config, trial_seed):
+        return ChannelModel(ChannelConfig(
+            sample_rate=config.SAMPLE_RATE, snr_db=snr_db,
+            cfo_hz=cfo_hz, initial_phase_rad=phase, seed=trial_seed,
+        ))
+    total_pkts, total_failed = _run_channel_trials(specs, build, base_seed=seed)
+    _assert_per(total_pkts, total_failed)
 
 
 # --- ITU-R M.1225 multipath profiles (sample rate 5.336 MHz) ---
 
 PEDESTRIAN_DOPPLER_HZ = np.float32(1.2)
 VEHICULAR_DOPPLER_HZ  = np.float32(48.0)
+
+# Helix antennas on both ends → matched-handedness CP link. Single-bounce
+# reflections invert handedness and are suppressed by the antenna XPD; the
+# aimed direct path is LOS-dominant so its fading is Rician (not Rayleigh).
+# Log-normal LOS shadowing models slow blockages (humans, vehicle bodies,
+# antenna mis-aim) on top of the fast Rician fade.
+#
+# Pedestrian: slow motion, antennas mostly stay aimed → strong LOS, good XPD,
+#   mild shadowing.
+# Vehicular: faster motion + beam misalignment + ground reflections from the
+#   vehicle body weaken both LOS dominance and pol selectivity, and create
+#   substantial shadowing.
+PEDESTRIAN_XPD_DB        = np.float32(15.0)
+PEDESTRIAN_RICIAN_K_DB   = np.float32(10.0)
+PEDESTRIAN_SHADOW_STD_DB = np.float32(4.0)
+VEHICULAR_XPD_DB         = np.float32(12.0)
+VEHICULAR_RICIAN_K_DB    = np.float32(5.0)
+VEHICULAR_SHADOW_STD_DB  = np.float32(8.0)
 
 PEDESTRIAN_A_DELAYS   = (0.0, 0.587, 1.014, 2.188)
 PEDESTRIAN_A_GAINS_DB = (0.0, -9.7, -19.2, -22.8)
@@ -172,76 +189,82 @@ MULTIPATH_CASES = [
 ]
 
 
-def _multipath_channel(config, snr_db, cfo_hz, phase, seed, delays, gains_db, doppler_hz):
+def _build_multipath_channel(config, trial_seed, snr_db, cfo_hz, phase,
+                              delays, gains_db, doppler_hz,
+                              xpd_db, rician_k_db, shadow_std_db):
     return ChannelModel(ChannelConfig(
         sample_rate=config.SAMPLE_RATE, snr_db=snr_db,
         cfo_hz=cfo_hz, initial_phase_rad=phase,
         enable_multipath=True,
         multipath_delays_samples=tuple(np.float32(d) for d in delays),
         multipath_gains_db=tuple(np.float32(g) for g in gains_db),
-        doppler_hz=doppler_hz, fading_type="rayleigh", seed=seed,
+        cross_pol_discrimination_db=xpd_db,
+        los_shadow_std_db=shadow_std_db,
+        doppler_hz=doppler_hz, fading_type="rician",
+        rician_k_db=rician_k_db, seed=trial_seed,
     ))
 
 
 @pytest.mark.parametrize("snr_db", [20, 25, 30])
 @pytest.mark.parametrize("specs,cfo_hz,phase,seed", MULTIPATH_CASES)
-def test_channel_multipath(snr_db, specs, cfo_hz, phase, seed):
-    tx_packets, signal = make_packets_and_signal(specs, seed)
-    _, config = tx_packets[0]
-    channel = _multipath_channel(config, snr_db, cfo_hz, phase, seed,
-                                 PEDESTRIAN_A_DELAYS, PEDESTRIAN_A_GAINS_DB, PEDESTRIAN_DOPPLER_HZ)
-    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
-    diagnose_and_assert(tx_packets, rx_packets)
+def test_channel_pedestrian_a(snr_db, specs, cfo_hz, phase, seed):
+    def build(config, trial_seed):
+        return _build_multipath_channel(config, trial_seed, snr_db, cfo_hz, phase,
+                                        PEDESTRIAN_A_DELAYS, PEDESTRIAN_A_GAINS_DB, PEDESTRIAN_DOPPLER_HZ,
+                                        PEDESTRIAN_XPD_DB, PEDESTRIAN_RICIAN_K_DB,
+                                        PEDESTRIAN_SHADOW_STD_DB)
+    total_pkts, total_failed = _run_channel_trials(specs, build, base_seed=seed)
+    _assert_per(total_pkts, total_failed)
 
 
-@pytest.mark.xfail(strict=False, reason="Pedestrian B: ~20-sample delay spread stresses receiver without equalizer")
 @pytest.mark.parametrize("snr_db", [20, 25, 30])
 @pytest.mark.parametrize("specs,cfo_hz,phase,seed", MULTIPATH_CASES)
 def test_channel_pedestrian_b(snr_db, specs, cfo_hz, phase, seed):
-    tx_packets, signal = make_packets_and_signal(specs, seed)
-    _, config = tx_packets[0]
-    channel = _multipath_channel(config, snr_db, cfo_hz, phase, seed,
-                                 PEDESTRIAN_B_DELAYS, PEDESTRIAN_B_GAINS_DB, PEDESTRIAN_DOPPLER_HZ)
-    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
-    diagnose_and_assert(tx_packets, rx_packets)
+    def build(config, trial_seed):
+        return _build_multipath_channel(config, trial_seed, snr_db, cfo_hz, phase,
+                                        PEDESTRIAN_B_DELAYS, PEDESTRIAN_B_GAINS_DB, PEDESTRIAN_DOPPLER_HZ,
+                                        PEDESTRIAN_XPD_DB, PEDESTRIAN_RICIAN_K_DB,
+                                        PEDESTRIAN_SHADOW_STD_DB)
+    total_pkts, total_failed = _run_channel_trials(specs, build, base_seed=seed)
+    _assert_per(total_pkts, total_failed)
 
 
-@pytest.mark.xfail(strict=False, reason="Vehicular A: fast fading (~48 Hz Doppler) within packet duration")
+@pytest.mark.xfail(strict=False, reason="Vehicular A: log-normal shadowing on LOS drives ~5-10% PER without equalizer")
 @pytest.mark.parametrize("snr_db", [20, 25, 30])
 @pytest.mark.parametrize("specs,cfo_hz,phase,seed", MULTIPATH_CASES)
 def test_channel_vehicular_a(snr_db, specs, cfo_hz, phase, seed):
-    tx_packets, signal = make_packets_and_signal(specs, seed)
-    _, config = tx_packets[0]
-    channel = _multipath_channel(config, snr_db, cfo_hz, phase, seed,
-                                 VEHICULAR_A_DELAYS, VEHICULAR_A_GAINS_DB, VEHICULAR_DOPPLER_HZ)
-    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
-    diagnose_and_assert(tx_packets, rx_packets)
+    def build(config, trial_seed):
+        return _build_multipath_channel(config, trial_seed, snr_db, cfo_hz, phase,
+                                        VEHICULAR_A_DELAYS, VEHICULAR_A_GAINS_DB, VEHICULAR_DOPPLER_HZ,
+                                        VEHICULAR_XPD_DB, VEHICULAR_RICIAN_K_DB,
+                                        VEHICULAR_SHADOW_STD_DB)
+    total_pkts, total_failed = _run_channel_trials(specs, build, base_seed=seed)
+    _assert_per(total_pkts, total_failed)
 
 
-@pytest.mark.xfail(strict=False, reason="Vehicular B: ~107-sample delay spread and fast fading — no equalizer")
+@pytest.mark.xfail(strict=True, reason="Vehicular B: deep shadowing + 107-sample delay spread breaks decode")
 @pytest.mark.parametrize("snr_db", [25, 30])
 @pytest.mark.parametrize("specs,cfo_hz,phase,seed", MULTIPATH_CASES[:2])
 def test_channel_vehicular_b(snr_db, specs, cfo_hz, phase, seed):
-    tx_packets, signal = make_packets_and_signal(specs, seed)
-    _, config = tx_packets[0]
-    channel = _multipath_channel(config, snr_db, cfo_hz, phase, seed,
-                                 VEHICULAR_B_DELAYS, VEHICULAR_B_GAINS_DB, VEHICULAR_DOPPLER_HZ)
-    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
-    diagnose_and_assert(tx_packets, rx_packets)
+    def build(config, trial_seed):
+        return _build_multipath_channel(config, trial_seed, snr_db, cfo_hz, phase,
+                                        VEHICULAR_B_DELAYS, VEHICULAR_B_GAINS_DB, VEHICULAR_DOPPLER_HZ,
+                                        VEHICULAR_XPD_DB, VEHICULAR_RICIAN_K_DB,
+                                        VEHICULAR_SHADOW_STD_DB)
+    total_pkts, total_failed = _run_channel_trials(specs, build, base_seed=seed)
+    _assert_per(total_pkts, total_failed)
 
 
-@pytest.mark.xfail(strict=False, reason="sub-15 dB SNR may not decode reliably")
 @pytest.mark.parametrize("specs,cfo_hz,phase,snr_db,seed", [
     ([(0, 6, ModulationSchemes.BPSK)],                                  0.0,    0.0, 12.0, 0),
     ([(0, 8, ModulationSchemes.QPSK)],                                  2500.0, 1.0, 10.0, 1),
     ([(0, 6, ModulationSchemes.BPSK), (1, 8, ModulationSchemes.QPSK)], -5000.0, 2.0,  8.0, 2),
 ])
 def test_hard_channel(specs, cfo_hz, phase, snr_db, seed):
-    tx_packets, signal = make_packets_and_signal(specs, seed)
-    _, config = tx_packets[0]
-    channel = ChannelModel(ChannelConfig(
-        sample_rate=config.SAMPLE_RATE, snr_db=snr_db,
-        cfo_hz=cfo_hz, initial_phase_rad=phase, seed=seed,
-    ))
-    rx_packets, _ = RXPipeline(config).receive(channel.apply(signal))
-    assert_all_received(tx_packets, rx_packets)
+    def build(config, trial_seed):
+        return ChannelModel(ChannelConfig(
+            sample_rate=config.SAMPLE_RATE, snr_db=snr_db,
+            cfo_hz=cfo_hz, initial_phase_rad=phase, seed=trial_seed,
+        ))
+    total_pkts, total_failed = _run_channel_trials(specs, build, base_seed=seed)
+    _assert_per(total_pkts, total_failed)

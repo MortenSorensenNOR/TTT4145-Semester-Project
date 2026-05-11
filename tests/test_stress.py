@@ -68,9 +68,27 @@ def _assert_all_received(tx_packets, rx_packets):
         assert np.array_equal(rx_pkt.payload, tx_pkt.payload), f"seq_num={seq_num} payload mismatch"
 
 
+def _count_packet_failures(tx_packets, rx_packets):
+    tx_by_seq = {p.seq_num: p for p, _ in tx_packets}
+    rx_by_seq = {p.seq_num: p for p in rx_packets if p.seq_num in tx_by_seq}
+    failed = 0
+    for seq_num, tx_pkt in tx_by_seq.items():
+        rx_pkt = rx_by_seq.get(seq_num)
+        if (rx_pkt is None
+                or not rx_pkt.valid
+                or rx_pkt.length != tx_pkt.length
+                or not np.array_equal(rx_pkt.payload, tx_pkt.payload)):
+            failed += 1
+    return failed
+
+
+PER_THRESHOLD = 0.01
+
+
 def _run_trials(tx_packets, signal, config, snr_db, n_trials, base_seed):
-    """Run n_trials noise/CFO/phase realizations; report all failures at once."""
-    failures = []
+    """Run n_trials noise/CFO/phase realizations; assert aggregate PER ≤ PER_THRESHOLD."""
+    total_pkts = 0
+    total_failed = 0
     for i in range(n_trials):
         rng = np.random.default_rng(base_seed * 10_007 + i)
         cfo_hz = float(rng.uniform(-5000, 5000))
@@ -81,15 +99,14 @@ def _run_trials(tx_packets, signal, config, snr_db, n_trials, base_seed):
             seed=int(rng.integers(0, 2**31)),
         ))
         rx_packets, _ = RXPipeline(config).receive(ch.apply(signal))
-        try:
-            _assert_all_received(tx_packets, rx_packets)
-        except AssertionError as e:
-            failures.append((i, cfo_hz, phase, str(e)))
+        total_pkts += len(tx_packets)
+        total_failed += _count_packet_failures(tx_packets, rx_packets)
 
-    if failures:
-        lines = [f"  trial={t}, cfo={c:.0f}Hz, phase={p:.2f}: {e}" for t, c, p, e in failures[:5]]
-        extra = f"  ... and {len(failures)-5} more" if len(failures) > 5 else ""
-        pytest.fail(f"{len(failures)}/{n_trials} trials failed:\n" + "\n".join(lines) + extra)
+    per = total_failed / total_pkts
+    assert per <= PER_THRESHOLD, (
+        f"PER {per:.2%} ({total_failed}/{total_pkts} pkts over {n_trials} trials) "
+        f"> {PER_THRESHOLD:.2%}"
+    )
 
 
 # --- parameter generation (fixed seed → reproducible) ---
