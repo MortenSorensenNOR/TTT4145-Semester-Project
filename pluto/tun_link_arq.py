@@ -248,17 +248,17 @@ if __name__ == "__main__":
                              f"Must satisfy 1 <= window < SEQ_SPACE/2 (={SEQ_SPACE // 2}).")
     parser.add_argument("--retransmit-timeout", type=float, default=0.1,
                         help="Seconds with no ACK before unacked seqs are retransmitted (default: 0.1).")
-    parser.add_argument("--send-queue-maxsize", type=int, default=64,
+    parser.add_argument("--send-queue-maxsize", type=int, default=16,
                         help="TUN→ARQ queue depth before TUN reads are dropped (default: 64).")
     parser.add_argument("--no-bypass-udp", action="store_true",
                         help="Send UDP through ARQ too instead of via PacketType.RAW.")
-    parser.add_argument("--tx-stream-maxsize", type=int, default=64,
+    parser.add_argument("--tx-stream-maxsize", type=int, default=8,
                         help="TxStream packet queue depth (default: 64). Each "
                              "queued packet is ~one DMA buffer of air-time, so "
                              "64 ≈ 160 ms of hidden buffer. Lower (e.g. 8) to "
                              "tighten backpressure for timestamp-based "
                              "transports like SRT.")
-    parser.add_argument("--txqueuelen", type=int, default=200,
+    parser.add_argument("--txqueuelen", type=int, default=32,
                         help="Kernel TUN tx queue length in packets (default: "
                              "200). Lower values tighten backpressure but risk "
                              "I-frame burst drops on plain UDP video.")
