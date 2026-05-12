@@ -270,7 +270,7 @@ class TxStream:
             self._bufs_sent += 1
             if write_pos > 0:
                 self._bufs_with_payload += 1
-                logger.info(
+                logger.debug(
                     "TX buf #%d: %d/%d samples carry payload",
                     self._bufs_sent, write_pos, self._buf_size,
                 )
