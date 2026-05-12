@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO)
 # CLI
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--gain",     type=float, default=-3,            help="TX gain in dB (default: -3)")
+    parser.add_argument("--gain",     type=float, default=0,             help="TX gain in dB (default: -3)")
     parser.add_argument("--payload",  type=int,   default=1000,          help="Payload bytes (default: 1000)")
     parser.add_argument("--packets",  type=int,   default=20,            help="Number of packets per TX burst (default: 20)")
     parser.add_argument("--interval", type=float, default=0,             help="Inter-burst gap in ms (default: 0)")

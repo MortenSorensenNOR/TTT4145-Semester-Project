@@ -229,7 +229,7 @@ if __name__ == "__main__":
                              "modes drift during the silence between bursts, "
                              "ramping gain up so the next packet clips the ADC "
                              "and the constellation widens 3–5×.")
-    parser.add_argument("--rx-gain", type=float, default=45.0,
+    parser.add_argument("--rx-gain", type=float, default=42.5,
                         help="Fixed RX hardware gain in dB when "
                              "--rx-gain-mode=manual (default: 45, AD9361 range "
                              "~0–71). Ignored for any auto AGC mode.")
