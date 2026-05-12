@@ -18,8 +18,8 @@ PIPELINE = PipelineConfig()
 
 # FDD frequency pairs for bidirectional bridge mode. Apps select between them
 # via --video (default: network).
-NETWORK_FREQ_A_TO_B = 2_470_000_000
-NETWORK_FREQ_B_TO_A = 2_475_000_000
+NETWORK_FREQ_A_TO_B = 2_450_000_000
+NETWORK_FREQ_B_TO_A = 2_460_000_000
 VIDEO_FREQ_A_TO_B   = 2_327_000_000
 VIDEO_FREQ_B_TO_A   = 2_390_000_000
 

@@ -221,7 +221,7 @@ class RadioRx:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--node",     type=str,   default=None,   help="Node identity A or B; picks default TX/RX IPs from pluto/setup.json and TUN IP from DEFAULT_TUN_IP. Autodetected from local Pluto subnet if omitted.")
-    parser.add_argument("--gain",     type=float, default=-3,   help="TX gain in dB (default: -3)")
+    parser.add_argument("--gain",     type=float, default=0,   help="TX gain in dB (default: -3)")
     parser.add_argument("--video",    action="store_true",        help="Use the video-mode FDD pair (2327/2390 MHz) instead of the default network pair (2470/2475 MHz).")
     parser.add_argument("--rx-gain-mode", type=str, default="manual",
                         choices=("slow_attack", "fast_attack", "hybrid", "manual"),
