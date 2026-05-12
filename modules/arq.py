@@ -1,14 +1,15 @@
 """Selective-Repeat ARQ over the radio link (see report §II).
 
 DATA frames carry the TUN payload with a sender seq_num. Each ACK reuses the
-standard frame header with type=ACK, BPSK, uncoded 2 B payload:
+standard frame header with type=ACK, BPSK, uncoded 8 B payload:
 
   seq_num = cumulative ACK c (highest seq delivered in order)
-  payload = 16-bit big-endian SACK bitmap; bit i marks seq c+2+i as buffered
+  payload = 64-bit big-endian SACK bitmap; bit i marks seq c+2+i as buffered
             out-of-order at the receiver. Bit 0 covers c+2 because c+1 is
             the next in-order seq — if it were buffered we'd advance the
             cumulative ACK instead. A zero-length ACK is treated as
-            bitmap = 0 (Go-Back-N fallback).
+            bitmap = 0 (Go-Back-N fallback). 64 bits is enough to cover
+            window_size - 1 slots for any legal window (< SEQ_SPACE/2 = 64).
 
 On retransmit timeout the sender re-sends only seqs in [send_base, next_seq)
 that are neither cumulatively nor SACK-acked.
@@ -42,6 +43,12 @@ FRAME_TYPE_ACK:  int = int(PacketType.ACK)
 
 # Must match FrameHeaderConfig.sequence_number_bits (7 bits).
 SEQ_SPACE: int = 128
+
+# SACK bitmap width in bytes. 8 B = 64 bits covers window_size - 1 for any
+# legal window (must be < SEQ_SPACE/2 = 64).
+SACK_BYTES: int = 8
+SACK_BITS: int = SACK_BYTES * 8
+SACK_MASK: int = (1 << SACK_BITS) - 1
 
 
 def seq_add(a: int, n: int) -> int:
@@ -222,15 +229,18 @@ class ARQNode:
         self.pluto_tx(packet)
 
     def _send_ack_frame(self, cumul: int, bitmap: int = 0) -> None:
-        bitmap &= 0xFFFF
-        bytes_be = np.array([(bitmap >> 8) & 0xFF, bitmap & 0xFF], dtype=np.uint8)
+        bitmap &= SACK_MASK
+        bytes_be = np.array(
+            [(bitmap >> (8 * (SACK_BYTES - 1 - i))) & 0xFF for i in range(SACK_BYTES)],
+            dtype=np.uint8,
+        )
         bits = np.unpackbits(bytes_be)
         packet = Packet(
             src_mac=self.config.src,
             dst_mac=self.config.dst,
             type=FRAME_TYPE_ACK,
             seq_num=cumul,
-            length=2,
+            length=SACK_BYTES,
             payload=bits,
             mod_scheme=ModulationSchemes.BPSK,
             coding_rate=CodeRates.NONE,
@@ -311,9 +321,11 @@ class ARQNode:
 
                 elif packet.type == FRAME_TYPE_ACK:
                     self.stats.ack_rx += 1
-                    if packet.length >= 2 and packet.payload.size >= 16:
-                        b = np.packbits(packet.payload[:16].astype(np.uint8))
-                        ack_bitmap = (int(b[0]) << 8) | int(b[1])
+                    if packet.length >= SACK_BYTES and packet.payload.size >= SACK_BITS:
+                        b = np.packbits(packet.payload[:SACK_BITS].astype(np.uint8))
+                        ack_bitmap = 0
+                        for byte in b:
+                            ack_bitmap = (ack_bitmap << 8) | int(byte)
                     else:
                         ack_bitmap = 0
                     with self._ack_lock:
