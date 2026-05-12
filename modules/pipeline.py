@@ -371,13 +371,7 @@ class RXPipeline:
 
         # demodulate header
         header_bits = self.bpsk.symbols2bits(header_syms_corr)
-
-        # try both polarities, just in case the first fails
-        try:
-            header = self.frame_constructor.decode_header(header_bits)
-        except Exception:
-            header = self.frame_constructor.decode_header(1 - header_bits)
-            phase_est[-1] = np.float32(phase_est[-1]) - np.pi
+        header = self.frame_constructor.decode_header(header_bits)
 
         return header, header_end, np.float32(phase_est[-1] % (2 * np.pi))
 
