@@ -113,6 +113,9 @@ IDEAL_CASES = [
     ([(0, 6, ModulationSchemes.BPSK), (1, 10, ModulationSchemes.BPSK)], 2),
     ([(0, 6, ModulationSchemes.QPSK), (1, 8, ModulationSchemes.QPSK)], 3),
     ([(0, 6, ModulationSchemes.BPSK), (1, 8, ModulationSchemes.QPSK), (2, 10, ModulationSchemes.BPSK)], 4),
+    ([(0, 8, ModulationSchemes.PSK8)], 5),
+    ([(0, 8, ModulationSchemes.PSK16)], 6),
+    ([(0, 6, ModulationSchemes.PSK8), (1, 8, ModulationSchemes.PSK16)], 7),
 ]
 
 
@@ -135,9 +138,31 @@ CHANNEL_CASES = [
 ]
 
 
-@pytest.mark.parametrize("snr_db", [15, 20, 25, 30])
+@pytest.mark.parametrize("snr_db", [11, 15, 20, 25, 30])
 @pytest.mark.parametrize("specs,cfo_hz,phase,seed", CHANNEL_CASES)
 def test_channel(snr_db, specs, cfo_hz, phase, seed):
+    def build(config, trial_seed):
+        return ChannelModel(ChannelConfig(
+            sample_rate=config.SAMPLE_RATE, snr_db=snr_db,
+            cfo_hz=cfo_hz, initial_phase_rad=phase, seed=trial_seed,
+        ))
+    total_pkts, total_failed = _run_channel_trials(specs, build, base_seed=seed)
+    _assert_per(total_pkts, total_failed)
+
+
+PSK8_CASES = [
+    ([(0, 8, ModulationSchemes.PSK8)],                                          0.0,    0.0, 4),
+]
+
+PSK16_CASES = [
+    ([(0, 8, ModulationSchemes.PSK16)],                                         1000.0, 0.5, 5),
+    ([(0, 6, ModulationSchemes.PSK8), (1, 8, ModulationSchemes.PSK16)],        -2500.0, 1.0, 6),
+]
+
+
+@pytest.mark.parametrize("snr_db", [20, 25, 30])
+@pytest.mark.parametrize("specs,cfo_hz,phase,seed", PSK8_CASES + PSK16_CASES)
+def test_channel_higher_order(snr_db, specs, cfo_hz, phase, seed):
     def build(config, trial_seed):
         return ChannelModel(ChannelConfig(
             sample_rate=config.SAMPLE_RATE, snr_db=snr_db,
@@ -205,8 +230,13 @@ def _build_multipath_channel(config, trial_seed, snr_db, cfo_hz, phase,
     ))
 
 
-@pytest.mark.parametrize("snr_db", [20, 25, 30])
-@pytest.mark.parametrize("specs,cfo_hz,phase,seed", MULTIPATH_CASES)
+PEDESTRIAN_PARAMS = [
+    *[(snr, *c) for snr in [20, 25, 30] for c in MULTIPATH_CASES + PSK8_CASES],
+    *[(snr, *c) for snr in [25, 30]     for c in PSK16_CASES],
+]
+
+
+@pytest.mark.parametrize("snr_db,specs,cfo_hz,phase,seed", PEDESTRIAN_PARAMS)
 def test_channel_pedestrian_a(snr_db, specs, cfo_hz, phase, seed):
     def build(config, trial_seed):
         return _build_multipath_channel(config, trial_seed, snr_db, cfo_hz, phase,
@@ -217,8 +247,7 @@ def test_channel_pedestrian_a(snr_db, specs, cfo_hz, phase, seed):
     _assert_per(total_pkts, total_failed)
 
 
-@pytest.mark.parametrize("snr_db", [20, 25, 30])
-@pytest.mark.parametrize("specs,cfo_hz,phase,seed", MULTIPATH_CASES)
+@pytest.mark.parametrize("snr_db,specs,cfo_hz,phase,seed", PEDESTRIAN_PARAMS)
 def test_channel_pedestrian_b(snr_db, specs, cfo_hz, phase, seed):
     def build(config, trial_seed):
         return _build_multipath_channel(config, trial_seed, snr_db, cfo_hz, phase,

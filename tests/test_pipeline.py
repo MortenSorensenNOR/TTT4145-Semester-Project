@@ -7,7 +7,7 @@ from modules.pipeline import *
 from modules.frame_constructor.frame_constructor import ModulationSchemes
 from modules.channel import *
 
-MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8]
+MOD_SCHEMES = [ModulationSchemes.BPSK, ModulationSchemes.QPSK, ModulationSchemes.PSK8, ModulationSchemes.PSK16]
 
 
 @composite
@@ -98,7 +98,7 @@ def test_ideal(specs, seed):
     assert len(rx_packets) == len(tx_packets)
 
 
-@pytest.mark.parametrize("snr_db", [15, 16, 17.5, 18.5, 20, 25, 30])
+@pytest.mark.parametrize("snr_db", [11, 15, 16, 17.5, 18.5, 20, 25, 30])
 @settings(deadline=10000, suppress_health_check=[HealthCheck.too_slow])
 @given(
     specs=packet_specs(),
